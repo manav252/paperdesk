@@ -1,0 +1,33 @@
+\documentclass[conference]{IEEEtran}
+\usepackage{cite}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+
+\begin{document}
+
+\title{An IEEEtran Conference Paper with BibTeX}
+\author{\IEEEauthorblockN{PaperDesk Test}
+\IEEEauthorblockA{Example University\\ test@example.com}}
+\maketitle
+
+\begin{abstract}
+This paper checks the IEEEtran class together with BibTeX citations.
+\end{abstract}
+
+\begin{IEEEkeywords}
+LaTeX, BibTeX, testing
+\end{IEEEkeywords}
+
+\section{Introduction}
+Feynman proposed simulating physics with computers~\cite{feynman1982}.
+Knuth described the \TeX{} system~\cite{knuth1984}, and Lamport built \LaTeX{} on it~\cite{lamport1994}.
+
+\section{Results}
+\begin{equation}
+  E = mc^2
+\end{equation}
+
+\bibliographystyle{IEEEtran}
+\bibliography{refs}
+
+\end{document}

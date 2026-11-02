@@ -254,6 +254,7 @@ body.is-resizing .editor-canvas, body.is-resizing .pdf-workspace { pointer-event
 .header-right { margin-left: auto; display: flex; align-items: center; gap: 6px; }
 .save-indicator { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-3); margin-right: 4px; }
 .save-indicator.busy { color: var(--warn-text); }
+.save-indicator.offline { color: var(--warn-text); }
 
 .work-area { flex: 1; min-height: 0; display: flex; position: relative; background: var(--bg); }
 .pane-toolbar { height: 38px; flex: 0 0 38px; display: flex; align-items: center; gap: 4px; padding: 0 8px; background: var(--surface-2); border-bottom: 1px solid var(--border); }
@@ -318,6 +319,7 @@ body.is-resizing .editor-canvas, body.is-resizing .pdf-workspace { pointer-event
 .binary-file { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; color: var(--text-3); text-align: center; padding: 20px; }
 .binary-file strong { color: var(--text); font-size: 14px; }
 .binary-file p { margin: 0; font-size: 13px; max-width: 320px; }
+.binary-file img { max-width: min(100%, 520px); max-height: 60%; object-fit: contain; border: 1px solid var(--border); border-radius: var(--radius-sm); background: repeating-conic-gradient(var(--surface-3) 0 25%, var(--surface) 0 50%) 0 0 / 16px 16px; margin-bottom: 6px; }
 .pane-loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; gap: 10px; color: var(--text-3); font-size: 13px; background: var(--surface); }
 .pane-loading.inline { position: static; padding: 28px 0; background: none; }
 .pane-loading.overlay { background: transparent; pointer-events: none; }
@@ -395,6 +397,22 @@ body.is-resizing .editor-canvas, body.is-resizing .pdf-workspace { pointer-event
 .inline-alert { display: flex; align-items: flex-start; gap: 8px; padding: 10px 12px; border-radius: var(--radius); font-size: 13px; line-height: 1.45; margin-bottom: 12px; }
 .inline-alert svg { flex: none; margin-top: 1px; }
 .inline-alert.error { background: var(--danger-soft); color: var(--danger-text); }
+.log-summary { display: flex; align-items: center; gap: 8px; padding: 9px 12px; border-radius: var(--radius); font-size: 13px; margin-bottom: 12px; }
+.log-summary.ok { background: var(--accent-soft); color: var(--accent-text); }
+.log-summary.failed { background: var(--danger-soft); color: var(--danger-text); }
+.log-entries { list-style: none; margin: 0 0 12px; padding: 0; border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; max-height: 34vh; overflow-y: auto; }
+.log-entries li + li { border-top: 1px solid var(--border); }
+.log-entry { width: 100%; display: flex; align-items: flex-start; gap: 9px; padding: 9px 12px; border: 0; background: var(--surface); text-align: left; font-size: 13px; line-height: 1.45; color: var(--text); }
+.log-entry:hover:not(:disabled) { background: var(--hover); }
+.log-entry:disabled { opacity: 1; cursor: default; }
+.log-entry > svg { flex: none; margin-top: 2px; }
+.log-entry.error > svg { color: var(--danger-text); }
+.log-entry.warning > svg { color: var(--warn-text); }
+.log-msg { flex: 1; min-width: 0; word-break: break-word; }
+.log-loc { flex: none; font: 12px var(--mono); color: var(--text-3); padding-top: 1px; }
+.log-entry:not(:disabled) .log-loc { color: var(--accent-text); text-decoration: underline; text-underline-offset: 2px; }
+.raw-log summary { cursor: pointer; font-size: 13px; color: var(--text-2); padding: 4px 0 8px; }
+.raw-log summary:hover { color: var(--text); }
 
 /* ───────── Responsive ───────── */
 @media (max-width: 1100px) {

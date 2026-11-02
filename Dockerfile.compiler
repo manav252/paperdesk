@@ -1,4 +1,21 @@
+# PaperDesk LaTeX compiler: full TeX Live (pdfLaTeX, XeLaTeX, LuaLaTeX, BibTeX/Biber, latexmk).
+# The API runs one throwaway container per compile with networking disabled and a read-only root.
 FROM texlive/texlive:latest
-RUN apt-get update && apt-get install -y --no-install-recommends latexmk python3 && rm -rf /var/lib/apt/lists/*
+
+# Build the LuaLaTeX font database once at image build time. luaotfload only reads the database from its
+# writable cache (TEXMFVAR, a per-run tmpfs), so the entrypoint copies it there before each compile;
+# without this every LuaLaTeX run spends several seconds re-indexing fonts. `fc-cache -fs` does the same for
+# XeLaTeX's system fontconfig cache.
+RUN SYSVAR=$(kpsewhich -var-value TEXMFSYSVAR) \
+ && TEXMFVAR=$SYSVAR luaotfload-tool --update --force \
+ && ln -s "$SYSVAR/luatex-cache" /opt/luatex-cache \
+ && printf '%s\n' '#!/bin/sh' \
+    'set -e' \
+    'if [ -n "$TEXMFVAR" ] && [ ! -e "$TEXMFVAR/luatex-cache" ]; then mkdir -p "$TEXMFVAR" && cp -R /opt/luatex-cache/ "$TEXMFVAR/luatex-cache"; fi' \
+    'exec "$@"' > /usr/local/bin/paperdesk-entry \
+ && chmod 755 /usr/local/bin/paperdesk-entry \
+ && fc-cache -fs \
+ && mkdir -p /work && chmod 1777 /work
+
 WORKDIR /work
-ENTRYPOINT []
+ENTRYPOINT ["/usr/local/bin/paperdesk-entry"]

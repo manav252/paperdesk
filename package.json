@@ -1,18 +1,21 @@
 {
-  "name": "paperdesk-latex-studio",
+  "name": "paperdesk",
   "version": "1.0.0",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
+    "dev:all": "node scripts/dev-all.mjs",
+    "server": "tsx watch server.ts",
+    "start": "concurrently -k \"npm:server\" \"npm:dev\"",
+    "compiler:build": "docker build -t paperdesk-texlive:latest -f Dockerfile.compiler .",
     "build": "tsc -b && vite build",
     "preview": "vite preview --host 0.0.0.0",
-    "server": "tsx server.ts",
-    "start": "concurrently -k \"npm:server\" \"npm:dev\"",
-    "lint": "eslint .",
+    "lint": "eslint . --max-warnings=0",
     "typecheck": "tsc -b",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:compile": "node scripts/compile-fixtures.mjs",
     "check": "npm run lint && npm run typecheck && npm run test && npm run build"
   },
   "dependencies": {
@@ -21,7 +24,7 @@
     "express": "^5.1.0",
     "lucide-react": "^0.468.0",
     "monaco-editor": "^0.52.2",
-    "multer": "^1.4.5-lts.1",
+    "multer": "^2.5.0",
     "pdfjs-dist": "^4.10.38",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
@@ -49,5 +52,10 @@
     "typescript-eslint": "^8.72.1",
     "vite": "^6.0.5",
     "vitest": "^3.2.7"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true,
+    "esbuild@0.25.12": true,
+    "fsevents@2.3.3": true
   }
 }

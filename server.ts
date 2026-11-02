@@ -24,6 +24,7 @@ const DATA = path.resolve(process.env.PAPERDESK_DATA ?? './backend/storage');
 const PROJECTS = path.join(DATA, 'projects');
 const IMAGE = process.env.LATEX_DOCKER_IMAGE ?? 'paperdesk-texlive:latest';
 const COMPILE_TIMEOUT_MS = Number(process.env.COMPILE_TIMEOUT_MS ?? 120_000);
+const MAX_COMPILE_TIMEOUT_MS = 600_000;
 /** latexmk flag per engine. Bare `-pdflatex` is not a valid latexmk switch. */
 const ENGINES: Record<string, string> = { pdflatex: '-pdf', xelatex: '-xelatex', lualatex: '-lualatex' };
 /** Files returned to the client as base64; everything else is UTF-8 text. */
@@ -55,7 +56,7 @@ async function readProject(id: string) {
   const dir = projectPath(id);
   const meta = JSON.parse(await fs.readFile(path.join(dir, 'project.json'), 'utf8'));
   const files = await walkFiles(path.join(dir, 'files'));
-  return { ...meta, files } as { id: string; name: string; modified: number; files: StoredFile[] };
+  return { ...meta, files } as { id: string; name: string; modified: number; files: StoredFile[]; mainFile?: string; archived?: boolean; settings?: unknown; versions?: unknown[]; comments?: unknown[] };
 }
 
 async function walkFiles(root: string, relative = ''): Promise<StoredFile[]> {
@@ -77,7 +78,7 @@ async function walkFiles(root: string, relative = ''): Promise<StoredFile[]> {
 }
 
 /** Writes the given files. With `replace`, files and folders not in the list are removed so deletes and renames stick. */
-async function writeProject(id: string, p: { name?: string; files?: StoredFile[] }, { replace = false } = {}) {
+async function writeProject(id: string, p: { name?: string; files?: StoredFile[]; mainFile?: string; archived?: boolean; settings?: unknown; versions?: unknown[]; comments?: unknown[] }, { replace = false } = {}) {
   const dir = projectPath(id);
   const root = path.join(dir, 'files');
   await fs.mkdir(root, { recursive: true });
@@ -97,8 +98,10 @@ async function writeProject(id: string, p: { name?: string; files?: StoredFile[]
     for (let d = path.posix.dirname(name); d !== '.'; d = path.posix.dirname(d)) keep.add(d);
   }
   if (replace) await prune(root, '', keep);
-  const meta = { id, name: p.name ?? 'Untitled Project', modified: Date.now() };
-  await fs.writeFile(path.join(dir, 'project.json'), JSON.stringify(meta));
+  const metaPath = path.join(dir, 'project.json');
+  const previous: Record<string, unknown> = await fs.readFile(metaPath, 'utf8').then(x => JSON.parse(x) as Record<string, unknown>).catch(() => ({} as Record<string, unknown>));
+  const meta = { ...previous, id, name: p.name ?? previous.name ?? 'Untitled Project', modified: Date.now(), ...Object.fromEntries(['mainFile', 'archived', 'settings', 'versions', 'comments'].filter(k => p[k as keyof typeof p] !== undefined).map(k => [k, p[k as keyof typeof p]])) };
+  await fs.writeFile(metaPath, JSON.stringify(meta));
   return readProject(id);
 }
 
@@ -161,7 +164,7 @@ app.put('/api/projects/:id', async (req, res) => {
   try {
     const current = await readProject(req.params.id).catch(() => null);
     const files = Array.isArray(req.body.files) ? req.body.files : current?.files ?? [];
-    res.json(await writeProject(req.params.id, { name: req.body.name ?? current?.name, files }, { replace: Array.isArray(req.body.files) }));
+    res.json(await writeProject(req.params.id, { name: req.body.name ?? current?.name, files, mainFile: req.body.mainFile ?? current?.mainFile, archived: req.body.archived ?? current?.archived, settings: req.body.settings ?? current?.settings, versions: req.body.versions ?? current?.versions, comments: req.body.comments ?? current?.comments }, { replace: Array.isArray(req.body.files) }));
   } catch (e) { send(res, 400, e); }
 });
 
@@ -260,6 +263,9 @@ app.post('/api/projects/:id/compile', async (req, res) => {
     const engine = String(req.body.engine ?? 'pdflatex');
     if (!ENGINES[engine]) return void send(res, 400, 'Unsupported compiler');
     const mainFile = safeName(String(req.body.mainFile ?? 'main.tex'));
+    const timeoutMs = Math.max(5_000, Math.min(MAX_COMPILE_TIMEOUT_MS, Number(req.body.timeoutMs) || COMPILE_TIMEOUT_MS));
+    const draft = Boolean(req.body.draft);
+    const stopOnFirstError = req.body.stopOnFirstError !== false;
     if (!mainFile.endsWith('.tex')) return void send(res, 400, 'Main file must be a .tex file');
     if (!files.some(f => f.name === mainFile)) return void send(res, 400, `Main file “${mainFile}” not found in the project`);
 
@@ -278,12 +284,12 @@ app.post('/api/projects/:id/compile', async (req, res) => {
       ...(process.getuid && process.getgid ? ['--user', `${process.getuid()}:${process.getgid()}`] : []),
       '-e', 'HOME=/tmp', '-e', 'TEXMFVAR=/tmp/texmf-var', '-e', 'TEXMFCONFIG=/tmp/texmf-config',
       '-v', `${tmp}:/work:rw`, '-w', '/work', IMAGE,
-      'latexmk', ENGINES[engine], '-interaction=nonstopmode', '-file-line-error', '-halt-on-error', '-norc', mainFile];
+      'latexmk', ENGINES[engine], '-interaction=nonstopmode', '-file-line-error', ...(stopOnFirstError ? ['-halt-on-error'] : []), ...(draft ? ['-draftmode'] : []), '-norc', mainFile];
 
     let output = '';
     let exitError: any = null;
     try {
-      const r = await exec('docker', args, { timeout: COMPILE_TIMEOUT_MS, maxBuffer: 16 * 1024 * 1024 });
+      const r = await exec('docker', args, { timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024 });
       output = r.stdout + '\n' + r.stderr;
     } catch (e: any) {
       exitError = e;
@@ -299,7 +305,7 @@ app.post('/api/projects/:id/compile', async (req, res) => {
     }
     if (exitError?.killed) {
       await exec('docker', ['rm', '-f', container]).catch(() => undefined);
-      output += `\nCompilation timed out after ${Math.round(COMPILE_TIMEOUT_MS / 1000)} seconds.`;
+      output += `\nCompilation timed out after ${Math.round(timeoutMs / 1000)} seconds.`;
     }
 
     const base = mainFile.replace(/\.tex$/i, '');
@@ -314,7 +320,7 @@ app.post('/api/projects/:id/compile', async (req, res) => {
     const log = [texLog || output, blg && `\n──── BibTeX (${base}.blg) ────\n${blg}`, texLog && `\n──── latexmk ────\n${output}`].filter(Boolean).join('\n');
     const result: CompileResult = { success, log, errors: parsed.errors, warnings: parsed.warnings, durationMs: Date.now() - started };
     RESULTS.set(id, result);
-    if (pdf && success) {
+    if (pdf && success && !draft) {
       const stored = path.join(projectPath(id), 'compiled.pdf');
       await fs.mkdir(path.dirname(stored), { recursive: true });
       await fs.writeFile(stored, pdf);
@@ -330,6 +336,10 @@ app.post('/api/projects/:id/compile', async (req, res) => {
 
 app.get('/api/projects/:id/pdf', async (req, res) => {
   try { res.type('application/pdf').send(await fs.readFile(path.join(projectPath(req.params.id), 'compiled.pdf'))); } catch { send(res, 404, 'No compiled PDF exists yet'); }
+});
+
+app.delete('/api/projects/:id/cache', async (req, res) => {
+  try { await fs.rm(path.join(projectPath(req.params.id), 'compiled.pdf'), { force: true }); RESULTS.delete(req.params.id); res.status(204).end(); } catch (e) { send(res, 400, e); }
 });
 
 app.get('/api/projects/:id/logs', (req, res) => {

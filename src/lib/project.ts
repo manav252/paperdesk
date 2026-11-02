@@ -1,7 +1,7 @@
 /** Pure project/file helpers shared by the UI. Kept free of React so they can be unit-tested. */
 /** Text files hold UTF-8 in `content`; binary files (figures, PDFs) hold base64 and set `encoding`. */
 export type ProjectFile={name:string,content:string,kind?:string,encoding?:'base64'};
-export type Project={id:string,name:string,modified:number,files:ProjectFile[],compiled?:string};
+export type Project={id:string,name:string,modified:number,files:ProjectFile[],compiled?:string,mainFile?:string,archived?:boolean,settings?:{autoCompile:boolean,stopOnFirstError:boolean,draft:boolean,timeout:number},versions?:{id:string,label:string,created:number,files:ProjectFile[]}[],comments?:{id:string,file:string,line:number,text:string,created:number,resolved:boolean}[]};
 
 export const isBinary=(name:string)=>/\.(png|jpe?g|gif|bmp|tiff?|pdf|eps|ps|zip|gz|ttf|otf|woff2?)$/i.test(name);
 export const isImage=(name:string)=>/\.(png|jpe?g|gif|bmp)$/i.test(name);

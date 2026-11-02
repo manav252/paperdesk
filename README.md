@@ -17,6 +17,12 @@ npm run server
 
 The server listens on port 3001. In development, configure your browser/dev proxy as needed, or use the Vite proxy by adding `server.proxy` for `/api` in `vite.config.ts`.
 
+## Themes and layout
+
+Choose **Light**, **Dark**, or **Auto** from the sun/moon/monitor button in the top bar (dashboard and editor), from **View** in the editor menu, or under **Settings → Appearance**. Auto follows the operating system's color preference and updates live. The choice is saved in local storage (`paperdesk-theme`) and applied before first paint.
+
+In the editor, drag the dividers to resize the file tree and PDF preview (double-click resets them), and use the layout buttons to switch between Editor & PDF, Editor only, and PDF only. On narrow screens the file tree opens as a drawer and the editor and PDF are shown one at a time. `⌘/Ctrl+Enter` recompiles.
+
 ## Enable real PDF compilation
 
 Docker must be installed and running. Build the isolated compiler image once:

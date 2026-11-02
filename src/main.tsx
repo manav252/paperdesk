@@ -1,7 +1,9 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import Editor, { type OnMount } from '@monaco-editor/react';
-import { FileText, FolderOpen, Search, Plus, MoreHorizontal, ChevronDown, ChevronRight, ChevronLeft, ChevronUp, Settings, HelpCircle, Bell, LayoutGrid, Clock3, Star, Upload, FolderPlus, FilePlus2, Image as ImageIcon, FileCode2, File, BookOpen, PanelLeftClose, PanelRightClose, Play, Download, Share2, Undo2, Redo2, Bold, Italic, Underline, List, ListOrdered, Table2, Sigma, Quote, Link2, Columns2, Maximize2, ZoomIn, ZoomOut, RefreshCw, CircleCheck, Cloud, X, Copy, Trash2, Pencil, Check, AlertCircle, FileArchive, Menu, Command, Keyboard } from 'lucide-react';
+import { FileText, FolderOpen, Folder, Search, Plus, MoreHorizontal, ChevronDown, ChevronRight, ChevronLeft, Settings, HelpCircle, Bell, Upload, FolderPlus, FilePlus2, Image as ImageIcon, FileCode2, File, BookOpen, Play, Download, Share2, Undo2, Redo2, Bold, Italic, Underline, List, ListOrdered, Table2, Sigma, Quote, Link2, Columns2, Maximize2, ZoomIn, ZoomOut, RefreshCw, CircleCheck, Cloud, X, Copy, Trash2, Pencil, Check, AlertCircle, FileArchive, Menu, Keyboard, Sun, Moon, Monitor, Home, ScrollText, Info, PanelLeft, Code2 } from 'lucide-react';
+import { useTheme, type ThemePref } from './theme';
+import { setupMonaco } from './monacoSetup';
 import './style.css';
 
 type ProjectFile={name:string,content:string,kind?:string}; type Project={id:string,name:string,modified:number,files:ProjectFile[],compiled?:string};
@@ -52,50 +54,362 @@ const seed:Project[]=[{id:'p1',name:'Research Paper — Quantum Computing',modif
 }
 `}]}];
 const initial=()=>{try{const s=localStorage.getItem('paperdesk-projects');return s?JSON.parse(s) as Project[]:seed}catch{return seed}};
+
+type Layout='split'|'editor'|'pdf';
+type LayoutPrefs={layout:Layout,sidebar:boolean,sidebarWidth:number,previewPct:number};
+const LAYOUT_KEY='paperdesk-layout';
+const NARROW='(max-width: 860px)';
+const readLayout=():LayoutPrefs=>{const base:LayoutPrefs={layout:'split',sidebar:true,sidebarWidth:232,previewPct:46};try{return{...base,...JSON.parse(localStorage.getItem(LAYOUT_KEY)??'{}')}}catch{return base}};
+
+type Tone='info'|'success'|'error';
+type Toast={text:string,tone:Tone};
+type CompileState={status:'idle'|'running'|'success'|'error',message:string,detail?:string};
+type Dialog={title:string,message?:ReactNode,label?:string,initial?:string,placeholder?:string,confirmLabel:string,danger?:boolean,onConfirm:(value:string)=>string|void};
+type MenuItem={label:string,run:()=>void,shortcut?:string,icon?:ReactNode,checked?:boolean,danger?:boolean,disabled?:boolean}|'sep';
+type Zoom=number|'fit';
+
+const themeOptions:{value:ThemePref,label:string,hint:string,icon:ReactNode}[]=[
+ {value:'light',label:'Light',hint:'Always light',icon:<Sun size={15}/>},
+ {value:'dark',label:'Dark',hint:'Always dark',icon:<Moon size={15}/>},
+ {value:'auto',label:'Auto',hint:'Match system setting',icon:<Monitor size={15}/>},
+];
+const isMac=typeof navigator!=='undefined'&&/Mac|iP(hone|ad)/.test(navigator.platform);
+const mod=isMac?'⌘':'Ctrl+';
+const isBinary=(name:string)=>/\.(png|jpe?g|gif|pdf)$/i.test(name);
+const NETWORK_HELP='The compile server isn’t reachable. Start it with “npm run server” (Docker must be running).';
+
+function useMediaQuery(q:string){const [m,setM]=useState(()=>window.matchMedia(q).matches);useEffect(()=>{const mq=window.matchMedia(q);const on=()=>setM(mq.matches);mq.addEventListener('change',on);return()=>mq.removeEventListener('change',on)},[q]);return m}
+
 function App(){
- const [projects,setProjects]=useState<Project[]>(initial),[projectId,setProjectId]=useState('p1'),[fileName,setFileName]=useState('main.tex'),[activeTab,setActiveTab]=useState('editor'),[compiling,setCompiling]=useState(false),[compileMsg,setCompileMsg]=useState(''),[pdfUrl,setPdfUrl]=useState(''),[page,setPage]=useState(1),[zoom,setZoom]=useState(100),[sidebar,setSidebar]=useState(true),[preview,setPreview]=useState(true),[saveState,setSaveState]=useState('Saved'),[query,setQuery]=useState(''),[menu,setMenu]=useState(''),[modal,setModal]=useState(''),[projectInput,setProjectInput]=useState(''),[renameTarget,setRenameTarget]=useState(''),[activeMenu,setActiveMenu]=useState(''),[notice,setNotice]=useState('');
- const editorRef=useRef<any>(null),fileInput=useRef<HTMLInputElement>(null),zipInput=useRef<HTMLInputElement>(null),saveTimer=useRef<number>();
+ const theme=useTheme();
+ const [projects,setProjects]=useState<Project[]>(initial),[projectId,setProjectId]=useState('p1'),[fileName,setFileName]=useState('main.tex'),[activeTab,setActiveTab]=useState('editor'),[compile_,setCompileState]=useState<CompileState>({status:'idle',message:''}),[pdfUrl,setPdfUrl]=useState(''),[page,setPage]=useState(1),[pageTotal,setPageTotal]=useState(0),[zoom,setZoom]=useState<Zoom>('fit'),[saveState,setSaveState]=useState('Saved'),[query,setQuery]=useState(''),[sortBy,setSortBy]=useState<'modified'|'name'>('modified'),[openMenu,setOpenMenu]=useState(''),[modal,setModal]=useState(''),[dialog,setDialog]=useState<Dialog|null>(null),[toast,setToast]=useState<Toast|null>(null),[engine,setEngine]=useState('pdflatex'),[cursor,setCursor]=useState({line:1,col:1}),[logText,setLogText]=useState<{loading:boolean,text:string,error?:string}>({loading:false,text:''}),[collapsed,setCollapsed]=useState<Set<string>>(new Set()),[prefs,setPrefs]=useState<LayoutPrefs>(readLayout),[drawer,setDrawer]=useState(false);
+ const editorRef=useRef<any>(null),fileInput=useRef<HTMLInputElement>(null),zipInput=useRef<HTMLInputElement>(null),saveTimer=useRef<number>(),workRef=useRef<HTMLDivElement>(null),searchRef=useRef<HTMLInputElement>(null),compileRef=useRef<()=>void>(()=>{}),scaleRef=useRef(100);
+ const narrow=useMediaQuery(NARROW),compact=useMediaQuery('(max-width: 640px)');
  const project=projects.find(p=>p.id===projectId)??projects[0]; const currentFile=project?.files.find(f=>f.name===fileName)??project?.files[0]; const content=currentFile?.content??'';
  const update=(fn:(p:Project)=>Project)=>setProjects(prev=>prev.map(p=>p.id===projectId?fn(p):p));
+ const notify=(text:string,tone:Tone='info')=>setToast({text,tone});
+ const setPref=<K extends keyof LayoutPrefs>(k:K,v:LayoutPrefs[K])=>setPrefs(p=>({...p,[k]:v}));
+ const compiling=compile_.status==='running';
+ // On narrow screens there's only room for one pane: "split" shows the editor and the switcher flips to PDF.
+ const layout:Layout=narrow&&prefs.layout==='split'?'editor':prefs.layout;
+ const showEditor=layout!=='pdf',showPdf=layout!=='editor';
+ // Narrow screens show the file tree as a temporary drawer so the saved desktop preference is untouched.
+ const sidebarOpen=narrow?drawer:prefs.sidebar;
+ const setSidebar=(v:boolean)=>narrow?setDrawer(v):setPref('sidebar',v);
+
  useEffect(()=>{localStorage.setItem('paperdesk-projects',JSON.stringify(projects))},[projects]);
+ useEffect(()=>{try{localStorage.setItem(LAYOUT_KEY,JSON.stringify(prefs))}catch{}},[prefs]);
+ useEffect(()=>{if(!narrow)setDrawer(false)},[narrow]);
  useEffect(()=>{const sync=async()=>{try{const r=await fetch('/api/projects');if(!r.ok)return;const remote=await r.json();if(Array.isArray(remote)&&remote.length){const normalized=remote.map((p:any)=>({...p,files:(p.files??[]).map((f:any)=>({...f,content:f.encoding==='base64'&&f.name.match(/\.(png|jpe?g|pdf)$/i)?'':f.encoding==='base64'?decodeBase64Utf8(f.content):f.content}))}));setProjects(normalized);if(!normalized.some((p:Project)=>p.id===projectId))setProjectId(normalized[0].id)}else{for(const p of projects){await fetch('/api/projects',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(p)})}}}catch{}};sync()},[]);
  useEffect(()=>{const t=window.setTimeout(()=>{const save=async()=>{try{await fetch(`/api/projects/${projectId}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:project.name,files:project.files})})}catch{}};if(projectId&&project)save()},700);return()=>window.clearTimeout(t)},[projectId,project?.name,project?.files]);
- useEffect(()=>{if(project&&!project.files.some(f=>f.name===fileName))setFileName(project.files[0]?.name??'main.tex')},[projectId,project?.files.length]);
+ useEffect(()=>{if(project&&!project.files.some(f=>f.name===fileName))setFileName(project.files.find(f=>!f.name.endsWith('/'))?.name??'main.tex')},[projectId,project?.files.length]);
  useEffect(()=>{window.clearTimeout(saveTimer.current);setSaveState('Saving…');saveTimer.current=window.setTimeout(()=>{setSaveState('Saved');update(p=>({...p,modified:Date.now()}))},650);return()=>window.clearTimeout(saveTimer.current)},[content,fileName]);
- useEffect(()=>{if(notice){const t=window.setTimeout(()=>setNotice(''),2600);return()=>window.clearTimeout(t)}},[notice]);
+ useEffect(()=>{if(toast){const t=window.setTimeout(()=>setToast(null),toast.tone==='error'?6000:2800);return()=>window.clearTimeout(t)}},[toast]);
+ useEffect(()=>{if(compile_.status==='success'){const t=window.setTimeout(()=>setCompileState(s=>s.status==='success'?{status:'idle',message:''}:s),4000);return()=>window.clearTimeout(t)}},[compile_]);
+ useEffect(()=>{if(pageTotal&&page>pageTotal)setPage(pageTotal)},[pageTotal]);
+
+ // Close menus on outside click; Escape closes the topmost layer.
+ useEffect(()=>{
+  const down=(e:MouseEvent)=>{if(!(e.target as HTMLElement).closest('[data-menu-root]'))setOpenMenu('')};
+  const key=(e:KeyboardEvent)=>{
+   if(e.key==='Escape'){if(openMenu)setOpenMenu('');else if(dialog)setDialog(null);else if(modal)setModal('');else if(narrow&&drawer)setDrawer(false)}
+   const cmd=e.metaKey||e.ctrlKey;
+   if(cmd&&e.key==='Enter'&&activeTab==='editor'){e.preventDefault();compileRef.current()}
+   if(cmd&&e.key.toLowerCase()==='s'){e.preventDefault();setSaveState('Saved');notify('All changes saved','success')}
+   if(cmd&&e.key.toLowerCase()==='k'&&activeTab!=='editor'){e.preventDefault();searchRef.current?.focus()}
+  };
+  document.addEventListener('mousedown',down);document.addEventListener('keydown',key);
+  return()=>{document.removeEventListener('mousedown',down);document.removeEventListener('keydown',key)};
+ },[openMenu,dialog,modal,activeTab,narrow,drawer]);
+
  const setContent=(value:string)=>update(p=>({...p,files:p.files.map(f=>f.name===fileName?{...f,content:value}:f)}));
- const insert=(s:string)=>{const ed=editorRef.current;if(!ed)return;ed.executeEdits('toolbar',[{range:ed.getSelection(),text:s,forceMoveMarkers:true}]);ed.focus()};
- const compile=async()=>{setCompiling(true);setCompileMsg('Compiling…');try{const r=await fetch(`/api/projects/${projectId}/compile`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({files:project.files,engine:(document.querySelector('#compiler') as HTMLSelectElement)?.value??'pdflatex',mainFile:'main.tex'})});const data=await r.json();if(!r.ok)throw new Error(data.error??'Compilation failed');setPdfUrl(`/api/projects/${projectId}/pdf?t=${Date.now()}`);setPage(1);setCompileMsg('Compilation successful');setNotice('PDF compiled successfully')}catch(e){const message=e instanceof Error?e.message:'Compilation failed';setCompileMsg(message);setNotice(message)}finally{setCompiling(false)}};
- const newProject=(name=projectInput||'Untitled Project')=>{const p={id:crypto.randomUUID(),name,modified:Date.now(),files:[{name:'main.tex',content:starter}]};setProjects(x=>[p,...x]);setProjectId(p.id);setFileName('main.tex');setModal('');setProjectInput('');setActiveTab('editor')};
- const renameProject=(p:Project)=>{setRenameTarget(p.id);setProjectInput(p.name);setModal('rename')};
- const doRename=()=>{if(!projectInput.trim())return;setProjects(x=>x.map(p=>p.id===renameTarget?{...p,name:projectInput.trim()}:p));setModal('');setProjectInput('')};
- const deleteProject=(p:Project)=>{if(!confirm(`Delete “${p.name}”?`))return;const next=projects.filter(x=>x.id!==p.id);setProjects(next);if(p.id===projectId){setProjectId(next[0]?.id??'');setActiveTab('dashboard')}setMenu('')};
- const duplicate=(p:Project)=>{const cp={...p,id:crypto.randomUUID(),name:p.name+' copy',modified:Date.now(),files:p.files.map(f=>({...f}))};setProjects(x=>[cp,...x]);setNotice('Project duplicated');setMenu('')};
- const addFile=(folder=false)=>{const input=prompt(folder?'Folder name':'File name',folder?'figures':'notes.tex');if(!input?.trim())return;const name=folder?input.trim().replace(/\/$/,'')+'/':input.trim();if(project.files.some(f=>f.name===name)){setNotice('A file with that name already exists');return}update(p=>({...p,files:[...p.files,{name,content:folder?'':`% ${name}\n` }]}));if(!folder)setFileName(name)};
- const renameFile=(f:ProjectFile)=>{const name=prompt('Rename file',f.name);if(!name?.trim())return;update(p=>({...p,files:p.files.map(x=>x.name===f.name?{...x,name:name.trim()}:x)}));if(fileName===f.name)setFileName(name.trim())};
- const deleteFile=(f:ProjectFile)=>{if(project.files.length===1){setNotice('A project must contain at least one file');return}if(confirm(`Delete ${f.name}?`)){update(p=>({...p,files:p.files.filter(x=>x.name!==f.name)}));if(fileName===f.name)setFileName(project.files.find(x=>x.name!==f.name)?.name??'main.tex')}};
- const uploadFiles=async(list:FileList|null)=>{if(!list)return;for(const f of Array.from(list)){if(f.name.endsWith('.zip')){try{const form=new FormData();form.append('file',f);const res=await fetch(`/api/projects/${projectId}/upload`,{method:'POST',body:form});if(!res.ok)throw Error('ZIP upload API unavailable');const d=await res.json();update(p=>({...p,files:d.files}));setNotice('Project archive imported')}catch{setNotice('ZIP import needs the backend server.')}}else{const text=await f.text();update(p=>({...p,files:[...p.files.filter(x=>x.name!==f.name),{name:f.name,content:text,kind:f.type}]}));setFileName(f.name)}}};
- const downloadProject=async()=>{try{const res=await fetch(`/api/projects/${projectId}/download`);if(!res.ok)throw 0;const blob=await res.blob();downloadBlob(blob,`${project.name}.zip`)}catch{const data=new Blob([JSON.stringify(project,null,2)],{type:'application/json'});downloadBlob(data,`${project.name.replaceAll(' ','-')}-project.json`);setNotice('Project downloaded as JSON (start backend for ZIP export)')}};
- const downloadPdf=()=>{if(!pdfUrl){setNotice('Compile the project to create a PDF');return}const a=document.createElement('a');a.href=pdfUrl;a.target='_blank';a.download=`${project.name}.pdf`;a.click()};
- const exportPdf=()=>downloadPdf();
- const fileIcon=(f:ProjectFile)=>f.name.endsWith('.tex')?<FileCode2 size={15}/>:f.name.endsWith('.bib')?<BookOpen size={15}/>:f.name.endsWith('/')?<FolderOpen size={15}/>:f.name.match(/\.(png|jpg|jpeg|pdf)$/i)?<ImageIcon size={15}/>:<File size={15}/>;
- const sortedProjects=useMemo(()=>projects.filter(p=>p.name.toLowerCase().includes(query.toLowerCase())).sort((a,b)=>b.modified-a.modified),[projects,query]);
- const onMount:OnMount=(editor)=>{editorRef.current=editor;editor.addCommand((window as any).monaco.KeyMod.CtrlCmd| (window as any).monaco.KeyCode.KeyS,()=>{setSaveState('Saved');setNotice('All changes saved')})};
- const dashboard=activeTab==='dashboard'||activeTab==='templates';
+ const insert=(s:string)=>{const ed=editorRef.current;if(!ed){notify('Open a text file in the editor to insert LaTeX');return}ed.executeEdits('toolbar',[{range:ed.getSelection(),text:s,forceMoveMarkers:true}]);ed.focus()};
+ const edAction=(id:string)=>{const ed=editorRef.current;if(!ed)return;ed.focus();ed.getAction(id)?.run()??ed.trigger('keyboard',id,null)};
+
+ const compile=async()=>{
+  if(compiling||!project)return;
+  if(!project.files.some(f=>f.name==='main.tex')){setCompileState({status:'error',message:'No main.tex found. Add a main.tex file to compile this project.'});return}
+  if(narrow&&layout==='editor')setPref('layout','pdf');
+  const started=performance.now();setCompileState({status:'running',message:'Compiling…'});
+  try{
+   const r=await fetch(`/api/projects/${projectId}/compile`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({files:project.files,engine,mainFile:'main.tex'})});
+   let data:any=null;try{data=await r.json()}catch{}
+   if(!r.ok){
+    if(!data)throw new Error(NETWORK_HELP);
+    const full=String(data.error??'Compilation failed');
+    const firstError=full.split('\n').find(l=>l.startsWith('!'))??full.split('\n').find(l=>l.trim())??'Compilation failed';
+    setCompileState({status:'error',message:firstError.length>160?firstError.slice(0,157)+'…':firstError,detail:full});return;
+   }
+   setPdfUrl(`/api/projects/${projectId}/pdf?t=${Date.now()}`);setPage(1);
+   setCompileState({status:'success',message:`Compiled in ${((performance.now()-started)/1000).toFixed(1)}s`});
+  }catch(e){
+   const message=e instanceof TypeError?NETWORK_HELP:e instanceof Error?e.message:'Compilation failed';
+   setCompileState({status:'error',message});
+  }
+ };
+ compileRef.current=compile;
+
+ const askName=(title:string,label:string,initialValue:string,confirmLabel:string,onConfirm:(v:string)=>string|void,placeholder?:string)=>setDialog({title,label,initial:initialValue,confirmLabel,onConfirm,placeholder});
+ const newProject=(name='Untitled Project')=>{const p={id:crypto.randomUUID(),name,modified:Date.now(),files:[{name:'main.tex',content:starter}]};setProjects(x=>[p,...x]);setProjectId(p.id);setFileName('main.tex');setPdfUrl('');setCompileState({status:'idle',message:''});setActiveTab('editor')};
+ const promptNewProject=()=>askName('Create a new project','Project name','','Create project',v=>{if(!v.trim())return 'Enter a project name';newProject(v.trim())},'e.g. My research paper');
+ const renameProject=(p:Project)=>{setOpenMenu('');askName('Rename project','Project name',p.name,'Save changes',v=>{if(!v.trim())return 'Enter a project name';setProjects(x=>x.map(q=>q.id===p.id?{...q,name:v.trim()}:q))})};
+ const deleteProject=(p:Project)=>{setOpenMenu('');setDialog({title:'Delete project?',message:<>“{p.name}” and its {p.files.length} files will be removed from this browser{p.id===projectId?' and you’ll return to your projects':''}. This can’t be undone.</>,confirmLabel:'Delete project',danger:true,onConfirm:()=>{const next=projects.filter(x=>x.id!==p.id);setProjects(next);if(p.id===projectId){setProjectId(next[0]?.id??'');setActiveTab('dashboard')}notify('Project deleted')}})};
+ const duplicate=(p:Project)=>{const cp={...p,id:crypto.randomUUID(),name:p.name+' copy',modified:Date.now(),files:p.files.map(f=>({...f}))};setProjects(x=>[cp,...x]);notify('Project duplicated','success');setOpenMenu('')};
+ const openProject=(p:Project)=>{if(p.id!==projectId){setPdfUrl('');setCompileState({status:'idle',message:''})}setProjectId(p.id);setFileName(p.files.find(f=>!f.name.endsWith('/'))?.name??'main.tex');setActiveTab('editor')};
+
+ const validName=(name:string,current?:string)=>{if(!name)return 'Enter a name';if(/(^|\/)\.\.(\/|$)/.test(name)||name.startsWith('/'))return 'Names can’t start with “/” or contain “..”';if(name!==current&&project.files.some(f=>f.name===name||f.name===name+'/'))return 'A file or folder with that name already exists'};
+ const addFile=(folder=false)=>askName(folder?'New folder':'New file',folder?'Folder name':'File name (use “folder/name.tex” to place it in a folder)',folder?'figures':'notes.tex',folder?'Create folder':'Create file',input=>{const name=folder?input.trim().replace(/\/+$/,'')+'/':input.trim();const err=validName(name.replace(/\/$/,''))??validName(name);if(err)return err;update(p=>({...p,files:[...p.files,{name,content:folder?'':`% ${name}\n`}]}));if(!folder)setFileName(name);else setCollapsed(c=>{const n=new Set(c);n.delete(name);return n})});
+ const renameFile=(f:ProjectFile)=>{const isFolder=f.name.endsWith('/');const shown=f.name.replace(/\/$/,'');askName(isFolder?'Rename folder':'Rename file','New name',shown,'Rename',input=>{const next=input.trim().replace(/\/+$/,'');if(next===shown)return;const err=validName(next,shown);if(err)return err;if(isFolder){const from=f.name,to=next+'/';update(p=>({...p,files:p.files.map(x=>x.name.startsWith(from)?{...x,name:to+x.name.slice(from.length)}:x)}));if(fileName.startsWith(from))setFileName(to+fileName.slice(from.length))}else{update(p=>({...p,files:p.files.map(x=>x.name===f.name?{...x,name:next}:x)}));if(fileName===f.name)setFileName(next)}})};
+ const deleteFile=(f:ProjectFile)=>{const isFolder=f.name.endsWith('/');const affected=isFolder?project.files.filter(x=>x.name.startsWith(f.name)):[f];const remaining=project.files.filter(x=>!affected.includes(x));if(!remaining.some(x=>!x.name.endsWith('/'))){notify('A project must contain at least one file','error');return}setDialog({title:isFolder?'Delete folder?':'Delete file?',message:isFolder?<>“{f.name}” and the {affected.length-1} file(s) inside it will be deleted.</>:<>“{f.name}” will be deleted from this project.</>,confirmLabel:'Delete',danger:true,onConfirm:()=>{update(p=>({...p,files:p.files.filter(x=>!affected.some(a=>a.name===x.name))}));if(affected.some(a=>a.name===fileName))setFileName(remaining.find(x=>!x.name.endsWith('/'))?.name??'main.tex')}})};
+ const uploadFiles=async(list:FileList|null)=>{if(!list)return;for(const f of Array.from(list)){if(f.name.endsWith('.zip')){try{const form=new FormData();form.append('file',f);const res=await fetch(`/api/projects/${projectId}/upload`,{method:'POST',body:form});if(!res.ok)throw Error('ZIP upload API unavailable');const d=await res.json();update(p=>({...p,files:d.files}));notify('Project archive imported','success')}catch{notify('ZIP import needs the backend server (npm run server).','error')}}else{const text=await f.text();update(p=>({...p,files:[...p.files.filter(x=>x.name!==f.name),{name:f.name,content:text,kind:f.type}]}));setFileName(f.name);notify(`Uploaded ${f.name}`,'success')}}if(fileInput.current)fileInput.current.value=''};
+ const downloadProject=async()=>{try{const res=await fetch(`/api/projects/${projectId}/download`);if(!res.ok)throw 0;const blob=await res.blob();downloadBlob(blob,`${project.name}.zip`)}catch{const data=new Blob([JSON.stringify(project,null,2)],{type:'application/json'});downloadBlob(data,`${project.name.replaceAll(' ','-')}-project.json`);notify('Project downloaded as JSON (start the backend for ZIP export)')}};
+ const downloadPdf=()=>{if(!pdfUrl){notify('Compile the project to create a PDF');return}const a=document.createElement('a');a.href=pdfUrl;a.target='_blank';a.download=`${project.name}.pdf`;a.click()};
+ const openLogs=async()=>{setModal('logs');setLogText({loading:true,text:''});try{const r=await fetch(`/api/projects/${projectId}/logs`);const txt=r.ok?await r.text():'';if(!r.ok)throw new Error(NETWORK_HELP);setLogText({loading:false,text:txt||'No compilation has been run yet.'})}catch(e){setLogText({loading:false,text:compile_.detail??'',error:e instanceof Error&&e.message!=='Failed to fetch'?e.message:NETWORK_HELP})}};
+ const changeZoom=(delta:number)=>setZoom(z=>Math.min(300,Math.max(30,Math.round(((z==='fit'?scaleRef.current:z)+delta)/10)*10)));
+
+ const onMount:OnMount=(editor,monaco)=>{editorRef.current=editor;editor.addCommand(monaco.KeyMod.CtrlCmd|monaco.KeyCode.KeyS,()=>{setSaveState('Saved');notify('All changes saved','success')});editor.addCommand(monaco.KeyMod.CtrlCmd|monaco.KeyCode.Enter,()=>compileRef.current());editor.onDidChangeCursorPosition((e:any)=>setCursor({line:e.position.lineNumber,col:e.position.column}))};
+ const sortedProjects=useMemo(()=>projects.filter(p=>p.name.toLowerCase().includes(query.toLowerCase())).sort((a,b)=>sortBy==='name'?a.name.localeCompare(b.name):b.modified-a.modified),[projects,query,sortBy]);
+ const dashboard=activeTab!=='editor'||!project;
+ const themeMenu=<ThemeMenu pref={theme.pref} resolved={theme.resolved} setPref={theme.setPref} open={openMenu==='theme'} toggle={()=>setOpenMenu(openMenu==='theme'?'':'theme')}/>;
+
+ const menus:{label:string,items:MenuItem[]}[]=project?[
+  {label:'File',items:[{label:'New file',icon:<FilePlus2 size={14}/>,run:()=>addFile()},{label:'New folder',icon:<FolderPlus size={14}/>,run:()=>addFile(true)},{label:'Upload files',icon:<Upload size={14}/>,run:()=>fileInput.current?.click()},'sep',{label:'Download project',icon:<FileArchive size={14}/>,run:downloadProject},{label:'Download PDF',icon:<Download size={14}/>,run:downloadPdf,disabled:!pdfUrl},'sep',{label:'Compile',icon:<Play size={14}/>,shortcut:`${mod}↵`,run:compile},'sep',{label:'Back to projects',icon:<Home size={14}/>,run:()=>setActiveTab('dashboard')}]},
+  {label:'Edit',items:[{label:'Undo',shortcut:`${mod}Z`,run:()=>editorRef.current?.trigger('keyboard','undo',null)},{label:'Redo',shortcut:isMac?'⇧⌘Z':'Ctrl+Y',run:()=>editorRef.current?.trigger('keyboard','redo',null)},'sep',{label:'Find',shortcut:`${mod}F`,run:()=>edAction('actions.find')},{label:'Find and replace',shortcut:isMac?'⌥⌘F':'Ctrl+H',run:()=>edAction('editor.action.startFindReplaceAction')},'sep',{label:'Select all',shortcut:`${mod}A`,run:()=>edAction('editor.action.selectAll')}]},
+  {label:'Insert',items:[{label:'Section',run:()=>insert('\n\\section{Section title}\n')},{label:'Subsection',run:()=>insert('\n\\subsection{Subsection title}\n')},{label:'Equation',run:()=>insert('\n\\begin{equation}\n  \n\\end{equation}\n')},{label:'Figure',run:()=>insert('\n\\begin{figure}[ht]\n  \\centering\n  \\includegraphics[width=0.8\\linewidth]{image.png}\n  \\caption{Caption}\n\\end{figure}\n')},{label:'Table',run:()=>insert('\n\\begin{table}[ht]\n  \\centering\n  \\begin{tabular}{cc}\n    A & B \\\\\n    1 & 2 \\\\\n  \\end{tabular}\n  \\caption{Caption}\n\\end{table}\n')},{label:'Bulleted list',run:()=>insert('\\begin{itemize}\n  \\item Item\n\\end{itemize}')},{label:'Citation',run:()=>insert('\\cite{}')}]},
+  {label:'View',items:[...(narrow?[]:[{label:'Editor & PDF',checked:prefs.layout==='split',run:()=>setPref('layout','split')}]),{label:'Editor only',checked:prefs.layout==='editor'||(narrow&&layout==='editor'),run:()=>setPref('layout','editor')},{label:'PDF only',checked:layout==='pdf',run:()=>setPref('layout','pdf')},'sep',{label:'File tree',checked:sidebarOpen,run:()=>setSidebar(!sidebarOpen)},'sep',...themeOptions.map(o=>({label:`${o.label} theme`,icon:o.icon,checked:theme.pref===o.value,run:()=>theme.setPref(o.value)}))]},
+  {label:'Help',items:[{label:'Keyboard shortcuts',icon:<Keyboard size={14}/>,run:()=>setModal('shortcuts')},{label:'Project settings',icon:<Settings size={14}/>,run:()=>setModal('settings')},{label:'About Paperdesk',icon:<Info size={14}/>,run:()=>notify('Paperdesk is an independent educational LaTeX editor.')}]},
+ ]:[];
+
  return <div className="app-shell">
- {dashboard?<><header className="dash-header"><Brand/><nav className="dash-nav"><button className={activeTab==='dashboard'?'nav-active':''} onClick={()=>setActiveTab('dashboard')}>Projects</button><button className={activeTab==='templates'?'nav-active':''} onClick={()=>setActiveTab('templates')}>Templates</button></nav><div className="dash-right"><button className="icon-btn" title="Help" onClick={()=>setNotice('Help center coming soon')}><HelpCircle size={17}/></button><button className="icon-btn" title="Notifications" onClick={()=>setNotice('You’re all caught up')}><Bell size={17}/></button><button className="avatar" title="Account settings" onClick={()=>setNotice('Account settings are not implemented yet')}>JD</button></div></header><main className="dash-main"><div className="dash-heading"><div><div className="eyebrow">WORKSPACE / MY PROJECTS</div><h1>{activeTab==='templates'?'Start from a template':'Your projects'}</h1><p className="subhead">{activeTab==='templates'?'Choose a starting point for your next document.':'Pick up where you left off.'}</p></div><button className="primary-btn" onClick={()=>setModal('new')}><Plus size={16}/> New project</button></div>{activeTab==='templates'&&<div className="template-grid">{[['Blank project','A clean canvas for your next great idea.','FileText'],['Article','A polished structure for research papers.','BookOpen'],['Presentation','Create beautiful slides with Beamer.','Columns2']].map(([name,desc])=><button className="template-card" key={name} onClick={()=>newProject(name==='Blank project'?'Untitled Project':name+' project')}><div className="template-icon"><FileText size={21}/></div><strong>{name}</strong><span>{desc}</span><em>Use template <ChevronRight size={14}/></em></button>)}</div>}<div className="section-bar"><div className="section-title"><h2>Recent projects</h2><span className="count-pill">{sortedProjects.length}</span></div><div className="dash-tools"><label className="search-box"><Search size={16}/><input value={query} onChange={e=>setQuery(e.target.value)} placeholder="Search projects…"/><kbd>⌘ K</kbd></label><button className="sort-btn" onClick={()=>setProjects([...projects].reverse())}>Last modified <ChevronDown size={14}/></button></div></div>{sortedProjects.length? <div className="project-list"><div className="project-list-head"><span>NAME</span><span>LAST MODIFIED</span><span>OWNER</span><span></span></div>{sortedProjects.map((p,i)=><div className="project-row" key={p.id}><button className="project-open" onClick={()=>{setProjectId(p.id);setFileName(p.files[0]?.name??'main.tex');setActiveTab('editor')}}><div className={`project-file-icon pfi-${i%4}`}><FileText size={18}/></div><div className="project-name-wrap"><strong>{p.name}</strong><small>{p.files.length} files · {p.files.map(f=>f.name).slice(0,2).join(', ')}</small></div></button><span className="muted date-text">{relative(p.modified)}</span><span className="owner"><span className="tiny-avatar">JD</span> You</span><div className="row-actions"><button className="icon-btn" title="Open" onClick={()=>{setProjectId(p.id);setActiveTab('editor')}}><ChevronRight size={17}/></button><div className="menu-anchor"><button className="icon-btn" title="Project actions" onClick={()=>setMenu(menu===p.id?'':p.id)}><MoreHorizontal size={18}/></button>{menu===p.id&&<div className="pop-menu"><button onClick={()=>renameProject(p)}><Pencil size={14}/> Rename</button><button onClick={()=>duplicate(p)}><Copy size={14}/> Duplicate</button><button className="danger" onClick={()=>deleteProject(p)}><Trash2 size={14}/> Delete</button></div>}</div></div></div>)}</div>:<div className="empty-state"><div className="empty-icon"><FileText size={25}/></div><h3>No projects found</h3><p>{query?'Try a different search.':'Create your first project to get started.'}</p>{!query&&<button className="primary-btn" onClick={()=>setModal('new')}><Plus size={15}/> New project</button>}</div>}<div className="dash-footer"><span>Paperdesk Studio <span className="dot">·</span> A thoughtful place to write</span><span>All projects are saved in this browser</span></div></main></>:<>
- <header className="editor-header"><button className="brand-button" onClick={()=>setActiveTab('dashboard')}><Brand/></button><div className="project-crumb"><button className="crumb-back" onClick={()=>setActiveTab('dashboard')}>Projects</button><ChevronRight size={13}/><span>{project.name}</span><ChevronDown size={13}/></div><nav className="editor-menus">{['File','Edit','Insert','View','Help'].map(x=><div className="menu-anchor" key={x}><button className="text-menu" onClick={()=>setActiveMenu(activeMenu===x?'':x)}>{x}</button>{activeMenu===x&&<div className="pop-menu menu-wide">{(x==='File'?[['New file',()=>addFile()],['Upload files',()=>fileInput.current?.click()],['Download project',downloadProject],['Compile',compile]]:x==='Edit'?[['Undo',()=>editorRef.current?.trigger('keyboard','undo',null)],['Redo',()=>editorRef.current?.trigger('keyboard','redo',null)],['Find',()=>editorRef.current?.getAction('actions.find')?.run()]]:x==='Insert'?[['Section',()=>insert('\n\\section{Section title}\n')],['Equation',()=>insert('\n\\begin{equation}\n  \n\\end{equation}\n')],['Figure',()=>insert('\n\\begin{figure}[ht]\n  \\centering\n  \\includegraphics[width=0.8\\linewidth]{image.png}\n  \\caption{Caption}\n\\end{figure}\n')]]:x==='View'?[['Toggle file panel',()=>setSidebar(!sidebar)],['Toggle PDF preview',()=>setPreview(!preview)],['Editor settings',()=>setModal('settings')]]:[['Keyboard shortcuts',()=>setModal('shortcuts')],['About Paperdesk',()=>setNotice('Paperdesk is an independent educational LaTeX editor.')]]).map(([label,fn])=><button key={String(label)} onClick={()=>{(fn as ()=>void)();setActiveMenu('')}}>{String(label)}</button>)}</div>}</div>)}</nav><div className="header-spacer"/><div className="save-indicator"><Cloud size={14}/>{saveState}</div><button className="share-btn" onClick={()=>setNotice('Sharing and live collaboration are planned, not available yet')}><Share2 size={14}/> Share</button><button className="settings-btn" title="Settings" onClick={()=>setModal('settings')}><Settings size={16}/></button><button className="avatar small" title="Account">JD</button></header>
- <div className="work-area"><aside className={`file-sidebar ${sidebar?'':'collapsed'}`}><div className="side-top"><div className="side-title">PROJECT FILES <span className="side-tools"><button title="New file" onClick={()=>addFile()}><FilePlus2 size={15}/></button><button title="New folder" onClick={()=>addFile(true)}><FolderPlus size={15}/></button><button title="Upload files" onClick={()=>fileInput.current?.click()}><Upload size={14}/></button></span></div><div className="project-folder"><ChevronDown size={14}/><FolderOpen size={15}/><strong>{project.name}</strong><button onClick={()=>setMenu(menu==='folder'?'':'folder')}><MoreHorizontal size={16}/></button></div><div className="file-tree">{project.files.map((f,i)=><div className={`file-row ${fileName===f.name?'selected':''}`} key={f.name} onClick={()=>f.name.endsWith('/')?null:setFileName(f.name)}><span className="file-indent">{i===project.files.length-1?<span className="tree-elbow"/>:<span className="tree-line"/>}</span>{fileIcon(f)}<span className="file-label">{f.name}</span><span className="file-actions"><button title="Rename" onClick={e=>{e.stopPropagation();renameFile(f)}}><Pencil size={12}/></button><button title="Delete" onClick={e=>{e.stopPropagation();deleteFile(f)}}><Trash2 size={12}/></button></span></div>)}</div></div><div className="side-bottom"><button onClick={downloadProject}><FileArchive size={15}/> Download project</button><button onClick={()=>setModal('settings')}><Settings size={15}/> Project settings</button></div><input ref={fileInput} className="hidden" type="file" multiple accept=".tex,.bib,.sty,.cls,.png,.jpg,.jpeg,.pdf,.csv,.txt" onChange={e=>uploadFiles(e.target.files)}/><input ref={zipInput} className="hidden" type="file" accept=".zip" onChange={e=>uploadFiles(e.target.files)}/></aside>
- <main className="editor-main"><div className="document-bar"><div className="tabs">{project.files.filter(f=>!f.name.endsWith('/')).slice(0,4).map(f=><button key={f.name} className={`doc-tab ${fileName===f.name?'active':''}`} onClick={()=>setFileName(f.name)}>{fileIcon(f)}<span>{f.name}</span>{fileName===f.name&&<span className="tab-dot"/>}</button>)}<button title="Open file" className="add-tab" onClick={()=>addFile()}><Plus size={15}/></button></div><div className="doc-controls"><button className="icon-btn" title="Toggle file explorer" onClick={()=>setSidebar(!sidebar)}><PanelLeftClose size={16}/></button><button className="icon-btn" title="Toggle PDF preview" onClick={()=>setPreview(!preview)}><PanelRightClose size={16}/></button></div></div><div className="editor-toolbar"><div className="format-tools"><button title="Undo" onClick={()=>editorRef.current?.trigger('keyboard','undo',null)}><Undo2 size={15}/></button><button title="Redo" onClick={()=>editorRef.current?.trigger('keyboard','redo',null)}><Redo2 size={15}/></button><span className="tool-divider"/><button title="Bold" onClick={()=>insert('\\textbf{}')}><Bold size={15}/></button><button title="Italic" onClick={()=>insert('\\textit{}')}><Italic size={15}/></button><button title="Underline" onClick={()=>insert('\\underline{}')}><Underline size={15}/></button><span className="tool-divider"/><select className="style-select" defaultValue="Normal text" onChange={e=>{if(e.target.value==='Section')insert('\\section{}');if(e.target.value==='Subsection')insert('\\subsection{}');if(e.target.value==='Subsubsection')insert('\\subsubsection{}')}}><option>Normal text</option><option>Section</option><option>Subsection</option><option>Subsubsection</option></select><span className="tool-divider"/><button title="Itemize" onClick={()=>insert('\\begin{itemize}\n  \\item Item\n\\end{itemize}')}><List size={15}/></button><button title="Enumerate" onClick={()=>insert('\\begin{enumerate}\n  \\item Item\n\\end{enumerate}')}><ListOrdered size={15}/></button><button title="Table" onClick={()=>insert('\\begin{table}[ht]\n  \\centering\n  \\begin{tabular}{cc}\n    A & B \\\\\n    1 & 2 \\\\\n  \\end{tabular}\n  \\caption{Caption}\n\\end{table}')}><Table2 size={15}/></button><button title="Equation" onClick={()=>insert('\\[\n  \n\\]')}><Sigma size={16}/></button><button title="Citation" onClick={()=>insert('\\cite{}')}><Quote size={15}/></button><button title="Reference" onClick={()=>insert('\\ref{}')}><Link2 size={14}/></button><button title="Figure" onClick={()=>insert('\\includegraphics[width=0.8\\linewidth]{image.png}')}><ImageIcon size={15}/></button></div><div className="editor-meta"><span>LaTeX</span><span className="meta-dot"/> UTF-8</div></div><div className="editor-canvas"><Editor height="100%" language={fileName.endsWith('.bib')?'bibtex':'latex'} theme="vs" value={content} onChange={v=>setContent(v??'')} onMount={onMount} options={{fontFamily:'DM Mono, monospace',fontSize:13,lineHeight:22,minimap:{enabled:false},padding:{top:20,bottom:24},automaticLayout:true,wordWrap:'on',scrollBeyondLastLine:false,renderLineHighlight:'gutter',lineNumbers:'on',bracketPairColorization:{enabled:true},autoClosingBrackets:'always',autoClosingQuotes:'always',tabSize:2,folding:true,contextmenu:true,smoothScrolling:true}}/></div><div className="status-bar"><span><span className="status-green"/> {saveState}</span><span>Ln {editorRef.current?.getPosition()?.lineNumber??1}, Col {editorRef.current?.getPosition()?.column??1}</span><span>Spaces: 2</span><span>UTF-8</span><span>LaTeX</span><button onClick={()=>setModal('shortcuts')}><Keyboard size={13}/> Shortcuts</button></div></main>
- {preview&&<section className="preview-panel"><div className="preview-header"><div><strong>PDF Preview</strong><span className="preview-state"><span className={pdfUrl?'green-dot':'gray-dot'}/>{pdfUrl?'Compiled PDF':'Not compiled'}</span></div><div className="preview-actions"><button title="Download PDF" onClick={downloadPdf}><Download size={15}/></button><button title="Refresh preview" onClick={()=>{if(pdfUrl)setPdfUrl(`/api/projects/${projectId}/pdf?t=${Date.now()}`);else compile()}}><RefreshCw size={15}/></button><button title="Close preview" onClick={()=>setPreview(false)}><X size={15}/></button></div></div><div className="compile-row"><button className="compile-btn" disabled={compiling||!project.files.some(f=>f.name==='main.tex')} onClick={compile}>{compiling?<span className="spinner"/>:<Play size={14} fill="currentColor"/>}{compiling?'Compiling':'Compile'}</button><select id="compiler" className="compiler-select"><option value="pdflatex">pdfLaTeX</option><option value="xelatex">XeLaTeX</option><option value="lualatex">LuaLaTeX</option></select><button className="logs-btn" onClick={async()=>{try{const r=await fetch(`/api/projects/${projectId}/logs`);if(r.ok){const txt=await r.text();setCompileMsg(txt||'No compilation has been run yet.')}}catch{}setModal('logs')}}>Logs</button></div>{compileMsg&&<div className={`compile-message ${compileMsg.toLowerCase().includes('success')?'success':''}`}><span>{compileMsg.toLowerCase().includes('success')?<CircleCheck size={14}/>:<AlertCircle size={14}/>}</span>{compileMsg}</div>}<div className="pdf-workspace">{pdfUrl?<PdfViewer url={pdfUrl} zoom={zoom} page={page} setPage={setPage}/>:<div className="pdf-empty"><div className="paper-placeholder"><FileText size={25}/><span>PDF</span></div><strong>Your document will appear here</strong><p>Compile your LaTeX source to see a live preview of your PDF.</p><button className="compile-btn" onClick={compile}><Play size={13} fill="currentColor"/> Compile document</button><small>Compilation runs in an isolated Docker container.</small></div>}</div><div className="pdf-controls"><button onClick={()=>setPage(Math.max(1,page-1))}><ChevronLeft size={15}/></button><span>Page <strong>{page}</strong> <span className="page-total">/ {(window as any).__pdfTotal??'—'}</span></span><button onClick={()=>setPage(Math.min(Number((window as any).__pdfTotal)||page+1,page+1))}><ChevronRight size={15}/></button><i/><button title="Zoom out" onClick={()=>setZoom(Math.max(50,zoom-10))}><ZoomOut size={15}/></button><span className="zoom-label">{zoom}%</span><button title="Zoom in" onClick={()=>setZoom(Math.min(160,zoom+10))}><ZoomIn size={15}/></button><button title="Fit to width" onClick={()=>setZoom(100)}><Maximize2 size={14}/></button></div></section>}</div><footer className="editor-footer"><span><span className="connected-dot"/> All changes saved</span><span>Paperdesk Studio <span className="dot">·</span> Compiler runs in Docker</span><button onClick={()=>setNotice('Keyboard shortcuts: ⌘/Ctrl+S save · ⌘/Ctrl+F find')}><HelpCircle size={14}/> Help</button></footer></>}
- {notice&&<div className="toast"><CircleCheck size={16}/>{notice}<button onClick={()=>setNotice('')}><X size={14}/></button></div>}
- {modal&&<div className="modal-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget)setModal('')}}><div className="modal"><div className="modal-head"><h3>{modal==='new'?'Create a new project':modal==='rename'?'Rename project':modal==='settings'?'Project settings':modal==='shortcuts'?'Keyboard shortcuts':modal==='logs'?'Compilation log':'Project details'}</h3><button onClick={()=>setModal('')}><X size={17}/></button></div>{modal==='new'||modal==='rename'?<><label className="field-label">Project name</label><input autoFocus className="modal-input" value={projectInput} onChange={e=>setProjectInput(e.target.value)} onKeyDown={e=>e.key==='Enter'&&(modal==='new'?newProject():doRename())} placeholder="e.g. My research paper"/><div className="modal-foot"><button className="secondary-btn" onClick={()=>setModal('')}>Cancel</button><button className="primary-btn" onClick={()=>modal==='new'?newProject():doRename()}><Plus size={15}/>{modal==='new'?'Create project':'Save changes'}</button></div></>:modal==='settings'?<div className="settings-body"><p><strong>Project</strong> {project.name}</p><p><strong>Compiler</strong> Select a LaTeX engine from the preview toolbar.</p><p><strong>Storage</strong> Browser local storage. Projects persist on this device.</p><p><strong>Collaboration</strong> Sharing and real-time editing are not implemented yet.</p><button className="secondary-btn" onClick={downloadProject}><Download size={14}/> Download project</button></div>:modal==='logs'?<div className="logs-body"><pre>{compileMsg||'No compilation has been run yet.'}{compileMsg.toLowerCase().includes('success')?'\n\nCompilation finished. PDF is ready for preview.':'\n\nCheck that the compiler Docker image is built and Docker is running.'}</pre></div>:<div className="settings-body"><p>⌘/Ctrl + S <span>Save current project</span></p><p>⌘/Ctrl + F <span>Find in current file</span></p><p>⌘/Ctrl + H <span>Find and replace</span></p><p>⌘/Ctrl + Enter <span>Compile document</span></p><button className="secondary-btn" onClick={()=>setModal('')}>Done</button></div>}</div></div>}
+ {dashboard?<>
+  <header className="dash-header">
+   <Brand/>
+   <nav className="dash-nav"><button className={activeTab!=='templates'?'nav-active':''} onClick={()=>setActiveTab('dashboard')}>Projects</button><button className={activeTab==='templates'?'nav-active':''} onClick={()=>setActiveTab('templates')}>Templates</button></nav>
+   <div className="dash-right">{themeMenu}<button className="icon-btn" title="Help" aria-label="Help" onClick={()=>notify('Help center coming soon')}><HelpCircle size={17}/></button><button className="icon-btn" title="Notifications" aria-label="Notifications" onClick={()=>notify('You’re all caught up')}><Bell size={17}/></button><button className="avatar" title="Account settings" onClick={()=>notify('Account settings are not implemented yet')}>JD</button></div>
+  </header>
+  <main className="dash-main">
+   <div className="dash-heading"><div><div className="eyebrow">Workspace / My projects</div><h1>{activeTab==='templates'?'Start from a template':'Your projects'}</h1><p className="subhead">{activeTab==='templates'?'Choose a starting point for your next document.':'Pick up where you left off.'}</p></div><button className="btn btn-primary" onClick={promptNewProject}><Plus size={16}/> New project</button></div>
+   {activeTab==='templates'&&<div className="template-grid">{([['Blank project','A clean canvas for your next great idea.',<FileText size={20}/>],['Article','A polished structure for research papers.',<BookOpen size={20}/>],['Presentation','Create beautiful slides with Beamer.',<Columns2 size={20}/>]] as const).map(([name,desc,icon])=><button className="template-card" key={name} onClick={()=>newProject(name==='Blank project'?'Untitled Project':name+' project')}><div className="template-icon">{icon}</div><strong>{name}</strong><span>{desc}</span><em>Use template <ChevronRight size={14}/></em></button>)}</div>}
+   <div className="section-bar"><div className="section-title"><h2>Recent projects</h2><span className="count-pill">{sortedProjects.length}</span></div><div className="dash-tools"><label className="search-box"><Search size={15}/><input ref={searchRef} value={query} onChange={e=>setQuery(e.target.value)} placeholder="Search projects…" aria-label="Search projects"/>{query?<button className="clear-search" aria-label="Clear search" onClick={()=>setQuery('')}><X size={13}/></button>:<kbd>{isMac?'⌘K':'Ctrl K'}</kbd>}</label><Dropdown id="sort" open={openMenu==='sort'} setOpen={setOpenMenu} align="right" trigger={<button className="btn btn-ghost btn-sm" onClick={()=>setOpenMenu(openMenu==='sort'?'':'sort')}>{sortBy==='name'?'Name':'Last modified'} <ChevronDown size={14}/></button>} items={[{label:'Last modified',checked:sortBy==='modified',run:()=>setSortBy('modified')},{label:'Name',checked:sortBy==='name',run:()=>setSortBy('name')}]}/></div></div>
+   {sortedProjects.length?<div className="project-list" role="table"><div className="project-list-head" role="row"><span>Name</span><span>Last modified</span><span>Owner</span><span/></div>{sortedProjects.map((p,i)=><div className="project-row" role="row" key={p.id}><button className="project-open" onClick={()=>openProject(p)}><div className={`project-file-icon pfi-${i%4}`}><FileText size={18}/></div><div className="project-name-wrap"><strong>{p.name}</strong><small>{p.files.length} files · {p.files.map(f=>f.name).slice(0,2).join(', ')}</small></div></button><span className="muted date-text">{relative(p.modified)}</span><span className="owner"><span className="tiny-avatar">JD</span> You</span><div className="row-actions"><button className="icon-btn" title="Open" aria-label={`Open ${p.name}`} onClick={()=>openProject(p)}><ChevronRight size={17}/></button><Dropdown id={p.id} open={openMenu===p.id} setOpen={setOpenMenu} align="right" trigger={<button className="icon-btn" title="Project actions" aria-label="Project actions" onClick={()=>setOpenMenu(openMenu===p.id?'':p.id)}><MoreHorizontal size={18}/></button>} items={[{label:'Rename',icon:<Pencil size={14}/>,run:()=>renameProject(p)},{label:'Duplicate',icon:<Copy size={14}/>,run:()=>duplicate(p)},'sep',{label:'Delete',icon:<Trash2 size={14}/>,danger:true,run:()=>deleteProject(p)}]}/></div></div>)}</div>
+   :<div className="empty-state"><div className="empty-icon"><FileText size={24}/></div><h3>No projects found</h3><p>{query?'Try a different search.':'Create your first project to get started.'}</p>{!query&&<button className="btn btn-primary" onClick={promptNewProject}><Plus size={15}/> New project</button>}</div>}
+   <div className="dash-footer"><span>Paperdesk Studio <span className="dot">·</span> A thoughtful place to write</span><span>All projects are saved in this browser</span></div>
+  </main>
+ </>:<div className="editor-shell">
+  <header className="editor-header">
+   <button className="icon-btn chrome-btn" title="Back to projects" aria-label="Back to projects" onClick={()=>setActiveTab('dashboard')}><Home size={16}/></button>
+   <span className="chrome-divider"/>
+   <nav className="editor-menus" aria-label="Editor menu">
+    {compact?<Dropdown id="menu-all" open={openMenu==='menu-all'} setOpen={setOpenMenu} trigger={<button className="text-menu" onClick={()=>setOpenMenu(openMenu==='menu-all'?'':'menu-all')}><Menu size={15}/> Menu</button>} groups={menus}/>
+    :menus.map(m=><Dropdown key={m.label} id={'menu-'+m.label} open={openMenu==='menu-'+m.label} setOpen={setOpenMenu} trigger={<button className={`text-menu ${openMenu==='menu-'+m.label?'active':''}`} onClick={()=>setOpenMenu(openMenu==='menu-'+m.label?'':'menu-'+m.label)} onMouseEnter={()=>{if(openMenu.startsWith('menu-')&&openMenu!=='menu-'+m.label)setOpenMenu('menu-'+m.label)}}>{m.label}</button>} items={m.items}/>)}
+   </nav>
+   <button className="project-title" title="Rename project" onClick={()=>renameProject(project)}><span>{project.name}</span><Pencil size={12}/></button>
+   <div className="header-right">
+    <span className={`save-indicator ${saveState==='Saved'?'':'busy'}`} aria-live="polite"><Cloud size={14}/><span className="hide-sm">{saveState}</span></span>
+    <div className="segmented" role="radiogroup" aria-label="Layout">
+     {!narrow&&<button role="radio" aria-checked={prefs.layout==='split'} className={prefs.layout==='split'?'on':''} title="Editor & PDF" onClick={()=>setPref('layout','split')}><Columns2 size={15}/></button>}
+     <button role="radio" aria-checked={layout==='editor'} className={layout==='editor'&&(narrow||prefs.layout==='editor')?'on':''} title="Editor only" onClick={()=>setPref('layout','editor')}><Code2 size={15}/>{narrow&&<span>Editor</span>}</button>
+     <button role="radio" aria-checked={layout==='pdf'} className={layout==='pdf'?'on':''} title="PDF only" onClick={()=>setPref('layout','pdf')}><FileText size={15}/>{narrow&&<span>PDF</span>}</button>
+    </div>
+    {themeMenu}
+    <button className="btn btn-secondary btn-sm hide-sm" onClick={()=>notify('Sharing and live collaboration are planned, not available yet')}><Share2 size={14}/> Share</button>
+    <button className="icon-btn chrome-btn" title="Settings" aria-label="Settings" onClick={()=>setModal('settings')}><Settings size={16}/></button>
+   </div>
+  </header>
+
+  <div className="work-area" ref={workRef} style={{['--sidebar-w' as any]:`${prefs.sidebarWidth}px`,['--preview-pct' as any]:`${prefs.previewPct}%`}}>
+   {narrow&&drawer&&<div className="drawer-backdrop" onClick={()=>setDrawer(false)}/>}
+   <aside className={`file-sidebar ${sidebarOpen?'':'collapsed'} ${narrow?'drawer':''}`} aria-label="Project files">
+    <div className="pane-toolbar side-head"><span className="pane-title">Files</span><span className="side-tools"><button className="icon-btn sm" title="New file" aria-label="New file" onClick={()=>addFile()}><FilePlus2 size={15}/></button><button className="icon-btn sm" title="New folder" aria-label="New folder" onClick={()=>addFile(true)}><FolderPlus size={15}/></button><button className="icon-btn sm" title="Upload files" aria-label="Upload files" onClick={()=>fileInput.current?.click()}><Upload size={14}/></button><button className="icon-btn sm" title="Hide file tree" aria-label="Hide file tree" onClick={()=>setSidebar(false)}><PanelLeft size={15}/></button></span></div>
+    <div className="file-tree" role="tree">
+     <TreeLevel nodes={buildTree(project.files)} depth={0} selected={currentFile?.name??''} collapsed={collapsed} onToggle={p=>setCollapsed(c=>{const n=new Set(c);n.has(p)?n.delete(p):n.add(p);return n})} onOpen={f=>{setFileName(f.name);if(narrow)setDrawer(false);if(layout==='pdf')setPref('layout',narrow?'editor':'split')}} onRename={renameFile} onDelete={deleteFile}/>
+    </div>
+    <div className="side-bottom"><button onClick={downloadProject}><FileArchive size={15}/> Download project</button><button onClick={()=>setModal('settings')}><Settings size={15}/> Project settings</button></div>
+    <input ref={fileInput} className="hidden" type="file" multiple accept=".tex,.bib,.sty,.cls,.png,.jpg,.jpeg,.pdf,.csv,.txt,.zip" onChange={e=>uploadFiles(e.target.files)}/><input ref={zipInput} className="hidden" type="file" accept=".zip" onChange={e=>uploadFiles(e.target.files)}/>
+   </aside>
+   {sidebarOpen&&!narrow&&<Resizer label="Resize file tree" value={prefs.sidebarWidth} min={170} max={420} onChange={v=>setPref('sidebarWidth',v)} fromClientX={x=>x-(workRef.current?.getBoundingClientRect().left??0)} onReset={()=>setPref('sidebarWidth',232)}/>}
+
+   {showEditor&&<main className="editor-main">
+    <div className="pane-toolbar doc-bar">
+     {!sidebarOpen&&<button className="icon-btn sm" title="Show file tree" aria-label="Show file tree" onClick={()=>setSidebar(true)}><PanelLeft size={15}/></button>}
+     <div className="tabs" role="tablist">{tabFiles(project.files,currentFile?.name).map(f=><button role="tab" aria-selected={currentFile?.name===f.name} key={f.name} className={`doc-tab ${currentFile?.name===f.name?'active':''}`} onClick={()=>setFileName(f.name)} title={f.name}>{fileIcon(f)}<span>{f.name.split('/').pop()}</span></button>)}</div>
+     <button className="icon-btn sm" title="New file" aria-label="New file" onClick={()=>addFile()}><Plus size={15}/></button>
+    </div>
+    <div className="pane-toolbar editor-toolbar" role="toolbar" aria-label="Formatting">
+     <button className="tool" title={`Undo (${mod}Z)`} aria-label="Undo" onClick={()=>editorRef.current?.trigger('keyboard','undo',null)}><Undo2 size={15}/></button><button className="tool" title="Redo" aria-label="Redo" onClick={()=>editorRef.current?.trigger('keyboard','redo',null)}><Redo2 size={15}/></button><span className="tool-divider"/>
+     <select className="style-select" aria-label="Paragraph style" value="Normal text" onChange={e=>{const v=e.target.value;if(v==='Section')insert('\\section{}');if(v==='Subsection')insert('\\subsection{}');if(v==='Subsubsection')insert('\\subsubsection{}')}}><option>Normal text</option><option>Section</option><option>Subsection</option><option>Subsubsection</option></select><span className="tool-divider"/>
+     <button className="tool" title="Bold" aria-label="Bold" onClick={()=>insert('\\textbf{}')}><Bold size={15}/></button><button className="tool" title="Italic" aria-label="Italic" onClick={()=>insert('\\textit{}')}><Italic size={15}/></button><button className="tool" title="Underline" aria-label="Underline" onClick={()=>insert('\\underline{}')}><Underline size={15}/></button><span className="tool-divider"/>
+     <button className="tool" title="Bulleted list" aria-label="Bulleted list" onClick={()=>insert('\\begin{itemize}\n  \\item Item\n\\end{itemize}')}><List size={15}/></button><button className="tool" title="Numbered list" aria-label="Numbered list" onClick={()=>insert('\\begin{enumerate}\n  \\item Item\n\\end{enumerate}')}><ListOrdered size={15}/></button><button className="tool" title="Table" aria-label="Table" onClick={()=>insert('\\begin{table}[ht]\n  \\centering\n  \\begin{tabular}{cc}\n    A & B \\\\\n    1 & 2 \\\\\n  \\end{tabular}\n  \\caption{Caption}\n\\end{table}')}><Table2 size={15}/></button><button className="tool" title="Equation" aria-label="Equation" onClick={()=>insert('\\[\n  \n\\]')}><Sigma size={15}/></button><button className="tool" title="Citation" aria-label="Citation" onClick={()=>insert('\\cite{}')}><Quote size={15}/></button><button className="tool" title="Reference" aria-label="Reference" onClick={()=>insert('\\ref{}')}><Link2 size={14}/></button><button className="tool" title="Figure" aria-label="Figure" onClick={()=>insert('\\includegraphics[width=0.8\\linewidth]{image.png}')}><ImageIcon size={15}/></button>
+    </div>
+    <div className="editor-canvas">
+     {currentFile&&isBinary(currentFile.name)?<div className="binary-file"><ImageIcon size={26}/><strong>{currentFile.name}</strong><p>Binary files can’t be edited here. They’re included when the project compiles.</p></div>
+     :<Editor height="100%" path={`${project.id}/${currentFile?.name??fileName}`} language={(currentFile?.name??fileName).endsWith('.bib')?'bibtex':'latex'} theme={theme.resolved==='dark'?'paperdesk-dark':'paperdesk-light'} beforeMount={setupMonaco} loading={<div className="pane-loading"><Spinner/> Loading editor…</div>} value={content} onChange={v=>setContent(v??'')} onMount={onMount} options={{fontFamily:"'DM Mono', ui-monospace, monospace",fontSize:13.5,lineHeight:22,minimap:{enabled:false},padding:{top:14,bottom:24},automaticLayout:true,wordWrap:'on',scrollBeyondLastLine:false,renderLineHighlight:'line',lineNumbers:'on',bracketPairColorization:{enabled:true},autoClosingBrackets:'always',autoClosingQuotes:'always',tabSize:2,folding:true,contextmenu:true,smoothScrolling:true,scrollbar:{verticalScrollbarSize:10,horizontalScrollbarSize:10}}}/>}
+    </div>
+    <div className="status-bar"><span className="status-save"><span className={saveState==='Saved'?'status-dot ok':'status-dot busy'}/> {saveState}</span><span>Ln {cursor.line}, Col {cursor.col}</span><span className="hide-sm">Spaces: 2</span><span className="hide-sm">UTF-8</span><span>{(currentFile?.name??'').endsWith('.bib')?'BibTeX':'LaTeX'}</span><button onClick={()=>setModal('shortcuts')}><Keyboard size={13}/> <span className="hide-sm">Shortcuts</span></button></div>
+   </main>}
+
+   {showEditor&&showPdf&&<Resizer label="Resize PDF preview" value={prefs.previewPct} min={25} max={70} onChange={v=>setPref('previewPct',v)} fromClientX={x=>{const r=workRef.current!.getBoundingClientRect();return Math.round((r.right-x)/r.width*1000)/10}} onReset={()=>setPref('previewPct',46)} invert/>}
+
+   {showPdf&&<section className={`preview-panel ${showEditor?'':'full'}`} aria-label="PDF preview">
+    <div className="pane-toolbar pdf-toolbar">
+     <div className="split-btn" data-menu-root>
+      <button className="btn btn-primary btn-sm compile-main" disabled={compiling} onClick={compile} title={`Recompile (${mod}↵)`}>{compiling?<Spinner light/>:<RefreshCw size={14}/>}{compiling?'Compiling…':'Recompile'}</button>
+      <Dropdown id="engine" open={openMenu==='engine'} setOpen={setOpenMenu} trigger={<button className="btn btn-primary btn-sm compile-caret" aria-label="Compiler options" onClick={()=>setOpenMenu(openMenu==='engine'?'':'engine')}><ChevronDown size={14}/></button>} items={[...[['pdflatex','pdfLaTeX'],['xelatex','XeLaTeX'],['lualatex','LuaLaTeX']].map(([v,l])=>({label:l,checked:engine===v,run:()=>setEngine(v)}))]} heading="Compiler"/>
+     </div>
+     <button className={`btn btn-ghost btn-sm logs-btn ${compile_.status==='error'?'has-error':''}`} onClick={openLogs} title="View compile log"><ScrollText size={14}/><span className="hide-xs">Logs</span>{compile_.status==='error'&&<span className="err-badge" aria-label="Compile error">!</span>}</button>
+     <span className="pdf-state"><span className={`status-dot ${pdfUrl?'ok':'idle'}`}/>{pdfUrl?'Up to date':'Not compiled'}</span>
+     <div className="toolbar-spacer"/>
+     <button className="icon-btn sm" title="Download PDF" aria-label="Download PDF" disabled={!pdfUrl} onClick={downloadPdf}><Download size={15}/></button>
+     {showEditor&&<button className="icon-btn sm" title="Hide PDF preview" aria-label="Hide PDF preview" onClick={()=>setPref('layout','editor')}><X size={15}/></button>}
+    </div>
+    {compile_.status!=='idle'&&<div className={`compile-banner ${compile_.status}`} role={compile_.status==='error'?'alert':'status'}>
+     {compile_.status==='running'?<Spinner/>:compile_.status==='success'?<CircleCheck size={15}/>:<AlertCircle size={15}/>}
+     <span className="banner-text">{compile_.message}</span>
+     {compile_.status==='error'&&<><button className="banner-link" onClick={openLogs}>View log</button><button className="banner-close" aria-label="Dismiss" onClick={()=>setCompileState({status:'idle',message:''})}><X size={14}/></button></>}
+    </div>}
+    <div className="pdf-workspace">
+     {pdfUrl?<PdfViewer url={pdfUrl} zoom={zoom} page={page} onLoaded={setPageTotal} onScale={s=>{scaleRef.current=s}}/>
+     :<div className="pdf-empty"><div className="paper-placeholder"><FileText size={24}/><span>PDF</span></div><strong>Your document will appear here</strong><p>Recompile to render a preview of your PDF. Compilation needs the local server (<code>npm run server</code>) and Docker.</p><button className="btn btn-primary" disabled={compiling} onClick={compile}>{compiling?<Spinner light/>:<Play size={13} fill="currentColor"/>} {compiling?'Compiling…':'Compile document'}</button></div>}
+     {pdfUrl&&<div className="pdf-controls" role="toolbar" aria-label="PDF controls">
+      <button title="Previous page" aria-label="Previous page" disabled={page<=1} onClick={()=>setPage(Math.max(1,page-1))}><ChevronLeft size={15}/></button>
+      <span className="page-label"><strong>{page}</strong> / {pageTotal||'—'}</span>
+      <button title="Next page" aria-label="Next page" disabled={!!pageTotal&&page>=pageTotal} onClick={()=>setPage(Math.min(pageTotal||page+1,page+1))}><ChevronRight size={15}/></button>
+      <i/>
+      <button title="Zoom out" aria-label="Zoom out" onClick={()=>changeZoom(-10)}><ZoomOut size={15}/></button>
+      <span className="zoom-label">{zoom==='fit'?'Fit':`${zoom}%`}</span>
+      <button title="Zoom in" aria-label="Zoom in" onClick={()=>changeZoom(10)}><ZoomIn size={15}/></button>
+      <button title="Fit to width" aria-label="Fit to width" className={zoom==='fit'?'on':''} onClick={()=>setZoom('fit')}><Maximize2 size={14}/></button>
+     </div>}
+    </div>
+   </section>}
+  </div>
+ </div>}
+
+ {toast&&<div className={`toast ${toast.tone}`} role={toast.tone==='error'?'alert':'status'}>{toast.tone==='error'?<AlertCircle size={16}/>:toast.tone==='success'?<CircleCheck size={16}/>:<Info size={16}/>}<span>{toast.text}</span><button aria-label="Dismiss" onClick={()=>setToast(null)}><X size={14}/></button></div>}
+
+ {dialog&&<PromptDialog dialog={dialog} close={()=>setDialog(null)}/>}
+
+ {modal&&project&&<Modal title={modal==='settings'?'Settings':modal==='shortcuts'?'Keyboard shortcuts':'Compile log'} close={()=>setModal('')} wide={modal==='logs'}>
+  {modal==='settings'?<div className="settings-body">
+   <section><h4>Appearance</h4><div className="field-row"><div><strong>Theme</strong><span>Auto follows your operating system.</span></div><ThemeSegment pref={theme.pref} setPref={theme.setPref}/></div></section>
+   <section><h4>Project</h4>
+    <div className="field-row"><div><strong>Name</strong><span>{project.name}</span></div><button className="btn btn-secondary btn-sm" onClick={()=>{setModal('');renameProject(project)}}><Pencil size={13}/> Rename</button></div>
+    <div className="field-row"><div><strong>Compiler</strong><span>Used by Recompile.</span></div><select className="select" value={engine} onChange={e=>setEngine(e.target.value)} aria-label="Compiler"><option value="pdflatex">pdfLaTeX</option><option value="xelatex">XeLaTeX</option><option value="lualatex">LuaLaTeX</option></select></div>
+    <div className="field-row"><div><strong>Storage</strong><span>Browser local storage; synced to the API when it’s running.</span></div></div>
+    <div className="field-row"><div><strong>Collaboration</strong><span>Sharing and real-time editing are not implemented yet.</span></div></div>
+   </section>
+   <div className="modal-foot"><button className="btn btn-secondary" onClick={downloadProject}><Download size={14}/> Download project</button><button className="btn btn-primary" onClick={()=>setModal('')}>Done</button></div>
+  </div>
+  :modal==='logs'?<div className="logs-body">
+   {logText.loading?<div className="pane-loading inline"><Spinner/> Loading log…</div>:<>
+    {logText.error&&<div className="inline-alert error"><AlertCircle size={15}/><span>{logText.error}</span></div>}
+    {compile_.status==='error'&&!logText.error&&<div className="inline-alert error"><AlertCircle size={15}/><span>{compile_.message}</span></div>}
+    {logText.text?<pre>{logText.text}</pre>:!logText.error&&<p className="muted">No compilation has been run yet.</p>}
+   </>}
+   <div className="modal-foot"><button className="btn btn-secondary" onClick={openLogs}><RefreshCw size={14}/> Reload</button><button className="btn btn-primary" onClick={()=>setModal('')}>Close</button></div>
+  </div>
+  :<div className="settings-body shortcuts">
+   {[[`${mod}S`,'Save current project'],[`${mod}↵`,'Recompile document'],[`${mod}F`,'Find in current file'],[isMac?'⌥⌘F':'Ctrl+H','Find and replace'],[`${mod}Z`,'Undo'],['Esc','Close menus and dialogs']].map(([k,d])=><div className="field-row" key={d}><span>{d}</span><kbd>{k}</kbd></div>)}
+   <div className="modal-foot"><button className="btn btn-primary" onClick={()=>setModal('')}>Done</button></div>
+  </div>}
+ </Modal>}
  </div>
 }
+
 function Brand(){return <div className="brand"><span className="brand-mark"><span/><span/><span/></span><span>paperdesk</span><small>STUDIO</small></div>}
+function Spinner({light}:{light?:boolean}){return <span className={`spinner ${light?'light':''}`} aria-hidden/>}
+
+function Dropdown({id,open,setOpen,trigger,items,groups,align='left',heading}:{id:string,open:boolean,setOpen:(v:string)=>void,trigger:ReactNode,items?:MenuItem[],groups?:{label:string,items:MenuItem[]}[],align?:'left'|'right',heading?:string}){
+ const render=(list:MenuItem[],prefix:string)=>list.map((it,i)=>it==='sep'?<div className="menu-sep" key={prefix+i}/>:<button role={it.checked!==undefined?'menuitemcheckbox':'menuitem'} aria-checked={it.checked} key={prefix+it.label} disabled={it.disabled} className={it.danger?'danger':''} onClick={()=>{setOpen('');it.run()}}><span className="menu-icon">{it.checked!==undefined?(it.checked?<Check size={14}/>:null):it.icon}</span><span className="menu-label">{it.label}</span>{it.shortcut&&<kbd>{it.shortcut}</kbd>}</button>);
+ return <div className="menu-anchor" data-menu-root data-menu-id={id}>{trigger}{open&&<div className={`pop-menu ${align==='right'?'align-right':''}`} role="menu">{heading&&<div className="menu-heading">{heading}</div>}{items&&render(items,'')}{groups?.map(g=><React.Fragment key={g.label}><div className="menu-heading">{g.label}</div>{render(g.items,g.label)}</React.Fragment>)}</div>}</div>;
+}
+
+function ThemeMenu({pref,resolved,setPref,open,toggle}:{pref:ThemePref,resolved:'light'|'dark',setPref:(p:ThemePref)=>void,open:boolean,toggle:()=>void}){
+ const icon=pref==='auto'?<Monitor size={16}/>:resolved==='dark'?<Moon size={16}/>:<Sun size={16}/>;
+ return <div className="menu-anchor" data-menu-root><button className="icon-btn chrome-btn" title={`Theme: ${pref[0].toUpperCase()+pref.slice(1)}`} aria-label="Change theme" aria-haspopup="menu" aria-expanded={open} onClick={toggle}>{icon}</button>
+  {open&&<div className="pop-menu align-right theme-pop" role="menu"><div className="menu-heading">Theme</div>{themeOptions.map(o=><button key={o.value} role="menuitemradio" aria-checked={pref===o.value} className={pref===o.value?'current':''} onClick={()=>{setPref(o.value);toggle()}}><span className="menu-icon">{o.icon}</span><span className="menu-label">{o.label}<small>{o.value==='auto'?`${o.hint} (now ${resolved})`:o.hint}</small></span>{pref===o.value&&<Check size={14} className="menu-check"/>}</button>)}</div>}
+ </div>;
+}
+
+function ThemeSegment({pref,setPref}:{pref:ThemePref,setPref:(p:ThemePref)=>void}){
+ return <div className="segmented labeled" role="radiogroup" aria-label="Theme">{themeOptions.map(o=><button key={o.value} role="radio" aria-checked={pref===o.value} className={pref===o.value?'on':''} onClick={()=>setPref(o.value)}>{o.icon}<span>{o.label}</span></button>)}</div>;
+}
+
+function Modal({title,close,children,wide}:{title:string,close:()=>void,children:ReactNode,wide?:boolean}){
+ return <div className="modal-backdrop" onMouseDown={e=>{if(e.target===e.currentTarget)close()}}><div className={`modal ${wide?'wide':''}`} role="dialog" aria-modal="true" aria-label={title}><div className="modal-head"><h3>{title}</h3><button className="icon-btn" aria-label="Close" onClick={close}><X size={17}/></button></div>{children}</div></div>;
+}
+
+function PromptDialog({dialog,close}:{dialog:Dialog,close:()=>void}){
+ const [value,setValue]=useState(dialog.initial??''),[error,setError]=useState('');
+ const inputRef=useRef<HTMLInputElement>(null);
+ useEffect(()=>{const el=inputRef.current;if(el){el.focus();const dot=el.value.lastIndexOf('.');el.setSelectionRange(0,dot>0?dot:el.value.length)}},[]);
+ const submit=()=>{const err=dialog.onConfirm(value);if(err){setError(err);return}close()};
+ return <Modal title={dialog.title} close={close}>
+  {dialog.message&&<p className="dialog-message">{dialog.message}</p>}
+  {dialog.label!==undefined&&<><label className="field-label" htmlFor="dialog-input">{dialog.label}</label><input id="dialog-input" ref={inputRef} className={`text-input ${error?'invalid':''}`} value={value} placeholder={dialog.placeholder} aria-invalid={!!error} aria-describedby={error?'dialog-error':undefined} onChange={e=>{setValue(e.target.value);setError('')}} onKeyDown={e=>{if(e.key==='Enter')submit()}}/>{error&&<p className="field-error" id="dialog-error"><AlertCircle size={13}/>{error}</p>}</>}
+  <div className="modal-foot"><button className="btn btn-secondary" onClick={close}>Cancel</button><button className={`btn ${dialog.danger?'btn-danger':'btn-primary'}`} onClick={submit} autoFocus={dialog.label===undefined}>{dialog.confirmLabel}</button></div>
+ </Modal>;
+}
+
+function Resizer({label,value,min,max,onChange,fromClientX,onReset,invert}:{label:string,value:number,min:number,max:number,onChange:(v:number)=>void,fromClientX:(x:number)=>number,onReset:()=>void,invert?:boolean}){
+ const clamp=(v:number)=>Math.min(max,Math.max(min,v));
+ const start=(e:React.PointerEvent)=>{e.preventDefault();const el=e.currentTarget as HTMLElement;el.setPointerCapture(e.pointerId);document.body.classList.add('is-resizing');
+  const move=(ev:PointerEvent)=>onChange(clamp(fromClientX(ev.clientX)));
+  const up=()=>{document.body.classList.remove('is-resizing');el.removeEventListener('pointermove',move);el.removeEventListener('pointerup',up);el.removeEventListener('pointercancel',up)};
+  el.addEventListener('pointermove',move);el.addEventListener('pointerup',up);el.addEventListener('pointercancel',up)};
+ const step=max>100?16:2;
+ return <div className="resizer" role="separator" aria-orientation="vertical" aria-label={label} aria-valuenow={value} aria-valuemin={min} aria-valuemax={max} tabIndex={0} title="Drag to resize · double-click to reset" onPointerDown={start} onDoubleClick={onReset} onKeyDown={e=>{if(e.key==='ArrowLeft'||e.key==='ArrowRight'){e.preventDefault();const dir=(e.key==='ArrowRight'?1:-1)*(invert?-1:1);onChange(clamp(value+dir*step))}}}/>;
+}
+
+type TreeNode={name:string,path:string,folder:boolean,children:TreeNode[],file:ProjectFile};
+function buildTree(files:ProjectFile[]):TreeNode[]{
+ const root:TreeNode[]=[];
+ const folder=(list:TreeNode[],name:string,path:string)=>{let n=list.find(x=>x.folder&&x.name===name);if(!n){n={name,path,folder:true,children:[],file:{name:path,content:''}};list.push(n)}return n};
+ for(const f of files){const isFolder=f.name.endsWith('/');const parts=f.name.replace(/\/$/,'').split('/');let list=root,path='';
+  parts.forEach((part,i)=>{path+=part+(i<parts.length-1||isFolder?'/':'');if(i<parts.length-1||isFolder){const n=folder(list,part,path);if(i===parts.length-1)n.file=f;list=n.children}else list.push({name:part,path:f.name,folder:false,children:[],file:f})})}
+ const sort=(l:TreeNode[])=>{l.sort((a,b)=>a.folder!==b.folder?(a.folder?-1:1):a.name.localeCompare(b.name));l.forEach(n=>sort(n.children));return l};
+ return sort(root);
+}
+
+function TreeLevel({nodes,depth,selected,collapsed,onToggle,onOpen,onRename,onDelete}:{nodes:TreeNode[],depth:number,selected:string,collapsed:Set<string>,onToggle:(p:string)=>void,onOpen:(f:ProjectFile)=>void,onRename:(f:ProjectFile)=>void,onDelete:(f:ProjectFile)=>void}){
+ return <>{nodes.map(n=>{const open=!collapsed.has(n.path);return <div key={n.path} role="treeitem" aria-expanded={n.folder?open:undefined} aria-selected={selected===n.path}>
+  <div className={`file-row ${selected===n.path?'selected':''}`} style={{paddingLeft:8+depth*14}} tabIndex={0} onClick={()=>n.folder?onToggle(n.path):onOpen(n.file)} onKeyDown={e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();n.folder?onToggle(n.path):onOpen(n.file)}}}>
+   <span className="tree-caret">{n.folder?(open?<ChevronDown size={13}/>:<ChevronRight size={13}/>):null}</span>
+   {n.folder?(open?<FolderOpen size={15}/>:<Folder size={15}/>):fileIcon(n.file)}
+   <span className="file-label">{n.name}</span>
+   <span className="file-actions"><button title="Rename" aria-label={`Rename ${n.name}`} onClick={e=>{e.stopPropagation();onRename(n.file)}}><Pencil size={12}/></button><button className="danger" title="Delete" aria-label={`Delete ${n.name}`} onClick={e=>{e.stopPropagation();onDelete(n.file)}}><Trash2 size={12}/></button></span>
+  </div>
+  {n.folder&&open&&(n.children.length?<TreeLevel nodes={n.children} depth={depth+1} selected={selected} collapsed={collapsed} onToggle={onToggle} onOpen={onOpen} onRename={onRename} onDelete={onDelete}/>:<div className="file-row empty-folder" style={{paddingLeft:30+depth*14}}>Empty folder</div>)}
+ </div>})}</>;
+}
+
+function tabFiles(files:ProjectFile[],active?:string){const list=files.filter(f=>!f.name.endsWith('/'));const tabs=list.slice(0,5);const cur=list.find(f=>f.name===active);if(cur&&!tabs.includes(cur))tabs[tabs.length-1]=cur;return tabs}
+function fileIcon(f:ProjectFile){return f.name.endsWith('.tex')?<FileCode2 size={15} className="fi fi-tex"/>:f.name.endsWith('.bib')?<BookOpen size={15} className="fi fi-bib"/>:f.name.endsWith('/')?<FolderOpen size={15}/>:isBinary(f.name)?<ImageIcon size={15} className="fi fi-img"/>:<File size={15} className="fi"/>}
 function relative(date:number){const m=Math.max(0,Math.floor((Date.now()-date)/60000));if(m<1)return'Just now';if(m<60)return`${m} min ago`;const h=Math.floor(m/60);if(h<24)return`${h} hr ago`;const d=Math.floor(h/24);if(d<7)return`${d} days ago`;return new Date(date).toLocaleDateString('en',{month:'short',day:'numeric'})}
 function decodeBase64Utf8(value:string){try{return new TextDecoder().decode(Uint8Array.from(atob(value),c=>c.charCodeAt(0)))}catch{return ''}}
 function downloadBlob(blob:Blob,name:string){const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),3000)}
-function PdfViewer({url,zoom,page,setPage}:{url:string,zoom:number,page:number,setPage:(n:number)=>void}){const canvasRef=useRef<HTMLCanvasElement>(null),[total,setTotal]=useState(0),[err,setErr]=useState('');useEffect(()=>{let cancelled=false;(async()=>{try{const pdfjs=await import('pdfjs-dist');pdfjs.GlobalWorkerOptions.workerSrc=new URL('pdfjs-dist/build/pdf.worker.min.mjs',import.meta.url).toString();const pdf=await pdfjs.getDocument(url).promise;if(cancelled)return;setTotal(pdf.numPages);(window as any).__pdfTotal=pdf.numPages;setErr('');const pageNum=Math.min(Math.max(1,page),pdf.numPages);const p=await pdf.getPage(pageNum);const viewport=p.getViewport({scale:zoom/100});const canvas=canvasRef.current;if(!canvas)return;const ctx=canvas.getContext('2d');if(!ctx)return;canvas.width=viewport.width;canvas.height=viewport.height;await p.render({canvasContext:ctx,viewport}).promise;setPage(pageNum);}catch(e){setErr(e instanceof Error?e.message:'Unable to render PDF')}})();return()=>{cancelled=true}},[url,zoom,page]);return <div className="pdf-scroll">{err?<div className="pdf-error"><AlertCircle size={18}/><span>{err}</span></div>:<canvas ref={canvasRef}/>}</div>}
+
+function PdfViewer({url,zoom,page,onLoaded,onScale}:{url:string,zoom:Zoom,page:number,onLoaded:(n:number)=>void,onScale:(pct:number)=>void}){
+ const canvasRef=useRef<HTMLCanvasElement>(null),boxRef=useRef<HTMLDivElement>(null),docRef=useRef<{url:string,doc:any}|null>(null),taskRef=useRef<any>(null),cbRef=useRef({onLoaded,onScale});cbRef.current={onLoaded,onScale};
+ const [loading,setLoading]=useState(true),[err,setErr]=useState(''),[width,setWidth]=useState(0);
+ useEffect(()=>{const el=boxRef.current;if(!el)return;let raf=0;const ro=new ResizeObserver(()=>{cancelAnimationFrame(raf);raf=requestAnimationFrame(()=>setWidth(el.clientWidth))});ro.observe(el);return()=>{ro.disconnect();cancelAnimationFrame(raf)}},[]);
+ const render=useCallback(async(cancelled:()=>boolean)=>{
+  try{
+   setErr('');
+   const pdfjs=await import('pdfjs-dist');pdfjs.GlobalWorkerOptions.workerSrc=new URL('pdfjs-dist/build/pdf.worker.min.mjs',import.meta.url).toString();
+   if(docRef.current?.url!==url){setLoading(true);docRef.current?.doc.destroy?.();docRef.current={url,doc:await pdfjs.getDocument(url).promise}}
+   const pdf=docRef.current!.doc;if(cancelled())return;cbRef.current.onLoaded(pdf.numPages);
+   const p=await pdf.getPage(Math.min(Math.max(1,page),pdf.numPages));if(cancelled())return;
+   const base=p.getViewport({scale:1});const scale=zoom==='fit'?Math.max(.3,((boxRef.current?.clientWidth??600)-40)/base.width):zoom/100;cbRef.current.onScale(Math.round(scale*100));
+   const viewport=p.getViewport({scale});const canvas=canvasRef.current;if(!canvas)return;const ctx=canvas.getContext('2d');if(!ctx)return;
+   const dpr=window.devicePixelRatio||1;taskRef.current?.cancel();
+   canvas.width=Math.floor(viewport.width*dpr);canvas.height=Math.floor(viewport.height*dpr);canvas.style.width=`${Math.floor(viewport.width)}px`;canvas.style.height=`${Math.floor(viewport.height)}px`;
+   const task=p.render({canvasContext:ctx,viewport,transform:dpr!==1?[dpr,0,0,dpr,0,0]:undefined});taskRef.current=task;await task.promise;if(!cancelled())setLoading(false);
+  }catch(e:any){if(e?.name==='RenderingCancelledException'||cancelled())return;setLoading(false);setErr(e?.status===404||/Missing PDF|404/.test(String(e?.message))?'No compiled PDF was found. Recompile the project to generate it.':e instanceof Error?`Couldn’t display the PDF: ${e.message}`:'Couldn’t display the PDF.')}
+ },[url,zoom,page,width]);
+ useEffect(()=>{let c=false;render(()=>c);return()=>{c=true}},[render]);
+ useEffect(()=>()=>{taskRef.current?.cancel();docRef.current?.doc.destroy?.()},[]);
+ return <div className="pdf-scroll" ref={boxRef}>{err?<div className="pdf-error" role="alert"><AlertCircle size={18}/><span>{err}</span></div>:<><canvas ref={canvasRef} className={loading?'is-loading':''}/>{loading&&<div className="pane-loading overlay"><Spinner/> Rendering PDF…</div>}</>}</div>;
+}
 
 createRoot(document.getElementById('root')!).render(<React.StrictMode><App/></React.StrictMode>);

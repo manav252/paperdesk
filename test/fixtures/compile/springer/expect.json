@@ -1,0 +1,1 @@
+{"engines": ["pdflatex", "xelatex", "lualatex"], "success": true, "minPages": 2, "bibtex": true, "contains": ["Springer Nature Journal Article", "Shannon", "Knuth", "Example values"]}

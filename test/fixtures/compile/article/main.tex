@@ -1,0 +1,27 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage{amsmath,amssymb}
+\usepackage{hyperref}
+
+\title{A Plain Article}
+\author{PaperDesk Test}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\section{Introduction}
+This is a plain article used to check that each engine produces a PDF.
+
+\section{Mathematics}
+\begin{equation}
+  \int_0^1 x^2 \, dx = \frac{1}{3}
+  \label{eq:integral}
+\end{equation}
+Equation~\eqref{eq:integral} is referenced here, so a second pass is needed.
+
+\begin{itemize}
+  \item First item
+  \item Second item
+\end{itemize}
+
+\end{document}

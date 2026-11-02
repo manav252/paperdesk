@@ -1,48 +1,77 @@
-# Paperdesk Studio
+# PaperDesk
 
-An independent, Overleaf-inspired LaTeX workspace for learning and local use. Projects are kept in this browser by default; starting the optional API enables file-backed project endpoints, ZIP import/export, and isolated LaTeX compilation.
+An independent LaTeX editor with an Overleaf-style workflow: a project dashboard, then a three-pane editor (file tree, LaTeX source, PDF preview). PDFs are compiled with full TeX Live (pdfLaTeX, XeLaTeX or LuaLaTeX, with BibTeX), each time in a throwaway Docker container.
 
-## Run the editor
+## Quick start (development)
+
+Requirements: Node.js 20+ and [Docker Desktop](https://docs.docker.com/get-docker/).
 
 ```sh
 npm install
-npm run dev
+npm run dev:all
 ```
 
-Open the Vite address shown in the terminal. The dashboard and editor work without the API, with projects saved in browser local storage. To enable the server APIs in another terminal:
+`dev:all` starts everything:
+
+1. **Compile service.** It checks that Docker is running (on macOS it starts Docker Desktop if needed) and builds the `paperdesk-texlive` compiler image if it's missing. The first build downloads TeX Live, about 5 GB, and takes a while.
+2. **API** on http://localhost:3001. It restarts when `server.ts` changes.
+3. **Editor** on http://localhost:5173. The Vite dev server proxies `/api` to the API.
+
+Open http://localhost:5173. Press **Recompile** (`⌘/Ctrl+Enter`) to build the PDF.
+
+| Command | What it does |
+| --- | --- |
+| `npm run dev:all` | Compile service + API + editor (use this) |
+| `npm run dev:all -- --no-docker` | API + editor without the Docker checks |
+| `npm start` | API + editor, no Docker checks |
+| `npm run dev` / `npm run server` | Editor only / API only |
+| `npm run compiler:build` | (Re)build the compiler image |
+
+## Compiling
+
+- Choose the engine from the arrow next to **Recompile**, or in **Settings**. `latexmk` runs as many passes as the document needs, including BibTeX.
+- **Errors.** When compilation fails, the banner shows the first error with **Go to error**. **Logs** lists every error and warning with its file and line; click one to open that file at that line. Problem lines are also underlined in the editor.
+- **Isolation.** Each compile runs in a new container with no network, a read-only root filesystem, CPU, memory and process limits, and a 2-minute timeout. The container runs as your user and is removed afterwards. No TeX runs on the host.
+- **Main file.** The main document must be `main.tex` at the project root.
+
+### Compile test suite
+
+`test/fixtures/compile/` contains the reference projects:
+
+- a plain article
+- an IEEEtran paper with BibTeX
+- a Springer Nature `sn-jnl` paper with figures
+- a project with subfolders
+- a deliberately broken project
+
+This compiles every one with all three engines through the real API and checks the PDF, or the reported error location:
 
 ```sh
-npm run server
+npm run test:compile            # all fixtures
+npm run test:compile -- broken  # one fixture
 ```
 
-The server listens on port 3001. In development, configure your browser/dev proxy as needed, or use the Vite proxy by adding `server.proxy` for `/api` in `vite.config.ts`.
+It needs Docker and the compiler image.
+
+## Quality checks
+
+```sh
+npm run check   # lint (zero warnings) + typecheck + unit tests + production build
+```
 
 ## Themes and layout
 
-Choose **Light**, **Dark**, or **Auto** from the sun/moon/monitor button in the top bar (dashboard and editor), from **View** in the editor menu, or under **Settings → Appearance**. Auto follows the operating system's color preference and updates live. The choice is saved in local storage (`paperdesk-theme`) and applied before first paint.
+- **Theme.** Choose **Light**, **Dark** or **Auto** from the sun/moon/monitor button in the top bar, from **View** in the editor menu, or under **Settings → Appearance**. Auto follows the operating system and updates live. The choice is saved in the browser and applied before the page appears.
+- **Panes.** Drag the dividers to resize the file tree and PDF preview; double-click a divider to reset it. The layout buttons switch between Editor & PDF, Editor only and PDF only.
+- **Narrow screens.** The file tree becomes a drawer, and the editor and PDF are shown one at a time.
 
-In the editor, drag the dividers to resize the file tree and PDF preview (double-click resets them), and use the layout buttons to switch between Editor & PDF, Editor only, and PDF only. On narrow screens the file tree opens as a drawer and the editor and PDF are shown one at a time. `⌘/Ctrl+Enter` recompiles.
+## Storage
 
-## Enable real PDF compilation
+Projects are saved to the API (`backend/storage`, override with `PAPERDESK_DATA`) and mirrored in the browser's local storage, so the editor keeps working while the API is offline. On load, local and server copies are merged and the most recently modified copy wins. Figures and other binary files are stored as base64 in the browser and as normal files on the server.
 
-Docker must be installed and running. Build the isolated compiler image once:
-
-```sh
-docker build -t paperdesk-texlive:latest -f Dockerfile.compiler .
-```
-
-Start `npm run server`, then compile from the editor. Every compile runs in a new container with networking disabled, resource limits, a read-only root filesystem, and a temporary project mount. The container is removed after compilation. No TeX execution occurs on the host.
+Configuration is through environment variables; see `.env.example`.
 
 ## Notes
 
-- Vite + React + TypeScript; Monaco Editor and PDF.js are used in the editor.
-- The REST service uses filesystem project storage under `backend/storage` (override with `PAPERDESK_DATA`).
-- The UI-only mode persists the project list and source files in this browser's local storage.
-- Sharing, authentication, multi-user presence, and collaborative editing are not implemented. Socket.IO room hooks are provided as an integration starting point, without fake presence indicators.
-- MongoDB is not required for the local prototype; filesystem metadata is used for simpler setup.
-
-## Browser and server storage
-
-The browser-only dashboard is immediately usable and stores projects in local storage. With the API running, the editor also loads server projects and debounced source changes are written to the filesystem. The REST API supports create/list/read/update/delete projects, file operations, upload, download, compile, PDF, and logs. For a deployed setup, set `PAPERDESK_DATA` to a persistent volume and place the API behind the same origin as Vite (or configure an appropriate reverse proxy).
-
-The Docker compiler image is large and downloads TeX Live packages on first build. Engine selection is restricted to pdfLaTeX, XeLaTeX, and LuaLaTeX. Bibliography packages in the source can be run by latexmk when their tools are available in the image.
+- Vite + React + TypeScript; Monaco Editor for source and PDF.js for the preview.
+- Not implemented yet: sharing, accounts, real-time collaboration, choosing a main file other than `main.tex`.

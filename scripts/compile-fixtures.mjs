@@ -76,15 +76,24 @@ try {
         if (!body.success) problems.push(`expected success, got errors: ${body.errors.map(e => `${e.file}:${e.line} ${e.message}`).join('; ')}`);
         const pdf = Buffer.from(await (await fetch(`${API}/projects/${id}/pdf`)).arrayBuffer());
         if (pdf.subarray(0, 5).toString() !== '%PDF-') problems.push('PDF missing');
-        const doc = await getDocument({ data: new Uint8Array(pdf), verbosity: 0 }).promise;
-        const pages = doc.numPages;
-        const text = (await Promise.all(Array.from({ length: pages }, (_, i) => doc.getPage(i + 1).then(p => p.getTextContent())))).flatMap(c => c.items.map(it => it.str)).join(' ').replace(/\s+/g, ' ').toLowerCase();
-        await doc.destroy();
+        let doc = null;
+        let pages = 0;
+        let text = '';
+        try {
+          doc = await getDocument({ data: new Uint8Array(pdf), verbosity: 0 }).promise;
+          pages = doc.numPages;
+          text = (await Promise.all(Array.from({ length: pages }, (_, i) => doc.getPage(i + 1).then(p => p.getTextContent())))).flatMap(c => c.items.map(it => it.str)).join(' ').replace(/\s+/g, ' ').toLowerCase();
+        } catch (e) {
+          problems.push(`PDF text parser failed: ${e instanceof Error ? e.message : String(e)}`);
+        } finally {
+          await doc?.destroy();
+        }
         for (const needle of expect.contains ?? []) if (!text.includes(needle.toLowerCase())) problems.push(`PDF text is missing “${needle}”`);
         if (/\?\s*\]|\[\s*\?/.test(text)) problems.push('PDF has unresolved citations ([?])');
         if (expect.minPages && pages < expect.minPages) problems.push(`expected ≥${expect.minPages} pages, got ${pages}`);
-        if (expect.bibtex && !/BibTeX|bibtex/.test(body.log)) problems.push('BibTeX did not run');
-        if (expect.bibtex && body.warnings.some(w => /undefined|Citation/.test(w.message) && /cit/i.test(w.message))) problems.push('undefined citations');
+        if ((expect.bibtex || expect.bibliography === 'bibtex') && !/BibTeX|bibtex/i.test(body.log)) problems.push('BibTeX did not run');
+        if (expect.bibliography === 'biber' && !/biber/i.test(body.log)) problems.push('Biber did not run');
+        if ((expect.bibtex || expect.bibliography) && body.warnings.some(w => /undefined|Citation/.test(w.message) && /cit/i.test(w.message))) problems.push('undefined citations');
       } else {
         const e = body.errors[0];
         const want = expect.error;
@@ -95,7 +104,7 @@ try {
       }
       const secs = ((Date.now() - t) / 1000).toFixed(1).padStart(5);
       const label = `${name.padEnd(12)} ${engine.padEnd(9)} ${secs}s`;
-      if (problems.length) { failures++; console.log(`  ✗ ${label}  ${problems.join(' | ')}`); }
+      if (problems.length) { failures++; console.log(`  ✗ ${label}  ${problems.join(' | ')}`); if (expect.bibtex || expect.bibliography) console.log(body.log.slice(-5000)); }
       else console.log(`  ✓ ${label}${expect.success ? '' : `  error → ${body.errors[0].file}:${body.errors[0].line}`}`);
     }
   }

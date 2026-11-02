@@ -445,3 +445,25 @@ body.is-resizing .editor-canvas, body.is-resizing .pdf-workspace { pointer-event
   .pdf-state { display: none; }
   .toast { left: 14px; right: 14px; bottom: 14px; max-width: none; }
 }
+
+/* Project history and tracked edit review */
+.history-version { border: 1px solid var(--border); border-radius: 7px; padding: 12px; margin: 10px 0; }
+.history-version-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.history-version-head > div { display: flex; flex-direction: column; gap: 3px; }
+.history-version-head span { color: var(--text-3); font-size: 11px; }
+.side-by-side-diff { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); border: 1px solid var(--border); border-radius: 5px; overflow: auto; max-height: 42vh; }
+.diff-pane { min-width: 0; }
+.diff-pane + .diff-pane { border-left: 1px solid var(--border); }
+.diff-pane-title { position: sticky; top: 0; z-index: 1; background: var(--surface-2); color: var(--text-3); border-bottom: 1px solid var(--border); padding: 6px 9px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
+.diff-row { display: flex; min-height: 22px; font: 12px/22px var(--mono); white-space: pre; }
+.diff-row code { overflow: hidden; text-overflow: clip; padding-right: 10px; }
+.diff-line-number { width: 34px; flex: none; text-align: right; padding-right: 7px; color: var(--text-4); border-right: 1px solid var(--border); margin-right: 8px; user-select: none; }
+.diff-empty { background: var(--surface-2); }
+.diff-removed { background: var(--danger-soft); color: var(--danger-text); }
+.diff-added { background: var(--accent-soft); color: var(--accent-text); }
+.tracked-change { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 12px; border: 1px solid var(--border); border-radius: 6px; margin: 8px 0; }
+.tracked-change-copy { min-width: 0; }
+.tracked-change-copy > strong { font-size: 12px; }
+.tracked-change-copy pre { margin: 6px 0 0; display: flex; gap: 10px; white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.5 var(--mono); }
+.tracked-change-actions { display: flex; gap: 6px; flex: none; }
+@media(max-width:640px) { .tracked-change { align-items: flex-start; flex-direction: column; } .tracked-change-actions { align-self: flex-end; } }

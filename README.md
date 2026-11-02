@@ -39,7 +39,8 @@ Open http://localhost:5173. Press **Recompile** (`⌘/Ctrl+Enter`) to build the 
 `test/fixtures/compile/` contains the reference projects:
 
 - a plain article
-- an IEEEtran paper with BibTeX
+- the IEEE conference, Springer, article, report, Beamer and CV gallery starters
+- an IEEEtran paper with BibTeX and a biblatex/Biber project
 - a Springer Nature `sn-jnl` paper with figures
 - a project with subfolders
 - a deliberately broken project
@@ -51,12 +52,14 @@ npm run test:compile            # all fixtures
 npm run test:compile -- broken  # one fixture
 ```
 
-It needs Docker and the compiler image.
+It needs Docker and the compiler image. The Biber fixture verifies that `latexmk` invokes Biber for `biblatex`; the BibTeX fixtures verify the BibTeX backend.
 
 ## Quality checks
 
 ```sh
-npm run check   # lint (zero warnings) + typecheck + unit tests + production build
+npm run check        # lint, typecheck, unit tests, production build and browser e2e
+npm run test:e2e    # browser tests only
+npx playwright install chromium  # first-time browser setup
 ```
 
 ## Themes and layout

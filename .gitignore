@@ -8,3 +8,6 @@ backend/storage
 !.env.example
 .vite
 
+
+playwright-report
+test-results

@@ -56,7 +56,7 @@ async function readProject(id: string) {
   const dir = projectPath(id);
   const meta = JSON.parse(await fs.readFile(path.join(dir, 'project.json'), 'utf8'));
   const files = await walkFiles(path.join(dir, 'files'));
-  return { ...meta, files } as { id: string; name: string; modified: number; files: StoredFile[]; mainFile?: string; archived?: boolean; settings?: unknown; versions?: unknown[]; comments?: unknown[] };
+  return { ...meta, files } as { id: string; name: string; modified: number; files: StoredFile[]; mainFile?: string; archived?: boolean; settings?: unknown; versions?: unknown[]; comments?: unknown[]; changes?: unknown[] };
 }
 
 async function walkFiles(root: string, relative = ''): Promise<StoredFile[]> {
@@ -78,7 +78,7 @@ async function walkFiles(root: string, relative = ''): Promise<StoredFile[]> {
 }
 
 /** Writes the given files. With `replace`, files and folders not in the list are removed so deletes and renames stick. */
-async function writeProject(id: string, p: { name?: string; files?: StoredFile[]; mainFile?: string; archived?: boolean; settings?: unknown; versions?: unknown[]; comments?: unknown[] }, { replace = false } = {}) {
+async function writeProject(id: string, p: { name?: string; files?: StoredFile[]; mainFile?: string; archived?: boolean; settings?: unknown; versions?: unknown[]; comments?: unknown[]; changes?: unknown[] }, { replace = false } = {}) {
   const dir = projectPath(id);
   const root = path.join(dir, 'files');
   await fs.mkdir(root, { recursive: true });
@@ -100,7 +100,7 @@ async function writeProject(id: string, p: { name?: string; files?: StoredFile[]
   if (replace) await prune(root, '', keep);
   const metaPath = path.join(dir, 'project.json');
   const previous: Record<string, unknown> = await fs.readFile(metaPath, 'utf8').then(x => JSON.parse(x) as Record<string, unknown>).catch(() => ({} as Record<string, unknown>));
-  const meta = { ...previous, id, name: p.name ?? previous.name ?? 'Untitled Project', modified: Date.now(), ...Object.fromEntries(['mainFile', 'archived', 'settings', 'versions', 'comments'].filter(k => p[k as keyof typeof p] !== undefined).map(k => [k, p[k as keyof typeof p]])) };
+  const meta = { ...previous, id, name: p.name ?? previous.name ?? 'Untitled Project', modified: Date.now(), ...Object.fromEntries(['mainFile', 'archived', 'settings', 'versions', 'comments', 'changes'].filter(k => p[k as keyof typeof p] !== undefined).map(k => [k, p[k as keyof typeof p]])) };
   await fs.writeFile(metaPath, JSON.stringify(meta));
   return readProject(id);
 }
@@ -164,7 +164,7 @@ app.put('/api/projects/:id', async (req, res) => {
   try {
     const current = await readProject(req.params.id).catch(() => null);
     const files = Array.isArray(req.body.files) ? req.body.files : current?.files ?? [];
-    res.json(await writeProject(req.params.id, { name: req.body.name ?? current?.name, files, mainFile: req.body.mainFile ?? current?.mainFile, archived: req.body.archived ?? current?.archived, settings: req.body.settings ?? current?.settings, versions: req.body.versions ?? current?.versions, comments: req.body.comments ?? current?.comments }, { replace: Array.isArray(req.body.files) }));
+    res.json(await writeProject(req.params.id, { name: req.body.name ?? current?.name, files, mainFile: req.body.mainFile ?? current?.mainFile, archived: req.body.archived ?? current?.archived, settings: req.body.settings ?? current?.settings, versions: req.body.versions ?? current?.versions, comments: req.body.comments ?? current?.comments, changes: req.body.changes ?? current?.changes }, { replace: Array.isArray(req.body.files) }));
   } catch (e) { send(res, 400, e); }
 });
 
@@ -279,7 +279,7 @@ app.post('/api/projects/:id/compile', async (req, res) => {
     }
 
     const args = ['run', '--rm', '--name', container, '--network=none', '--memory=1g', '--cpus=2', '--pids-limit=256',
-      '--security-opt=no-new-privileges', '--read-only', '--tmpfs', '/tmp:rw,nosuid,size=256m',
+      '--security-opt=no-new-privileges', '--read-only', '--tmpfs', '/tmp:rw,nosuid,exec,size=256m',
       // Run as the host user so output files in the bind mount aren't owned by root on Linux hosts.
       ...(process.getuid && process.getgid ? ['--user', `${process.getuid()}:${process.getgid()}`] : []),
       '-e', 'HOME=/tmp', '-e', 'TEXMFVAR=/tmp/texmf-var', '-e', 'TEXMFCONFIG=/tmp/texmf-config',

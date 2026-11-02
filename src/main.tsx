@@ -4,9 +4,9 @@ import Editor, { type OnMount } from '@monaco-editor/react';
 import { FileText, FolderOpen, Folder, Search, Plus, MoreHorizontal, ChevronDown, ChevronRight, ChevronLeft, Settings, HelpCircle, Bell, Upload, FolderPlus, FilePlus2, Image as ImageIcon, FileCode2, File, BookOpen, Play, Download, Share2, Undo2, Redo2, Bold, Italic, Underline, List, ListOrdered, Table2, Sigma, Quote, Link2, Columns2, Maximize2, ZoomIn, ZoomOut, RefreshCw, CircleCheck, Cloud, X, Copy, Trash2, Pencil, Check, AlertCircle, FileArchive, Menu, Keyboard, Sun, Moon, Monitor, Home, ScrollText, Info, PanelLeft, Code2 } from 'lucide-react';
 import { useTheme, type ThemePref } from './theme';
 import { setupMonaco } from './monacoSetup';
+import { buildTree, decodeBase64Utf8, isBinary, relative, tabFiles, type Project, type ProjectFile, type TreeNode } from './lib/project';
 import './style.css';
 
-type ProjectFile={name:string,content:string,kind?:string}; type Project={id:string,name:string,modified:number,files:ProjectFile[],compiled?:string};
 const starter=`\\documentclass[12pt,a4paper]{article}
 
 \\usepackage[utf8]{inputenc}
@@ -75,7 +75,6 @@ const themeOptions:{value:ThemePref,label:string,hint:string,icon:ReactNode}[]=[
 ];
 const isMac=typeof navigator!=='undefined'&&/Mac|iP(hone|ad)/.test(navigator.platform);
 const mod=isMac?'⌘':'Ctrl+';
-const isBinary=(name:string)=>/\.(png|jpe?g|gif|pdf)$/i.test(name);
 const NETWORK_HELP='The compile server isn’t reachable. Start it with “npm run server” (Docker must be running).';
 
 function useMediaQuery(q:string){const [m,setM]=useState(()=>window.matchMedia(q).matches);useEffect(()=>{const mq=window.matchMedia(q);const on=()=>setM(mq.matches);mq.addEventListener('change',on);return()=>mq.removeEventListener('change',on)},[q]);return m}
@@ -98,10 +97,10 @@ function App(){
  const setSidebar=(v:boolean)=>narrow?setDrawer(v):setPref('sidebar',v);
 
  useEffect(()=>{localStorage.setItem('paperdesk-projects',JSON.stringify(projects))},[projects]);
- useEffect(()=>{try{localStorage.setItem(LAYOUT_KEY,JSON.stringify(prefs))}catch{}},[prefs]);
+ useEffect(()=>{try{localStorage.setItem(LAYOUT_KEY,JSON.stringify(prefs))}catch{/* storage unavailable: layout lasts for this visit */}},[prefs]);
  useEffect(()=>{if(!narrow)setDrawer(false)},[narrow]);
- useEffect(()=>{const sync=async()=>{try{const r=await fetch('/api/projects');if(!r.ok)return;const remote=await r.json();if(Array.isArray(remote)&&remote.length){const normalized=remote.map((p:any)=>({...p,files:(p.files??[]).map((f:any)=>({...f,content:f.encoding==='base64'&&f.name.match(/\.(png|jpe?g|pdf)$/i)?'':f.encoding==='base64'?decodeBase64Utf8(f.content):f.content}))}));setProjects(normalized);if(!normalized.some((p:Project)=>p.id===projectId))setProjectId(normalized[0].id)}else{for(const p of projects){await fetch('/api/projects',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(p)})}}}catch{}};sync()},[]);
- useEffect(()=>{const t=window.setTimeout(()=>{const save=async()=>{try{await fetch(`/api/projects/${projectId}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:project.name,files:project.files})})}catch{}};if(projectId&&project)save()},700);return()=>window.clearTimeout(t)},[projectId,project?.name,project?.files]);
+ useEffect(()=>{const sync=async()=>{try{const r=await fetch('/api/projects');if(!r.ok)return;const remote=await r.json();if(Array.isArray(remote)&&remote.length){const normalized=remote.map((p:any)=>({...p,files:(p.files??[]).map((f:any)=>({...f,content:f.encoding==='base64'&&f.name.match(/\.(png|jpe?g|pdf)$/i)?'':f.encoding==='base64'?decodeBase64Utf8(f.content):f.content}))}));setProjects(normalized);if(!normalized.some((p:Project)=>p.id===projectId))setProjectId(normalized[0].id)}else{for(const p of projects){await fetch('/api/projects',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(p)})}}}catch{/* API offline: browser storage stays the source of truth */}};sync()},[]);
+ useEffect(()=>{const t=window.setTimeout(()=>{const save=async()=>{try{await fetch(`/api/projects/${projectId}`,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:project.name,files:project.files})})}catch{/* API offline: changes are already in browser storage */}};if(projectId&&project)save()},700);return()=>window.clearTimeout(t)},[projectId,project?.name,project?.files]);
  useEffect(()=>{if(project&&!project.files.some(f=>f.name===fileName))setFileName(project.files.find(f=>!f.name.endsWith('/'))?.name??'main.tex')},[projectId,project?.files.length]);
  useEffect(()=>{window.clearTimeout(saveTimer.current);setSaveState('Saving…');saveTimer.current=window.setTimeout(()=>{setSaveState('Saved');update(p=>({...p,modified:Date.now()}))},650);return()=>window.clearTimeout(saveTimer.current)},[content,fileName]);
  useEffect(()=>{if(toast){const t=window.setTimeout(()=>setToast(null),toast.tone==='error'?6000:2800);return()=>window.clearTimeout(t)}},[toast]);
@@ -124,7 +123,7 @@ function App(){
 
  const setContent=(value:string)=>update(p=>({...p,files:p.files.map(f=>f.name===fileName?{...f,content:value}:f)}));
  const insert=(s:string)=>{const ed=editorRef.current;if(!ed){notify('Open a text file in the editor to insert LaTeX');return}ed.executeEdits('toolbar',[{range:ed.getSelection(),text:s,forceMoveMarkers:true}]);ed.focus()};
- const edAction=(id:string)=>{const ed=editorRef.current;if(!ed)return;ed.focus();ed.getAction(id)?.run()??ed.trigger('keyboard',id,null)};
+ const edAction=(id:string)=>{const ed=editorRef.current;if(!ed)return;ed.focus();const action=ed.getAction(id);if(action)action.run();else ed.trigger('keyboard',id,null)};
 
  const compile=async()=>{
   if(compiling||!project)return;
@@ -133,7 +132,7 @@ function App(){
   const started=performance.now();setCompileState({status:'running',message:'Compiling…'});
   try{
    const r=await fetch(`/api/projects/${projectId}/compile`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({files:project.files,engine,mainFile:'main.tex'})});
-   let data:any=null;try{data=await r.json()}catch{}
+   let data:any=null;try{data=await r.json()}catch{/* non-JSON body: the server is unreachable */}
    if(!r.ok){
     if(!data)throw new Error(NETWORK_HELP);
     const full=String(data.error??'Compilation failed');
@@ -222,7 +221,7 @@ function App(){
    <aside className={`file-sidebar ${sidebarOpen?'':'collapsed'} ${narrow?'drawer':''}`} aria-label="Project files">
     <div className="pane-toolbar side-head"><span className="pane-title">Files</span><span className="side-tools"><button className="icon-btn sm" title="New file" aria-label="New file" onClick={()=>addFile()}><FilePlus2 size={15}/></button><button className="icon-btn sm" title="New folder" aria-label="New folder" onClick={()=>addFile(true)}><FolderPlus size={15}/></button><button className="icon-btn sm" title="Upload files" aria-label="Upload files" onClick={()=>fileInput.current?.click()}><Upload size={14}/></button><button className="icon-btn sm" title="Hide file tree" aria-label="Hide file tree" onClick={()=>setSidebar(false)}><PanelLeft size={15}/></button></span></div>
     <div className="file-tree" role="tree">
-     <TreeLevel nodes={buildTree(project.files)} depth={0} selected={currentFile?.name??''} collapsed={collapsed} onToggle={p=>setCollapsed(c=>{const n=new Set(c);n.has(p)?n.delete(p):n.add(p);return n})} onOpen={f=>{setFileName(f.name);if(narrow)setDrawer(false);if(layout==='pdf')setPref('layout',narrow?'editor':'split')}} onRename={renameFile} onDelete={deleteFile}/>
+     <TreeLevel nodes={buildTree(project.files)} depth={0} selected={currentFile?.name??''} collapsed={collapsed} onToggle={p=>setCollapsed(c=>{const n=new Set(c);if(n.has(p))n.delete(p);else n.add(p);return n})} onOpen={f=>{setFileName(f.name);if(narrow)setDrawer(false);if(layout==='pdf')setPref('layout',narrow?'editor':'split')}} onRename={renameFile} onDelete={deleteFile}/>
     </div>
     <div className="side-bottom"><button onClick={downloadProject}><FileArchive size={15}/> Download project</button><button onClick={()=>setModal('settings')}><Settings size={15}/> Project settings</button></div>
     <input ref={fileInput} className="hidden" type="file" multiple accept=".tex,.bib,.sty,.cls,.png,.jpg,.jpeg,.pdf,.csv,.txt,.zip" onChange={e=>uploadFiles(e.target.files)}/><input ref={zipInput} className="hidden" type="file" accept=".zip" onChange={e=>uploadFiles(e.target.files)}/>
@@ -361,19 +360,10 @@ function Resizer({label,value,min,max,onChange,fromClientX,onReset,invert}:{labe
  return <div className="resizer" role="separator" aria-orientation="vertical" aria-label={label} aria-valuenow={value} aria-valuemin={min} aria-valuemax={max} tabIndex={0} title="Drag to resize · double-click to reset" onPointerDown={start} onDoubleClick={onReset} onKeyDown={e=>{if(e.key==='ArrowLeft'||e.key==='ArrowRight'){e.preventDefault();const dir=(e.key==='ArrowRight'?1:-1)*(invert?-1:1);onChange(clamp(value+dir*step))}}}/>;
 }
 
-type TreeNode={name:string,path:string,folder:boolean,children:TreeNode[],file:ProjectFile};
-function buildTree(files:ProjectFile[]):TreeNode[]{
- const root:TreeNode[]=[];
- const folder=(list:TreeNode[],name:string,path:string)=>{let n=list.find(x=>x.folder&&x.name===name);if(!n){n={name,path,folder:true,children:[],file:{name:path,content:''}};list.push(n)}return n};
- for(const f of files){const isFolder=f.name.endsWith('/');const parts=f.name.replace(/\/$/,'').split('/');let list=root,path='';
-  parts.forEach((part,i)=>{path+=part+(i<parts.length-1||isFolder?'/':'');if(i<parts.length-1||isFolder){const n=folder(list,part,path);if(i===parts.length-1)n.file=f;list=n.children}else list.push({name:part,path:f.name,folder:false,children:[],file:f})})}
- const sort=(l:TreeNode[])=>{l.sort((a,b)=>a.folder!==b.folder?(a.folder?-1:1):a.name.localeCompare(b.name));l.forEach(n=>sort(n.children));return l};
- return sort(root);
-}
 
 function TreeLevel({nodes,depth,selected,collapsed,onToggle,onOpen,onRename,onDelete}:{nodes:TreeNode[],depth:number,selected:string,collapsed:Set<string>,onToggle:(p:string)=>void,onOpen:(f:ProjectFile)=>void,onRename:(f:ProjectFile)=>void,onDelete:(f:ProjectFile)=>void}){
  return <>{nodes.map(n=>{const open=!collapsed.has(n.path);return <div key={n.path} role="treeitem" aria-expanded={n.folder?open:undefined} aria-selected={selected===n.path}>
-  <div className={`file-row ${selected===n.path?'selected':''}`} style={{paddingLeft:8+depth*14}} tabIndex={0} onClick={()=>n.folder?onToggle(n.path):onOpen(n.file)} onKeyDown={e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();n.folder?onToggle(n.path):onOpen(n.file)}}}>
+  <div className={`file-row ${selected===n.path?'selected':''}`} style={{paddingLeft:8+depth*14}} tabIndex={0} onClick={()=>n.folder?onToggle(n.path):onOpen(n.file)} onKeyDown={e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();if(n.folder)onToggle(n.path);else onOpen(n.file)}}}>
    <span className="tree-caret">{n.folder?(open?<ChevronDown size={13}/>:<ChevronRight size={13}/>):null}</span>
    {n.folder?(open?<FolderOpen size={15}/>:<Folder size={15}/>):fileIcon(n.file)}
    <span className="file-label">{n.name}</span>
@@ -383,10 +373,7 @@ function TreeLevel({nodes,depth,selected,collapsed,onToggle,onOpen,onRename,onDe
  </div>})}</>;
 }
 
-function tabFiles(files:ProjectFile[],active?:string){const list=files.filter(f=>!f.name.endsWith('/'));const tabs=list.slice(0,5);const cur=list.find(f=>f.name===active);if(cur&&!tabs.includes(cur))tabs[tabs.length-1]=cur;return tabs}
 function fileIcon(f:ProjectFile){return f.name.endsWith('.tex')?<FileCode2 size={15} className="fi fi-tex"/>:f.name.endsWith('.bib')?<BookOpen size={15} className="fi fi-bib"/>:f.name.endsWith('/')?<FolderOpen size={15}/>:isBinary(f.name)?<ImageIcon size={15} className="fi fi-img"/>:<File size={15} className="fi"/>}
-function relative(date:number){const m=Math.max(0,Math.floor((Date.now()-date)/60000));if(m<1)return'Just now';if(m<60)return`${m} min ago`;const h=Math.floor(m/60);if(h<24)return`${h} hr ago`;const d=Math.floor(h/24);if(d<7)return`${d} days ago`;return new Date(date).toLocaleDateString('en',{month:'short',day:'numeric'})}
-function decodeBase64Utf8(value:string){try{return new TextDecoder().decode(Uint8Array.from(atob(value),c=>c.charCodeAt(0)))}catch{return ''}}
 function downloadBlob(blob:Blob,name:string){const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),3000)}
 
 function PdfViewer({url,zoom,page,onLoaded,onScale}:{url:string,zoom:Zoom,page:number,onLoaded:(n:number)=>void,onScale:(pct:number)=>void}){

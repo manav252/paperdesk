@@ -8,7 +8,7 @@ The frontend is published by GitLab Pages. A GitHub Actions workflow mirrors the
 
 2. **Create a GitLab repository token.** Open **Settings** → **Access tokens** for the project. Create a project access token with the **Maintainer** role, `write_repository` scope and an expiry date. Copy it once into a password manager; do not put it in a repository file or chat.
 
-3. **Add the GitHub sync secret.** In GitHub, open `manav252/paperdesk` → **Settings** → **Secrets and variables** → **Actions**. Under **Repository secrets**, add `GITLAB_TOKEN` with the token from step 2. The sync workflow pushes only `main` to `skinrondic/paperdesk`; the destination path is fixed in the workflow, so no repository variable or Actions environment is needed.
+3. **Add the GitHub sync secret.** In GitHub, open `manav252/paperdesk` → **Settings** → **Secrets and variables** → **Actions**. Under **Repository secrets**, add `GITLAB_TOKEN` with a token that can push to `manav252/paperdesk`. The sync workflow pushes only `main` to that GitLab project; the destination path is fixed in the workflow, so no repository variable or Actions environment is needed.
 
 4. **Create isolated storage.** In Neon, create a PaperDesk database project and a production branch/database. In **Connect**, copy its pooled connection string for `DATABASE_URL`. In Cloudflare **R2 → Overview**, note the account ID. Create a private bucket named `paperdesk-files`, then create an R2 API token restricted to that bucket with object read and write permissions. Record its Access Key ID and Secret Access Key for the Render variables below. Do not enable public bucket access.
 

@@ -26,4 +26,4 @@ jobs:
             exit 1
           fi
           git -c "http.extraheader=Authorization: Basic $(printf 'oauth2:%s' "$GITLAB_TOKEN" | base64 | tr -d '\n')" \
-            push "https://gitlab.com/skinrondic/paperdesk.git" main:main
+            push "https://gitlab.com/manav252/paperdesk.git" main:main

@@ -416,8 +416,13 @@ app.post('/api/projects/:id/compile', async (req, res) => {
     compileId = id;
     if (COMPILING.has(id) || COMPILING.size >= 1) return void send(res, 429, 'A compile is already running. Try again when it finishes.');
     COMPILING.add(id);
-    const currentProject = persistence.mode === 'neon-r2' ? await readProject(id, owner) : null;
-    const files: StoredFile[] = Array.isArray(req.body.files) ? req.body.files : (currentProject ?? await readProject(id, owner)).files;
+    // A new browser-only project can reach Compile before its debounced save.
+    // Prefer the submitted source; only require a stored project when no files
+    // were included. In Neon/R2 mode, register the project so its source and
+    // artifacts remain available after the compile request completes.
+    const submittedFiles: StoredFile[] | null = Array.isArray(req.body.files) ? req.body.files : null;
+    let currentProject = persistence.mode === 'neon-r2' && !submittedFiles ? await readProject(id, owner) : null;
+    const files: StoredFile[] = submittedFiles ?? (currentProject ?? await readProject(id, owner)).files;
     validateFiles(files);
     const engine = String(req.body.engine ?? 'pdflatex');
     if (!ENGINES[engine]) return void send(res, 400, 'Unsupported compiler');
@@ -427,6 +432,17 @@ app.post('/api/projects/:id/compile', async (req, res) => {
     const stopOnFirstError = req.body.stopOnFirstError !== false;
     if (!mainFile.endsWith('.tex')) return void send(res, 400, 'Main file must be a .tex file');
     if (!files.some(f => f.name === mainFile)) return void send(res, 400, `Main file “${mainFile}” not found in the project`);
+    if (persistence.mode === 'neon-r2' && submittedFiles) {
+      currentProject = await writeProject(id, {
+        name: String(req.body.name ?? currentProject?.name ?? 'Untitled Project'),
+        files,
+        mainFile,
+        settings: req.body.settings,
+        versions: req.body.versions,
+        comments: req.body.comments,
+        changes: req.body.changes,
+      }, { replace: true }, owner);
+    }
 
     if (COMPILE_MODE === 'native') {
       tmp = nativeCompilePath(id, owner);
@@ -561,11 +577,12 @@ app.post('/api/projects/:id/synctex', async (req, res) => {
     const pdfFile = mainFile.replace(/\.tex$/i, '.pdf');
     const mode = String(req.body.mode ?? '');
     let syncCoordinates: string;
+    let sourceFile = '';
     if (mode === 'forward') {
-      const file = safeName(String(req.body.file ?? ''));
+      sourceFile = safeName(String(req.body.file ?? ''));
       const line = Number(req.body.line), column = Number(req.body.column ?? 1);
       if (!Number.isInteger(line) || line < 1 || !Number.isInteger(column) || column < 1) return void send(res, 400, 'A valid source line and column are required');
-      syncCoordinates = `${line}:${column}:${file}`;
+      syncCoordinates = `${line}:${column}`;
     } else if (mode === 'inverse') {
       const page = Number(req.body.page), x = Number(req.body.x), y = Number(req.body.y);
       if (!Number.isInteger(page) || page < 1 || !Number.isFinite(x) || !Number.isFinite(y) || Math.abs(x) > 100_000 || Math.abs(y) > 100_000) return void send(res, 400, 'A valid PDF page and position are required');
@@ -612,7 +629,7 @@ app.post('/api/projects/:id/synctex', async (req, res) => {
     await fs.access(path.join(syncRoot, pdfFile.replace(/\.pdf$/i, '.synctex.gz')));
     const sourceRoot = COMPILE_MODE === 'native' ? syncRoot : '/work';
     const args = mode === 'forward'
-      ? ['view', '-i', `${syncCoordinates}:${COMPILE_MODE === 'native' ? `${sourceRoot}/./${safeName(String(req.body.file))}` : `${sourceRoot}/${safeName(String(req.body.file))}`}`, '-o', `${sourceRoot}/${pdfFile}`]
+      ? ['view', '-i', `${syncCoordinates}:${COMPILE_MODE === 'native' ? `${sourceRoot}/./${sourceFile}` : `${sourceRoot}/${sourceFile}`}`, '-o', `${sourceRoot}/${pdfFile}`]
       : ['edit', '-o', `${syncCoordinates}:${sourceRoot}/${pdfFile}`];
     let output = '';
     try {

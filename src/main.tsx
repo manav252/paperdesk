@@ -74,7 +74,7 @@ type Toast={text:string,tone:Tone};
 type CompileState={status:'idle'|'running'|'success'|'error',message:string,entry?:LogEntry};
 type CompileResult={success:boolean|null,log:string,errors:LogEntry[],warnings:LogEntry[],durationMs:number};
 type CompilePrefs={autoCompile:boolean;stopOnFirstError:boolean;draft:boolean;timeout:number;trackChanges:boolean};
-type Health={docker:boolean,image:boolean,compilerImage:string,compilerReady?:boolean,maxCompileTimeoutMs?:number,assistant?:AssistantStatus};
+type Health={docker:boolean,image:boolean,compilerMode?:'docker'|'native',compilerImage:string,compilerReady?:boolean,maxCompileTimeoutMs?:number,assistant?:AssistantStatus};
 const SHARE_KEY='paperdesk-assistant-context';
 const readFlag=(key:string)=>{try{return localStorage.getItem(key)}catch{return null}};
 const writeFlag=(key:string,value:string)=>{try{localStorage.setItem(key,value)}catch{/* storage unavailable: lasts for this visit */}};
@@ -165,7 +165,7 @@ function App(){
   if(narrow&&layout==='editor')setPref('layout','pdf');
   setCompileState({status:'running',message:'Compiling…'});
   try{
-   const r=await fetchWithWake(apiUrl(`/api/projects/${projectId}/compile`),{method:'POST',headers:{...json,...ownerHeaders()},body:JSON.stringify({files:project.files,engine,mainFile:project.mainFile??'main.tex',timeoutMs:compilePrefs.timeout*1000,draft:compilePrefs.draft,stopOnFirstError:compilePrefs.stopOnFirstError})},()=>setCompileState({status:'running',message:'Waking up the compile server…'}));
+   const r=await fetchWithWake(apiUrl(`/api/projects/${projectId}/compile`),{method:'POST',headers:{...json,...ownerHeaders()},body:JSON.stringify({name:project.name,files:project.files,settings:project.settings,versions:project.versions,comments:project.comments,changes:project.changes,engine,mainFile:project.mainFile??'main.tex',timeoutMs:compilePrefs.timeout*1000,draft:compilePrefs.draft,stopOnFirstError:compilePrefs.stopOnFirstError})},()=>setCompileState({status:'running',message:'Waking up the compile server…'}));
    let data:any=null;try{data=await r.json()}catch{/* non-JSON body: the API is unreachable */}
    if(!data)throw new Error(NETWORK_HELP);
    setApiOnline(true);
@@ -400,7 +400,7 @@ function App(){
     </div>}
     <div className="pdf-workspace">
      {pdfUrl?<PdfViewer url={pdfUrl} zoom={zoom} page={page} syncPoint={syncPoint} onSourceJump={syncPdfToSource} onLoaded={setPageTotal} onScale={s=>{scaleRef.current=s}}/>
-     :<div className="pdf-empty"><div className="paper-placeholder"><FileText size={24}/><span>PDF</span></div><strong>Your document will appear here</strong><p>{apiOnline===false?<>The PaperDesk API isn’t running. Start everything with <code>npm run dev:all</code>.</>:health&&!health.docker?<>Docker isn’t running. Start Docker Desktop, then recompile.</>:health&&!health.image?<>The LaTeX compiler image isn’t built yet. Run <code>npm run compiler:build</code> once.</>:'Recompile to render a preview of your PDF.'}</p><button className="btn btn-primary" disabled={compiling} onClick={compile}>{compiling?<Spinner light/>:<Play size={13} fill="currentColor"/>} {compiling?'Compiling…':'Compile document'}</button></div>}
+     :<div className="pdf-empty"><div className="paper-placeholder"><FileText size={24}/><span>PDF</span></div><strong>Your document will appear here</strong><p>{apiOnline===false?<>The PaperDesk API isn’t running. Start everything with <code>npm run dev:all</code>.</>:health?.compilerMode==='native'&&health.compilerReady===false?'The server LaTeX compiler is unavailable. Try again in a moment.':health?.compilerMode!=='native'&&health&&!health.docker?<>Docker isn’t running. Start Docker Desktop, then recompile.</>:health?.compilerMode!=='native'&&health&&!health.image?<>The LaTeX compiler image isn’t built yet. Run <code>npm run compiler:build</code> once.</>:'Recompile to render a preview of your PDF.'}</p><button className="btn btn-primary" disabled={compiling} onClick={compile}>{compiling?<Spinner light/>:<Play size={13} fill="currentColor"/>} {compiling?'Compiling…':'Compile document'}</button></div>}
      {pdfUrl&&<div className="pdf-controls" role="toolbar" aria-label="PDF controls">
       <button title="Previous page" aria-label="Previous page" disabled={page<=1} onClick={()=>setPage(Math.max(1,page-1))}><ChevronLeft size={15}/></button>
       <span className="page-label"><strong>{page}</strong> / {pageTotal||'—'}</span>

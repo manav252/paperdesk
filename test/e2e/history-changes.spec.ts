@@ -8,6 +8,8 @@ const project = () => ({
 const browserErrors = new WeakMap<Page, string[]>();
 
 test.beforeEach(async ({ page }) => {
+  // Tests must not depend on the network: answer Google Fonts requests locally (the system font fallback is used).
+  await page.route(/^https:\/\/fonts\.(googleapis|gstatic)\.com\//, route => route.fulfill({ status: 200, contentType: 'text/css', body: '' }));
   const errors: string[] = [];
   browserErrors.set(page, errors);
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
@@ -18,7 +20,7 @@ test.afterEach(async ({ page }) => {
 });
 
 async function openFresh(page: Page) {
-  await page.addInitScript(value => localStorage.setItem('paperdesk-projects', JSON.stringify([value])), project());
+  await page.addInitScript(value => { localStorage.setItem('paperdesk-projects', JSON.stringify([value])); localStorage.setItem('paperdesk-tour-done', '1'); }, project());
   await page.goto('/');
   await expect(page.locator('.monaco-editor')).toBeVisible();
 }

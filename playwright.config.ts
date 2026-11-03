@@ -4,6 +4,9 @@ export default defineConfig({
   testDir: './test/e2e',
   fullyParallel: false,
   workers: 1,
+  // Generous limits: on a busy machine (e.g. iCloud syncing the project folder) single clicks can take seconds.
+  timeout: 120_000,
+  expect: { timeout: 20_000 },
   reporter: 'list',
   use: { baseURL: 'http://127.0.0.1:4173', trace: 'retain-on-failure', ...devices['Desktop Chrome'] },
   webServer: [
@@ -11,15 +14,18 @@ export default defineConfig({
       command: 'npm run server',
       url: 'http://127.0.0.1:3002/api/health',
       reuseExistingServer: false,
-      timeout: 60_000,
-      env: { ...process.env, PAPERDESK_DATA: '/tmp/paperdesk-playwright-data', PORT: '3002' },
+      timeout: 180_000,
+      // An empty key overrides any .env value, so the tests never call the real Anthropic API.
+      env: { ...process.env, PAPERDESK_DATA: '/tmp/paperdesk-playwright-data', PORT: '3002', ANTHROPIC_API_KEY: '' },
     },
     {
-      command: 'npm run dev -- --host 127.0.0.1 --port 4173 --strictPort',
+      // Test the production build: a few bundled files load reliably, unlike the hundreds of modules the dev server serves.
+      // Output and cache live in /tmp, outside the iCloud-synced project folder.
+      command: 'npx vite build --outDir /tmp/paperdesk-e2e-dist --emptyOutDir && npx vite preview --outDir /tmp/paperdesk-e2e-dist --host 127.0.0.1 --port 4173 --strictPort',
       url: 'http://127.0.0.1:4173',
       reuseExistingServer: false,
-      timeout: 60_000,
-      env: { ...process.env, PAPERDESK_API_PROXY: 'http://127.0.0.1:3002' },
+      timeout: 180_000,
+      env: { ...process.env, PAPERDESK_API_PROXY: 'http://127.0.0.1:3002', PAPERDESK_VITE_CACHE: '/tmp/paperdesk-vite-e2e' },
     },
   ],
 });

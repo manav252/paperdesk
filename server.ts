@@ -12,6 +12,10 @@ import multer from 'multer';
 import unzipper from 'unzipper';
 import archiver from 'archiver';
 import { parseLatexLog, type LogEntry } from './src/lib/latexLog';
+import { assistantConfigured, assistantModel, assistantRouter } from './server/assistant';
+
+// Local settings and secrets come from an untracked .env (see .env.example); real environment variables win.
+try { process.loadEnvFile(); } catch { /* no .env file */ }
 
 const exec = promisify(execFile);
 const app = express();
@@ -34,8 +38,12 @@ type StoredFile = { name: string; content: string; encoding?: 'base64' };
 type CompileResult = { success: boolean; log: string; errors: LogEntry[]; warnings: LogEntry[]; durationMs: number };
 const RESULTS = new Map<string, CompileResult>();
 
-app.use(express.json({ limit: '25mb' }));
+// Behind a proxy (Render), set TRUST_PROXY=1 so rate limits see the client's IP rather than the proxy's.
+if (process.env.TRUST_PROXY) app.set('trust proxy', /^\d+$/.test(process.env.TRUST_PROXY) ? Number(process.env.TRUST_PROXY) : process.env.TRUST_PROXY);
 app.use('/api', (_req, res, next) => { res.setHeader('Cache-Control', 'no-store'); next(); });
+// The assistant parses its own, much smaller, request bodies.
+app.use(assistantRouter());
+app.use(express.json({ limit: '25mb' }));
 
 const safeName = (name: string) => {
   const normalized = path.posix.normalize(name.replaceAll('\\', '/'));
@@ -78,7 +86,17 @@ async function walkFiles(root: string, relative = ''): Promise<StoredFile[]> {
 }
 
 /** Writes the given files. With `replace`, files and folders not in the list are removed so deletes and renames stick. */
-async function writeProject(id: string, p: { name?: string; files?: StoredFile[]; mainFile?: string; archived?: boolean; settings?: unknown; versions?: unknown[]; comments?: unknown[]; changes?: unknown[] }, { replace = false } = {}) {
+type ProjectUpdate = { name?: string; files?: StoredFile[]; mainFile?: string; archived?: boolean; settings?: unknown; versions?: unknown[]; comments?: unknown[]; changes?: unknown[] };
+/** Writes to one project run one at a time: overlapping saves (initial sync and autosave) used to read a half-written project.json. */
+const projectLocks = new Map<string, Promise<unknown>>();
+function writeProject(id: string, p: ProjectUpdate, options: { replace?: boolean } = {}) {
+  const run = (projectLocks.get(id) ?? Promise.resolve()).catch(() => undefined).then(() => writeProjectNow(id, p, options));
+  projectLocks.set(id, run);
+  run.finally(() => { if (projectLocks.get(id) === run) projectLocks.delete(id); }).catch(() => undefined);
+  return run;
+}
+
+async function writeProjectNow(id: string, p: ProjectUpdate, { replace = false } = {}) {
   const dir = projectPath(id);
   const root = path.join(dir, 'files');
   await fs.mkdir(root, { recursive: true });
@@ -101,7 +119,10 @@ async function writeProject(id: string, p: { name?: string; files?: StoredFile[]
   const metaPath = path.join(dir, 'project.json');
   const previous: Record<string, unknown> = await fs.readFile(metaPath, 'utf8').then(x => JSON.parse(x) as Record<string, unknown>).catch(() => ({} as Record<string, unknown>));
   const meta = { ...previous, id, name: p.name ?? previous.name ?? 'Untitled Project', modified: Date.now(), ...Object.fromEntries(['mainFile', 'archived', 'settings', 'versions', 'comments', 'changes'].filter(k => p[k as keyof typeof p] !== undefined).map(k => [k, p[k as keyof typeof p]])) };
-  await fs.writeFile(metaPath, JSON.stringify(meta));
+  // Write-then-rename so readers never see a partial file.
+  const tmp = `${metaPath}.${process.pid}.${crypto.randomUUID()}.tmp`;
+  await fs.writeFile(tmp, JSON.stringify(meta));
+  await fs.rename(tmp, metaPath);
   return readProject(id);
 }
 
@@ -133,7 +154,7 @@ async function dockerStatus() {
 
 app.get('/api/health', async (_req, res) => {
   const status = await dockerStatus();
-  res.json({ ok: true, ...status, compilerImage: IMAGE });
+  res.json({ ok: true, ...status, compilerImage: IMAGE, assistant: { configured: assistantConfigured(), model: assistantModel() } });
 });
 
 app.get('/api/projects', async (_req, res) => {
@@ -353,5 +374,11 @@ io.on('connection', socket => {
 });
 
 app.use((_req, res) => send(res, 404, 'Not found'));
+// Body-parser failures (too large, malformed JSON) as JSON instead of Express's HTML error page.
+app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  const status = Number(err?.status ?? err?.statusCode) || 500;
+  if (status >= 500) console.error(err);
+  send(res, status, status === 413 ? 'The request is too large.' : status === 400 ? 'The request body isn’t valid JSON.' : 'Internal server error');
+});
 
 http.listen(PORT, () => console.log(`PaperDesk API listening at http://localhost:${PORT}`));

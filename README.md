@@ -54,6 +54,23 @@ npm run test:compile -- broken  # one fixture
 
 It needs Docker and the compiler image. The Biber fixture verifies that `latexmk` invokes Biber for `biblatex`; the BibTeX fixtures verify the BibTeX backend.
 
+## Assistant
+
+The **Assistant** panel (top bar, or the **?** button) is a LaTeX tutor for beginners. It runs on the API server, which calls the Anthropic API.
+
+1. Copy `.env.example` to `.env` and set `ANTHROPIC_API_KEY`. The key stays on the server; it is never sent to the browser.
+2. Restart the API (`npm run dev:all`).
+
+Without a key, the panel shows "Assistant not configured" and everything else keeps working.
+
+- **Asking.** Type a question, or use a quick prompt: insert table, insert figure, add citation, write equation, fix my compile errors. Answers stream in as they're written.
+- **Context.** With **Share editor context** on, each question includes the open file, cursor position, selected text and the last compile log; the panel lists exactly what is sent. Turn it off to send only the question.
+- **Explain this error.** Each error in **Logs** has this button. It sends the error, the log and the file it points to, and the answer explains the error in plain language and suggests a fix.
+- **Changes need a click.** **Insert at cursor** (on every code block) and **Apply fix…** (which shows a before/after diff first) are the only ways an answer changes your project. A fix is refused if the lines changed after the assistant read them, and Undo reverts it.
+- **Limits.** Requests are limited per IP (`ASSISTANT_RATE_LIMIT` per hour) and in size (`ASSISTANT_MAX_REQUEST_KB`). The model is `ASSISTANT_MODEL` (default `claude-haiku-5-5`).
+
+A short **tour** (file tree → editor → Recompile → PDF → Logs → Assistant) runs the first time you open the editor. Skip it at any time, and reopen it from **Help → Take the tour** or the **?** button.
+
 ## Quality checks
 
 ```sh
@@ -76,5 +93,5 @@ Configuration is through environment variables; see `.env.example`.
 
 ## Notes
 
-- Vite + React + TypeScript; Monaco Editor for source and PDF.js for the preview.
+- Vite + React + TypeScript; Monaco Editor (bundled, no CDN) for source and PDF.js for the preview.
 - Not implemented yet: sharing, accounts, real-time collaboration, choosing a main file other than `main.tex`.

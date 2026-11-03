@@ -18,16 +18,12 @@ jobs:
       - name: Push main to GitLab
         env:
           GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
-          GITLAB_PROJECT_PATH: ${{ vars.GITLAB_PROJECT_PATH }}
         shell: bash
         run: |
           set +x
-          if [[ -z "$GITLAB_TOKEN" || -z "$GITLAB_PROJECT_PATH" ]]; then
-            echo "Set the GITLAB_TOKEN secret and GITLAB_PROJECT_PATH repository variable."
+          if [[ -z "$GITLAB_TOKEN" ]]; then
+            echo "Set the GITLAB_TOKEN repository secret."
             exit 1
           fi
-          case "$GITLAB_PROJECT_PATH" in
-            *[!A-Za-z0-9_.\/-]*|/*|*/|*..*) echo "GITLAB_PROJECT_PATH is invalid."; exit 1 ;;
-          esac
           git -c "http.extraheader=Authorization: Basic $(printf 'oauth2:%s' "$GITLAB_TOKEN" | base64 | tr -d '\n')" \
-            push "https://gitlab.com/${GITLAB_PROJECT_PATH}.git" main:main
+            push "https://gitlab.com/skinrondic/paperdesk.git" main:main

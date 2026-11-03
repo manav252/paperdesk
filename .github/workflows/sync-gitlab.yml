@@ -27,7 +27,4 @@ jobs:
           fi
           gitlab_url="https://gitlab.com/manav252/paperdesk.git"
           auth_header="Authorization: Basic $(printf 'oauth2:%s' "$GITLAB_TOKEN" | base64 | tr -d '\n')"
-          git -c "http.extraheader=$auth_header" fetch --no-tags "$gitlab_url" refs/heads/main:refs/remotes/gitlab/main
-          gitlab_main=$(git rev-parse refs/remotes/gitlab/main)
-          # GitHub is the source of truth; the lease protects concurrent GitLab updates.
-          git -c "http.extraheader=$auth_header" push --force-with-lease="refs/heads/main:$gitlab_main" "$gitlab_url" main:main
+          git -c "http.extraheader=$auth_header" push "$gitlab_url" main:main

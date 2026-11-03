@@ -16,11 +16,13 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:compile": "node scripts/compile-fixtures.mjs",
+    "test:compile:api": "node scripts/test-api-image.mjs",
     "check": "npm run lint && npm run typecheck && npm run test && npm run build && npm run test:e2e",
     "test:e2e": "node scripts/run-e2e.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^1.4.0",
+    "@aws-sdk/client-s3": "^3.1161.0",
     "@monaco-editor/react": "^4.7.0",
     "archiver": "^7.0.1",
     "express": "^5.1.0",
@@ -28,10 +30,12 @@
     "monaco-editor": "^0.52.2",
     "multer": "^2.5.0",
     "pdfjs-dist": "^4.10.38",
+    "pg": "^8.23.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "socket.io": "^4.8.1",
     "socket.io-client": "^4.8.1",
+    "tsx": "^4.19.2",
     "unzipper": "^0.12.3"
   },
   "devDependencies": {
@@ -40,6 +44,7 @@
     "@types/express": "^5.0.0",
     "@types/multer": "^1.4.12",
     "@types/node": "^22.10.0",
+    "@types/pg": "^8.23.1",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.4",
@@ -50,7 +55,6 @@
     "globals": "^15.15.0",
     "postcss": "^8.4.49",
     "tailwindcss": "^3.4.16",
-    "tsx": "^4.19.2",
     "typescript": "~5.6.2",
     "typescript-eslint": "^8.72.1",
     "vite": "^6.0.5",

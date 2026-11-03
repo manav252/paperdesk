@@ -1,6 +1,7 @@
 import { defineConfig, devices } from '@playwright/test';
 
 const externalBaseUrl = process.env.E2E_BASE_URL;
+if (externalBaseUrl && !process.env.E2E_API_URL) throw new Error('Set E2E_API_URL when testing an external frontend.');
 const matrix = [
   { name: 'desktop-light', viewport: { width: 1440, height: 900 }, colorScheme: 'light' as const },
   { name: 'desktop-dark', viewport: { width: 1440, height: 900 }, colorScheme: 'dark' as const },
@@ -24,7 +25,7 @@ export default defineConfig({
       url: 'http://127.0.0.1:3002/api/health',
       reuseExistingServer: false,
       timeout: 180_000,
-      // An empty key overrides any .env value, so the tests never call the real Anthropic API.
+      // An empty key overrides any .env value, so the tests never call the external assistant service.
       env: { ...process.env, TMPDIR: '/private/tmp', PAPERDESK_DATA: '/tmp/paperdesk-playwright-data', PORT: '3002', ANTHROPIC_API_KEY: '' },
     },
     {

@@ -56,9 +56,9 @@ It needs Docker and the compiler image. The Biber fixture verifies that `latexmk
 
 ## Assistant
 
-The **Assistant** panel (top bar, or the **?** button) is a LaTeX tutor for beginners. It runs on the API server, which calls the Anthropic API.
+The **Assistant** panel (top bar, or the **?** button) is a LaTeX tutor for beginners. Requests stream through the API server; its service key stays server-side.
 
-1. Copy `.env.example` to `.env` and set `ANTHROPIC_API_KEY`. The key stays on the server; it is never sent to the browser.
+1. Copy `.env.example` to `.env` and set the server-side assistant key. It is never sent to the browser.
 2. Restart the API (`npm run dev:all`).
 
 Without a key, the panel shows "Assistant not configured" and everything else keeps working.
@@ -67,7 +67,7 @@ Without a key, the panel shows "Assistant not configured" and everything else ke
 - **Context.** With **Share editor context** on, each question includes the open file, cursor position, selected text and the last compile log; the panel lists exactly what is sent. Turn it off to send only the question.
 - **Explain this error.** Each error in **Logs** has this button. It sends the error, the log and the file it points to, and the answer explains the error in plain language and suggests a fix.
 - **Changes need a click.** **Insert at cursor** (on every code block) and **Apply fix…** (which shows a before/after diff first) are the only ways an answer changes your project. A fix is refused if the lines changed after the assistant read them, and Undo reverts it.
-- **Limits.** Requests are limited per IP (`ASSISTANT_RATE_LIMIT` per hour) and in size (`ASSISTANT_MAX_REQUEST_KB`). The model is `ASSISTANT_MODEL` (default `claude-haiku-5-5`).
+- **Limits.** Requests are limited per IP (`ASSISTANT_RATE_LIMIT` per hour) and in size (`ASSISTANT_MAX_REQUEST_KB`). The model can be configured on the API server.
 
 A short **tour** (file tree → editor → Recompile → PDF → Logs → Assistant) runs the first time you open the editor. Skip it at any time, and reopen it from **Help → Take the tour** or the **?** button.
 
@@ -90,6 +90,10 @@ npx playwright install chromium  # first-time browser setup
 Projects are saved to the API (`backend/storage`, override with `PAPERDESK_DATA`) and mirrored in the browser's local storage, so the editor keeps working while the API is offline. On load, local and server copies are merged and the most recently modified copy wins. Figures and other binary files are stored as base64 in the browser and as normal files on the server.
 
 Configuration is through environment variables; see `.env.example`.
+
+## Deployment
+
+Production setup uses GitLab Pages for the frontend and Render, Neon and Cloudflare R2 for the API and storage. Follow the manual dashboard steps in [`docs/DEPLOY.md`](docs/DEPLOY.md). Production workspaces are scoped to a random key stored in the browser; there are no accounts or workspace recovery yet.
 
 ## Notes
 

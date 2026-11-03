@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { AlertCircle, ArrowUp, Check, Copy, CornerDownLeft, FileDiff, MessageSquarePlus, Sigma, Sparkles, Square, Table2, Image as ImageIcon, Quote, Wrench, X } from 'lucide-react';
 import { findFix, inlineTokens, parseAnswer, readEvents, recentMessages, type ChatMessage, type LineFix } from './lib/assistant';
 import type { LogEntry } from './lib/latexLog';
+import { apiUrl, ownerHeaders } from './lib/api';
 
 export type AssistantContext = Record<string, unknown>;
 export type AssistantStatus = { configured: boolean; model: string } | null;
@@ -33,8 +34,8 @@ export function useAssistant(onUnconfigured: () => void) {
     abort.current = controller;
     let answer = '';
     try {
-      const res = await fetch('/api/assistant', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: controller.signal,
+      const res = await fetch(apiUrl('/api/assistant'), {
+        method: 'POST', headers: { 'Content-Type': 'application/json', ...ownerHeaders() }, signal: controller.signal,
         body: JSON.stringify({ mode: opts.mode ?? 'chat', messages: recentMessages(history.map(({ role, content }) => ({ role, content }))), context: opts.context }),
       });
       if (!res.ok || !res.body) {

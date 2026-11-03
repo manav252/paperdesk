@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { isolateProjects } from './isolate-projects';
+import { cleanExternalProjects } from './external-api';
 
 const project = () => ({
   id: 'p1', name: 'E2E Change Review', modified: Date.now(), mainFile: 'main.tex',
@@ -17,7 +18,8 @@ test.beforeEach(async ({ page, request }) => {
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
   page.on('pageerror', error => errors.push(error.message));
 });
-test.afterEach(async ({ page }) => {
+test.afterEach(async ({ page, request }) => {
+  await cleanExternalProjects(page, request);
   expect(browserErrors.get(page)).toEqual([]);
 });
 

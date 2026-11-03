@@ -12,6 +12,7 @@ import { templateStarters } from './lib/templates';
 import { applyFix, clipSelection, fixStillApplies, logContext, numberedFile, type LineFix } from './lib/assistant';
 import { AssistantPanel, ExplainButton, QUICK_PROMPTS, useAssistant, type AssistantStatus } from './Assistant';
 import { Tour, TOUR_KEY, type TourStep } from './Tour';
+import { apiUrl, fetchWithWake, ownerHeaders, projectOwnerId } from './lib/api';
 import './style.css';
 
 const starter=`\\documentclass[12pt,a4paper]{article}
@@ -72,7 +73,8 @@ type Tone='info'|'success'|'error';
 type Toast={text:string,tone:Tone};
 type CompileState={status:'idle'|'running'|'success'|'error',message:string,entry?:LogEntry};
 type CompileResult={success:boolean|null,log:string,errors:LogEntry[],warnings:LogEntry[],durationMs:number};
-type Health={docker:boolean,image:boolean,compilerImage:string,assistant?:AssistantStatus};
+type CompilePrefs={autoCompile:boolean;stopOnFirstError:boolean;draft:boolean;timeout:number;trackChanges:boolean};
+type Health={docker:boolean,image:boolean,compilerImage:string,compilerReady?:boolean,maxCompileTimeoutMs?:number,assistant?:AssistantStatus};
 const SHARE_KEY='paperdesk-assistant-context';
 const readFlag=(key:string)=>{try{return localStorage.getItem(key)}catch{return null}};
 const writeFlag=(key:string,value:string)=>{try{localStorage.setItem(key,value)}catch{/* storage unavailable: lasts for this visit */}};
@@ -89,6 +91,7 @@ const isMac=typeof navigator!=='undefined'&&/Mac|iP(hone|ad)/.test(navigator.pla
 const mod=isMac?'⌘':'Ctrl+';
 const NETWORK_HELP='The PaperDesk API isn’t reachable. Start everything with “npm run dev:all”.';
 const json={'Content-Type':'application/json'};
+const apiFetch=(input:RequestInfo|URL,init?:RequestInit)=>fetch(typeof input==='string'&&input.startsWith('/api/')?apiUrl(input):input,{...init,headers:{...ownerHeaders(),...(init?.headers??{})}});
 
 // Monaco is bundled (monacoLocal.ts) but split into its own chunk; start loading it straight away.
 const monacoLoad=import('./monacoLocal');
@@ -98,7 +101,7 @@ function useMediaQuery(q:string){const [m,setM]=useState(()=>window.matchMedia(q
 
 function App(){
  const theme=useTheme();
- const [projects,setProjects]=useState<Project[]>(initial),[projectId,setProjectId]=useState('p1'),[fileName,setFileName]=useState('main.tex'),[activeTab,setActiveTab]=useState('editor'),[compile_,setCompileState]=useState<CompileState>({status:'idle',message:''}),[pdfUrl,setPdfUrl]=useState(''),[page,setPage]=useState(1),[pageTotal,setPageTotal]=useState(0),[zoom,setZoom]=useState<Zoom>('fit'),[saveState,setSaveState]=useState('Saved'),[query,setQuery]=useState(''),[sortBy,setSortBy]=useState<'modified'|'name'>('modified'),[openMenu,setOpenMenu]=useState(''),[modal,setModal]=useState(''),[dialog,setDialog]=useState<Dialog|null>(null),[toast,setToast]=useState<Toast|null>(null),[engine,setEngine]=useState('pdflatex'),[compilePrefs,setCompilePrefs]=useState(()=>{try{return{autoCompile:false,stopOnFirstError:true,draft:false,timeout:120,trackChanges:false,...JSON.parse(localStorage.getItem('paperdesk-compile-prefs')??'{}')}}catch{return{autoCompile:false,stopOnFirstError:true,draft:false,timeout:120,trackChanges:false}}}),[rawLogs,setRawLogs]=useState(false),[cursor,setCursor]=useState({line:1,col:1}),[result,setResult]=useState<CompileResult|null>(null),[logState,setLogState]=useState<{loading:boolean,error?:string}>({loading:false}),[apiOnline,setApiOnline]=useState<boolean|null>(null),[health,setHealth]=useState<Health|null>(null),[editorReady,setEditorReady]=useState(false),[collapsed,setCollapsed]=useState<Set<string>>(new Set()),[prefs,setPrefs]=useState<LayoutPrefs>(readLayout),[drawer,setDrawer]=useState(false),[selectionChars,setSelectionChars]=useState(0),[shareContext,setShareContext]=useState(()=>readFlag(SHARE_KEY)!=='off'),[fixReview,setFixReview]=useState<LineFix|null>(null),[tour,setTour]=useState(false),[narrowAssistant,setNarrowAssistant]=useState(false);
+ const [projects,setProjects]=useState<Project[]>(initial),[projectId,setProjectId]=useState('p1'),[fileName,setFileName]=useState('main.tex'),[activeTab,setActiveTab]=useState('editor'),[compile_,setCompileState]=useState<CompileState>({status:'idle',message:''}),[pdfUrl,setPdfUrl]=useState(''),[page,setPage]=useState(1),[pageTotal,setPageTotal]=useState(0),[zoom,setZoom]=useState<Zoom>('fit'),[saveState,setSaveState]=useState('Saved'),[query,setQuery]=useState(''),[sortBy,setSortBy]=useState<'modified'|'name'>('modified'),[openMenu,setOpenMenu]=useState(''),[modal,setModal]=useState(''),[dialog,setDialog]=useState<Dialog|null>(null),[toast,setToast]=useState<Toast|null>(null),[engine,setEngine]=useState('pdflatex'),[compilePrefs,setCompilePrefs]=useState<CompilePrefs>(()=>{try{return{autoCompile:false,stopOnFirstError:true,draft:false,timeout:120,trackChanges:false,...JSON.parse(localStorage.getItem('paperdesk-compile-prefs')??'{}')}}catch{return{autoCompile:false,stopOnFirstError:true,draft:false,timeout:120,trackChanges:false}}}),[rawLogs,setRawLogs]=useState(false),[cursor,setCursor]=useState({line:1,col:1}),[result,setResult]=useState<CompileResult|null>(null),[logState,setLogState]=useState<{loading:boolean,error?:string}>({loading:false}),[apiOnline,setApiOnline]=useState<boolean|null>(null),[health,setHealth]=useState<Health|null>(null),[editorReady,setEditorReady]=useState(false),[collapsed,setCollapsed]=useState<Set<string>>(new Set()),[prefs,setPrefs]=useState<LayoutPrefs>(readLayout),[drawer,setDrawer]=useState(false),[selectionChars,setSelectionChars]=useState(0),[shareContext,setShareContext]=useState(()=>readFlag(SHARE_KEY)!=='off'),[fixReview,setFixReview]=useState<LineFix|null>(null),[tour,setTour]=useState(false),[narrowAssistant,setNarrowAssistant]=useState(false);
  const [syncPoint,setSyncPoint]=useState<{page:number,x:number,y:number}|null>(null);
  const editorRef=useRef<any>(null),fileInput=useRef<HTMLInputElement>(null),zipInput=useRef<HTMLInputElement>(null),saveTimer=useRef<number>(),workRef=useRef<HTMLDivElement>(null),searchRef=useRef<HTMLInputElement>(null),compileRef=useRef<()=>void>(()=>{}),scaleRef=useRef(100),monacoRef=useRef<any>(null),pendingJump=useRef<{file:string,line:number}|null>(null),lastEdit=useRef({file:'',content:''}),storageWarned=useRef(false);
  const monacoState=useMonacoLoad();
@@ -111,6 +114,7 @@ function App(){
  const notify=(text:string,tone:Tone='info')=>setToast({text,tone});
  const setPref=<K extends keyof LayoutPrefs>(k:K,v:LayoutPrefs[K])=>setPrefs(p=>({...p,[k]:v}));
  const compiling=compile_.status==='running';
+ const maxTimeoutSeconds=Math.max(5,Math.floor((health?.maxCompileTimeoutMs??600_000)/1000));
  // On narrow screens there's only room for one pane: "split" shows the editor and the switcher flips to PDF.
  const layout:Layout=narrow&&prefs.layout==='split'?'editor':prefs.layout;
  const showEditor=layout!=='pdf',showPdf=layout!=='editor';
@@ -124,10 +128,11 @@ function App(){
  useEffect(()=>{try{localStorage.setItem('paperdesk-projects',JSON.stringify(projects))}catch{if(!storageWarned.current){storageWarned.current=true;notify(apiOnline?'Browser storage is full. Your work is saved on the server, but not offline in this browser.':'Browser storage is full and the API is offline: recent changes may not be saved. Start the API with “npm run dev:all”.','error')}}},[projects]);
  useEffect(()=>{try{localStorage.setItem(LAYOUT_KEY,JSON.stringify(prefs))}catch{/* storage unavailable: layout lasts for this visit */}},[prefs]);
  useEffect(()=>{try{localStorage.setItem('paperdesk-compile-prefs',JSON.stringify(compilePrefs))}catch{/* settings last for this visit */}},[compilePrefs]);
+ useEffect(()=>{const maximum=Math.max(5,Math.floor((health?.maxCompileTimeoutMs??600_000)/1000));if(compilePrefs.timeout>maximum)setCompilePrefs(p=>({...p,timeout:maximum}))},[health?.maxCompileTimeoutMs]);
  useEffect(()=>{if(!narrow){setDrawer(false);setNarrowAssistant(false)}},[narrow]);
  useEffect(()=>writeFlag(SHARE_KEY,shareContext?'on':'off'),[shareContext]);
- useEffect(()=>{const sync=async()=>{try{const r=await fetch('/api/projects');if(!r.ok)throw new Error();const remote=await r.json();if(!Array.isArray(remote))throw new Error();setApiOnline(true);const {merged,upload}=mergeProjects(projects,remote.map((p:Project)=>normalizeProject(p,'server')));setProjects(merged);if(!merged.some(p=>p.id===projectId)&&merged[0])setProjectId(merged[0].id);for(const p of upload)await fetch(`/api/projects/${p.id}`,{method:'PUT',headers:json,body:JSON.stringify({name:p.name,files:p.files,mainFile:p.mainFile,archived:p.archived,settings:p.settings,versions:p.versions,comments:p.comments,changes:p.changes})})}catch{setApiOnline(false)}};sync();fetch('/api/health').then(r=>r.ok?r.json():null).then(h=>setHealth(h)).catch(()=>setHealth(null))},[]);
- useEffect(()=>{if(!projectId||!project)return;const t=window.setTimeout(async()=>{try{const r=await fetch(`/api/projects/${projectId}`,{method:'PUT',headers:json,body:JSON.stringify({name:project.name,files:project.files,mainFile:project.mainFile,archived:project.archived,settings:project.settings,versions:project.versions,comments:project.comments,changes:project.changes})});setApiOnline(r.ok)}catch{setApiOnline(false)}},700);return()=>window.clearTimeout(t)},[projectId,project?.name,project?.files,project?.mainFile,project?.archived,project?.settings,project?.versions,project?.comments,project?.changes]);
+ useEffect(()=>{const sync=async()=>{try{const r=await apiFetch('/api/projects');if(!r.ok)throw new Error();const remote=await r.json();if(!Array.isArray(remote))throw new Error();setApiOnline(true);const {merged,upload}=mergeProjects(projects,remote.map((p:Project)=>normalizeProject(p,'server')));setProjects(merged);if(!merged.some(p=>p.id===projectId)&&merged[0])setProjectId(merged[0].id);for(const p of upload)await apiFetch(`/api/projects/${p.id}`,{method:'PUT',headers:json,body:JSON.stringify({name:p.name,files:p.files,mainFile:p.mainFile,archived:p.archived,settings:p.settings,versions:p.versions,comments:p.comments,changes:p.changes})})}catch{setApiOnline(false)}};sync();fetch(apiUrl('/api/health')).then(r=>r.ok?r.json():null).then(h=>setHealth(h)).catch(()=>setHealth(null))},[]);
+ useEffect(()=>{if(!projectId||!project)return;const t=window.setTimeout(async()=>{try{const r=await apiFetch(`/api/projects/${projectId}`,{method:'PUT',headers:json,body:JSON.stringify({name:project.name,files:project.files,mainFile:project.mainFile,archived:project.archived,settings:project.settings,versions:project.versions,comments:project.comments,changes:project.changes})});setApiOnline(r.ok)}catch{setApiOnline(false)}},700);return()=>window.clearTimeout(t)},[projectId,project?.name,project?.files,project?.mainFile,project?.archived,project?.settings,project?.versions,project?.comments,project?.changes]);
  useEffect(()=>{if(project&&!project.files.some(f=>f.name===fileName))setFileName(defaultFile(project.files))},[projectId,project?.files.length]);
  // Only real edits count as changes; opening or switching files must not bump “Last modified”.
  useEffect(()=>{const name=currentFile?.name??'';const prev=lastEdit.current;lastEdit.current={file:name,content};if(prev.file!==name)return;window.clearTimeout(saveTimer.current);setSaveState('Saving…');saveTimer.current=window.setTimeout(()=>{setSaveState('Saved');update(p=>({...p,modified:Date.now()}))},650);return()=>window.clearTimeout(saveTimer.current)},[content,currentFile?.name]);
@@ -160,14 +165,14 @@ function App(){
   if(narrow&&layout==='editor')setPref('layout','pdf');
   setCompileState({status:'running',message:'Compiling…'});
   try{
-   const r=await fetch(`/api/projects/${projectId}/compile`,{method:'POST',headers:json,body:JSON.stringify({files:project.files,engine,mainFile:project.mainFile??'main.tex',timeoutMs:compilePrefs.timeout*1000,draft:compilePrefs.draft,stopOnFirstError:compilePrefs.stopOnFirstError})});
+   const r=await fetchWithWake(apiUrl(`/api/projects/${projectId}/compile`),{method:'POST',headers:{...json,...ownerHeaders()},body:JSON.stringify({files:project.files,engine,mainFile:project.mainFile??'main.tex',timeoutMs:compilePrefs.timeout*1000,draft:compilePrefs.draft,stopOnFirstError:compilePrefs.stopOnFirstError})},()=>setCompileState({status:'running',message:'Waking up the compile server…'}));
    let data:any=null;try{data=await r.json()}catch{/* non-JSON body: the API is unreachable */}
    if(!data)throw new Error(NETWORK_HELP);
    setApiOnline(true);
-   if(!r.ok){setCompileState({status:'error',message:String(data.error??'Compilation failed')});if(r.status===503)fetch('/api/health').then(h=>h.json()).then(setHealth).catch(()=>undefined);return}
+   if(!r.ok){setCompileState({status:'error',message:String(data.error??'Compilation failed')});if(r.status===503)fetch(apiUrl('/api/health')).then(h=>h.json()).then(setHealth).catch(()=>undefined);return}
    const res=data as CompileResult;setResult(res);
    if(res.success){
-    setPdfUrl(`/api/projects/${projectId}/pdf?t=${Date.now()}`);
+    setPdfUrl(`${apiUrl(`/api/projects/${projectId}/pdf?t=${Date.now()}`)}&owner=${encodeURIComponent(projectOwnerId())}`);
     const w=res.warnings.length;
     setCompileState({status:'success',message:`Compiled in ${(res.durationMs/1000).toFixed(1)}s${w?` · ${w} warning${w>1?'s':''}`:''}`});
    }else{
@@ -185,7 +190,7 @@ function App(){
  const newProject=(name='Untitled Project')=>{const p={id:crypto.randomUUID(),name,modified:Date.now(),files:[{name:'main.tex',content:starter}]};setProjects(x=>[p,...x]);setProjectId(p.id);setFileName('main.tex');setPdfUrl('');setResult(null);setCompileState({status:'idle',message:''});setActiveTab('editor')};
  const promptNewProject=()=>askName('Create a new project','Project name','','Create project',v=>{if(!v.trim())return 'Enter a project name';newProject(v.trim())},'e.g. My research paper');
  const renameProject=(p:Project)=>{setOpenMenu('');askName('Rename project','Project name',p.name,'Save changes',v=>{if(!v.trim())return 'Enter a project name';setProjects(x=>x.map(q=>q.id===p.id?{...q,name:v.trim()}:q))})};
- const deleteProject=(p:Project)=>{setOpenMenu('');setDialog({title:'Delete project?',message:<>“{p.name}” and its {p.files.length} files will be deleted{p.id===projectId?' and you’ll return to your projects':''}. This can’t be undone.</>,confirmLabel:'Delete project',danger:true,onConfirm:()=>{const next=projects.filter(x=>x.id!==p.id);setProjects(next);fetch(`/api/projects/${p.id}`,{method:'DELETE'}).catch(()=>undefined);if(p.id===projectId){setProjectId(next[0]?.id??'');setActiveTab('dashboard')}notify('Project deleted')}})};
+ const deleteProject=(p:Project)=>{setOpenMenu('');setDialog({title:'Delete project?',message:<>“{p.name}” and its {p.files.length} files will be deleted{p.id===projectId?' and you’ll return to your projects':''}. This can’t be undone.</>,confirmLabel:'Delete project',danger:true,onConfirm:()=>{const next=projects.filter(x=>x.id!==p.id);setProjects(next);apiFetch(`/api/projects/${p.id}`,{method:'DELETE'}).catch(()=>undefined);if(p.id===projectId){setProjectId(next[0]?.id??'');setActiveTab('dashboard')}notify('Project deleted')}})};
  const duplicate=(p:Project)=>{const cp={...p,id:crypto.randomUUID(),name:p.name+' copy',modified:Date.now(),files:p.files.map(f=>({...f}))};setProjects(x=>[cp,...x]);notify('Project duplicated','success');setOpenMenu('')};
  const openProject=(p:Project)=>{if(p.id!==projectId){setPdfUrl('');setResult(null);setCompileState({status:'idle',message:''})}setProjectId(p.id);setFileName(defaultFile(p.files));setActiveTab('editor')};
 
@@ -197,7 +202,7 @@ function App(){
   if(!list)return;
   for(const f of Array.from(list)){
    if(f.name.toLowerCase().endsWith('.zip')){
-    try{const current=projects.find(p=>p.id===projectId);if(!current)throw new Error('The project is no longer open.');const saved=await fetch(`/api/projects/${projectId}`,{method:'PUT',headers:json,body:JSON.stringify({name:current.name,files:current.files,mainFile:current.mainFile,archived:current.archived,settings:current.settings,versions:current.versions,comments:current.comments,changes:current.changes})});if(!saved.ok)throw new Error('Couldn’t save the project before importing the ZIP.');const form=new FormData();form.append('file',f);const res=await fetch(`/api/projects/${projectId}/upload`,{method:'POST',body:form});const d=await res.json().catch(()=>null);if(!res.ok)throw new Error(d?.error??NETWORK_HELP);update(p=>({...p,files:normalizeProject(d,'server').files}));notify(`Imported ${f.name}`,'success')}
+    try{const current=projects.find(p=>p.id===projectId);if(!current)throw new Error('The project is no longer open.');const saved=await apiFetch(`/api/projects/${projectId}`,{method:'PUT',headers:json,body:JSON.stringify({name:current.name,files:current.files,mainFile:current.mainFile,archived:current.archived,settings:current.settings,versions:current.versions,comments:current.comments,changes:current.changes})});if(!saved.ok)throw new Error('Couldn’t save the project before importing the ZIP.');const form=new FormData();form.append('file',f);const res=await apiFetch(`/api/projects/${projectId}/upload`,{method:'POST',body:form});const d=await res.json().catch(()=>null);if(!res.ok)throw new Error(d?.error??NETWORK_HELP);update(p=>({...p,files:normalizeProject(d,'server').files}));notify(`Imported ${f.name}`,'success')}
     catch(e){notify(e instanceof Error&&!(e instanceof TypeError)?e.message:`ZIP import needs the API. ${NETWORK_HELP}`,'error')}
     continue;
    }
@@ -208,9 +213,9 @@ function App(){
   }
   if(fileInput.current)fileInput.current.value='';
  };
- const downloadProject=async()=>{try{const res=await fetch(`/api/projects/${projectId}/download`);if(!res.ok)throw 0;const blob=await res.blob();downloadBlob(blob,`${project.name}.zip`)}catch{const data=new Blob([JSON.stringify(project,null,2)],{type:'application/json'});downloadBlob(data,`${project.name.replaceAll(' ','-')}-project.json`);notify('Project downloaded as JSON (start the backend for ZIP export)')}};
- const downloadPdf=()=>{if(!pdfUrl){notify('Compile the project to create a PDF');return}const a=document.createElement('a');a.href=pdfUrl;a.target='_blank';a.download=`${project.name}.pdf`;a.click()};
- const openLogs=async()=>{setModal('logs');if(result)return;setLogState({loading:true});try{const r=await fetch(`/api/projects/${projectId}/logs`);if(!r.ok)throw new Error();const d=await r.json();if(d.success!==null)setResult(d);setLogState({loading:false})}catch{setLogState({loading:false,error:NETWORK_HELP})}};
+ const downloadProject=async()=>{try{const res=await apiFetch(`/api/projects/${projectId}/download`);if(!res.ok)throw 0;const blob=await res.blob();downloadBlob(blob,`${project.name}.zip`)}catch{const data=new Blob([JSON.stringify(project,null,2)],{type:'application/json'});downloadBlob(data,`${project.name.replaceAll(' ','-')}-project.json`);notify('Project downloaded as JSON (start the backend for ZIP export)')}};
+ const downloadPdf=async()=>{if(!pdfUrl){notify('Compile the project to create a PDF');return}try{const response=await fetch(pdfUrl);if(!response.ok)throw new Error();downloadBlob(await response.blob(),`${project.name}.pdf`)}catch{notify('Could not download the compiled PDF.','error')}};
+ const openLogs=async()=>{setModal('logs');if(result)return;setLogState({loading:true});try{const r=await apiFetch(`/api/projects/${projectId}/logs`);if(!r.ok)throw new Error();const d=await r.json();if(d.success!==null)setResult(d);setLogState({loading:false})}catch{setLogState({loading:false,error:NETWORK_HELP})}};
  const inProject=(file:string|null)=>!!file&&!!project?.files.some(f=>f.name===file);
  /** Opens a file at a line, switching file and layout as needed. Applied once the editor shows that file. */
  const jumpTo=(file:string|null,line:number|null)=>{
@@ -224,7 +229,7 @@ function App(){
   if(!currentFile||!isEditable(currentFile)){notify('Open a text file before syncing to the PDF.');return}
   const position=editorRef.current?.getPosition();
   try{
-   const response=await fetch(`/api/projects/${projectId}/synctex`,{method:'POST',headers:json,body:JSON.stringify({mode:'forward',file:currentFile.name,line:position?.lineNumber??cursor.line,column:position?.column??cursor.col,mainFile:project.mainFile??'main.tex'})});
+   const response=await apiFetch(`/api/projects/${projectId}/synctex`,{method:'POST',headers:json,body:JSON.stringify({mode:'forward',file:currentFile.name,line:position?.lineNumber??cursor.line,column:position?.column??cursor.col,mainFile:project.mainFile??'main.tex'})});
    const data=await response.json();if(!response.ok)throw new Error(data.error??'SyncTeX lookup failed.');
    if(!data.found){notify('No PDF position is available here. Recompile and try a line with printed text.');return}
    setSyncPoint({page:data.page,x:data.x,y:data.y});setPage(data.page);if(narrow)setPref('layout','pdf');
@@ -232,7 +237,7 @@ function App(){
  };
  const syncPdfToSource=async(syncPage:number,x:number,y:number)=>{
   try{
-   const response=await fetch(`/api/projects/${projectId}/synctex`,{method:'POST',headers:json,body:JSON.stringify({mode:'inverse',page:syncPage,x,y,mainFile:project.mainFile??'main.tex'})});
+   const response=await apiFetch(`/api/projects/${projectId}/synctex`,{method:'POST',headers:json,body:JSON.stringify({mode:'inverse',page:syncPage,x,y,mainFile:project.mainFile??'main.tex'})});
    const data=await response.json();if(!response.ok)throw new Error(data.error??'SyncTeX lookup failed.');
    if(!data.found){notify('No source position is available here.');return}
    jumpTo(data.file,data.line);
@@ -431,8 +436,8 @@ modal==='history'?<div className="logs-body">{(project.versions??[]).length===0?
     <div className="field-row"><div><strong>Stop on first error</strong><span>Stop at the first TeX error.</span></div><input type="checkbox" checked={compilePrefs.stopOnFirstError} onChange={e=>setCompilePrefs({...compilePrefs,stopOnFirstError:e.target.checked})}/></div>
     <div className="field-row"><div><strong>Track changes</strong><span>Keep a before version for each edit.</span></div><input type="checkbox" checked={!!compilePrefs.trackChanges} onChange={e=>setCompilePrefs({...compilePrefs,trackChanges:e.target.checked})}/></div>
     <div className="field-row"><div><strong>Draft mode</strong><span>Faster preview without final graphics.</span></div><input type="checkbox" checked={compilePrefs.draft} onChange={e=>setCompilePrefs({...compilePrefs,draft:e.target.checked})}/></div>
-    <div className="field-row"><div><strong>Compile timeout</strong><span>5 to 600 seconds.</span></div><input className="select" type="number" min="5" max="600" value={compilePrefs.timeout} onChange={e=>setCompilePrefs({...compilePrefs,timeout:Math.max(5,Math.min(600,Number(e.target.value)||5))})}/></div>
-    <div className="field-row"><div><strong>Clear cached files</strong><span>Remove the saved PDF and current log.</span></div><button className="btn btn-secondary btn-sm" onClick={async()=>{await fetch(`/api/projects/${projectId}/cache`,{method:'DELETE'});setPdfUrl('');setResult(null);setCompileState({status:'idle',message:''});notify('Cached files cleared','success')}}>Clear cache</button></div>
+    <div className="field-row"><div><strong>Compile timeout</strong><span>5 to {maxTimeoutSeconds} seconds for this server.</span></div><input className="select" type="number" min="5" max={maxTimeoutSeconds} value={compilePrefs.timeout} onChange={e=>setCompilePrefs({...compilePrefs,timeout:Math.max(5,Math.min(maxTimeoutSeconds,Number(e.target.value)||5))})}/></div>
+    <div className="field-row"><div><strong>Clear cached files</strong><span>Remove the saved PDF and current log.</span></div><button className="btn btn-secondary btn-sm" onClick={async()=>{await apiFetch(`/api/projects/${projectId}/cache`,{method:'DELETE'});setPdfUrl('');setResult(null);setCompileState({status:'idle',message:''});notify('Cached files cleared','success')}}>Clear cache</button></div>
     <div className="field-row"><div><strong>Storage</strong><span>Browser local storage; synced to the API when it’s running.</span></div></div>
     <div className="field-row"><div><strong>Collaboration</strong><span>Sharing and real-time editing are not implemented yet.</span></div></div>
    </section>

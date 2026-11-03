@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { isolateProjects } from './isolate-projects';
+import { cleanExternalProjects } from './external-api';
 
 // The broken line is 3: the closing brace of \textbf is missing.
 const source = '\\documentclass{article}\n\\begin{document}\n\\textbf{Hello\n\\end{document}\n';
@@ -16,7 +17,8 @@ test.beforeEach(async ({ page, request }) => {
   page.on('pageerror', error => errors.push(error.message));
   page.on('response', r => { if (r.status() >= 400) errors.push(`${r.status()} ${r.request().method()} ${r.url()}`); });
 });
-test.afterEach(async ({ page }) => {
+test.afterEach(async ({ page, request }) => {
+  await cleanExternalProjects(page, request);
   expect(browserErrors.get(page)).toEqual([]);
 });
 

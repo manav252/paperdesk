@@ -10,7 +10,8 @@ import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs';
 
 const ROOT = path.resolve('test/fixtures/compile');
 const PORT = Number(process.env.FIXTURE_PORT ?? 3101);
-const API = `http://localhost:${PORT}/api`;
+const API = `${(process.env.FIXTURE_API_URL ?? `http://localhost:${PORT}`).replace(/\/+$/, '')}/api`;
+const ownerHeaders = process.env.FIXTURE_OWNER_ID ? { 'X-PaperDesk-Owner': process.env.FIXTURE_OWNER_ID } : {};
 const BINARY = /\.(png|jpe?g|gif|pdf|eps)$/i;
 const only = process.argv.slice(2);
 
@@ -31,14 +32,14 @@ function readTree(dir, rel = '') {
 }
 
 const json = async (url, init) => {
-  const r = await fetch(url, { ...init, headers: { 'Content-Type': 'application/json' } });
+  const r = await fetch(url, { ...init, headers: { 'Content-Type': 'application/json', ...ownerHeaders } });
   const body = await r.json().catch(() => null);
   return { status: r.status, body };
 };
 
 const data = mkdtempSync(path.join(tmpdir(), 'paperdesk-fixtures-'));
-const server = spawn('npx', ['tsx', 'server.ts'], { env: { ...process.env, PORT: String(PORT), PAPERDESK_DATA: data }, stdio: ['ignore', 'pipe', 'inherit'] });
-const cleanup = () => { server.kill(); rmSync(data, { recursive: true, force: true }); };
+const server = process.env.FIXTURE_API_URL ? null : spawn('npx', ['tsx', 'server.ts'], { env: { ...process.env, PORT: String(PORT), PAPERDESK_DATA: data }, stdio: ['ignore', 'pipe', 'inherit'] });
+const cleanup = () => { server?.kill(); rmSync(data, { recursive: true, force: true }); };
 process.on('SIGINT', () => { cleanup(); process.exit(130); });
 
 let failures = 0;
@@ -49,8 +50,12 @@ try {
     if (!health) await new Promise(r => setTimeout(r, 500));
   }
   if (!health) throw new Error('API did not start');
-  if (!health.docker) throw new Error('Docker is not running');
-  if (!health.image) throw new Error(`Compiler image ${health.compilerImage} is missing; run npm run compiler:build`);
+  if (health.compilerMode === 'native') {
+    if (!health.compilerReady) throw new Error('Native TeX toolchain is not ready.');
+  } else {
+    if (!health.docker) throw new Error('Docker is not running');
+    if (!health.image) throw new Error(`Compiler image ${health.compilerImage} is missing; run npm run compiler:build`);
+  }
 
   const fixtures = readdirSync(ROOT).filter(n => statSync(path.join(ROOT, n)).isDirectory() && (!only.length || only.includes(n)));
   console.log(`Compiling ${fixtures.length} fixture project(s)…\n`);
@@ -74,7 +79,7 @@ try {
       if (status !== 200) problems.push(`HTTP ${status}: ${body?.error}`);
       else if (expect.success) {
         if (!body.success) problems.push(`expected success, got errors: ${body.errors.map(e => `${e.file}:${e.line} ${e.message}`).join('; ')}`);
-        const pdf = Buffer.from(await (await fetch(`${API}/projects/${id}/pdf`)).arrayBuffer());
+        const pdf = Buffer.from(await (await fetch(`${API}/projects/${id}/pdf`, { headers: ownerHeaders })).arrayBuffer());
         if (pdf.subarray(0, 5).toString() !== '%PDF-') problems.push('PDF missing');
         let doc = null;
         let pages = 0;
@@ -120,6 +125,10 @@ try {
   failures++;
   console.error(`\n✗ ${e.message}`);
 } finally {
+  if (process.env.FIXTURE_API_URL && process.env.FIXTURE_OWNER_ID) {
+    const fixtures = readdirSync(ROOT).filter(n => statSync(path.join(ROOT, n)).isDirectory() && (!only.length || only.includes(n)));
+    await Promise.all(fixtures.map(id => fetch(`${API}/projects/fixture-${id}`, { method: 'DELETE', headers: ownerHeaders }).catch(() => undefined)));
+  }
   cleanup();
 }
 console.log(failures ? `\n${failures} failure(s)` : '\nAll fixture compiles passed');

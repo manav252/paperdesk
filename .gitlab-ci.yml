@@ -1,0 +1,24 @@
+image: node:22-bookworm-slim
+
+stages:
+  - deploy
+
+pages:
+  stage: deploy
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+  script:
+    - |
+      if [ -z "${VITE_API_URL:-}" ]; then
+        echo "VITE_API_URL must be set in GitLab CI/CD variables."
+        exit 1
+      fi
+      case "$VITE_API_URL" in
+        *localhost*|*127.0.0.1*|*0.0.0.0*) echo "VITE_API_URL must not point to localhost."; exit 1 ;;
+      esac
+      case "$VITE_API_URL" in https://*) ;; *) echo "VITE_API_URL must use HTTPS."; exit 1 ;; esac
+    - npm ci
+    - npm run build
+    - cp dist/index.html dist/404.html
+  pages:
+    publish: dist

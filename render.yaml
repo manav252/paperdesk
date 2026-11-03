@@ -1,0 +1,39 @@
+services:
+  - type: web
+    name: paperdesk-api
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile.api
+    dockerContext: .
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: COMPILE_MODE
+        value: native
+      - key: COMPILE_TIMEOUT_MS
+        value: "120000"
+      - key: MAX_COMPILE_TIMEOUT_MS
+        value: "120000"
+      - key: COMPILE_MEMORY_MB
+        value: "448"
+      - key: MAX_PROJECT_BYTES
+        value: "10485760"
+      - key: TRUST_PROXY
+        value: "1"
+      - key: PAPERDESK_CORS_ORIGINS
+        sync: false
+      - key: DATABASE_URL
+        sync: false
+      - key: R2_ACCOUNT_ID
+        sync: false
+      - key: R2_ACCESS_KEY_ID
+        sync: false
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
+      - key: R2_BUCKET
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: ASSISTANT_MODEL
+        value: claude-haiku-4-5-20251001

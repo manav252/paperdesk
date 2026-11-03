@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { cleanExternalProjects } from './external-api';
 
 const templates = ['IEEE conference', 'Springer', 'Article', 'Report', 'Beamer', 'CV'];
 const errorsByPage = new WeakMap<Page, string[]>();
@@ -23,6 +24,7 @@ test.beforeEach(async ({ page, request }) => {
   }
   if (!process.env.E2E_BASE_URL) {
     const pdf = onePagePdf();
+    await page.route('**/api/health', route => route.fulfill({ json: { ok: true, compilerReady: true, maxCompileTimeoutMs: 120_000, assistant: { configured: false } } }));
     await page.route('**/api/projects/*/compile', route => route.fulfill({ json: { success: true, log: '', errors: [], warnings: [], durationMs: 100 } }));
     await page.route('**/api/projects/*/pdf*', route => route.fulfill({ status: 200, contentType: 'application/pdf', body: pdf }));
   }
@@ -42,13 +44,7 @@ test.beforeEach(async ({ page, request }) => {
 });
 
 test.afterEach(async ({ page, request }) => {
-  if (process.env.E2E_BASE_URL) {
-    const ids = await page.evaluate(() => (JSON.parse(localStorage.getItem('paperdesk-projects') ?? '[]') as { id: string }[]).map(project => project.id)).catch(() => [] as string[]);
-    if (ids.length) {
-      await page.waitForTimeout(800);
-      await Promise.all(ids.map(id => request.delete(`/api/projects/${id}`)));
-    }
-  }
+  if (process.env.E2E_BASE_URL) { await page.waitForTimeout(800); await cleanExternalProjects(page, request); }
   expect(errorsByPage.get(page)).toEqual([]);
 });
 
@@ -103,9 +99,9 @@ for (const template of templates) {
 
 test('template project supports ZIP import/export and PDF download', async ({ page }) => {
   await openTemplate(page, 'Article');
-  const archive = zipOneFile('imported.tex', '\\section{Imported}\n');
+  const archive = zipOneFile('main.tex', '\\documentclass{article}\n\\begin{document}\n\\section{Imported}\nA complete project imported from ZIP.\n\\end{document}\n');
   await page.locator('input[type="file"]').first().setInputFiles({ name: 'browser-check.zip', mimeType: 'application/zip', buffer: archive });
-  await expect.poll(async () => page.evaluate(() => JSON.parse(localStorage.getItem('paperdesk-projects') ?? '[]')[0]?.files?.some((f: { name: string }) => f.name === 'imported.tex'))).toBe(true);
+  await expect.poll(async () => page.evaluate(() => JSON.parse(localStorage.getItem('paperdesk-projects') ?? '[]')[0]?.files?.some((f: { name: string }) => f.name === 'main.tex' && f.content.includes('complete project imported from ZIP')))).toBe(true);
 
   await compileAndViewPdf(page);
   const pdfDownload = page.waitForEvent('download');

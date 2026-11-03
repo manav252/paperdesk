@@ -1,6 +1,6 @@
 import { defineConfig } from 'vite'; import react from '@vitejs/plugin-react';
 // Monaco is a large but lazily loaded chunk, so the warning threshold is raised to fit it.
-export default defineConfig({plugins:[react()],build:{chunkSizeWarningLimit:4000},
+export default defineConfig({base:'/',plugins:[react()],build:{chunkSizeWarningLimit:4000},
 // Pre-bundle Monaco up front; discovering it on first use makes Vite reload the page mid-session.
 // The e2e dev server gets its own dependency cache so it can't clash with a running `npm run dev`.
 cacheDir:process.env.PAPERDESK_VITE_CACHE ?? 'node_modules/.vite',

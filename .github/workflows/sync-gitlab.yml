@@ -1,0 +1,33 @@
+name: Sync main to GitLab
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Push main to GitLab
+        env:
+          GITLAB_TOKEN: ${{ secrets.GITLAB_TOKEN }}
+          GITLAB_PROJECT_PATH: ${{ vars.GITLAB_PROJECT_PATH }}
+        shell: bash
+        run: |
+          set +x
+          if [[ -z "$GITLAB_TOKEN" || -z "$GITLAB_PROJECT_PATH" ]]; then
+            echo "Set the GITLAB_TOKEN secret and GITLAB_PROJECT_PATH repository variable."
+            exit 1
+          fi
+          case "$GITLAB_PROJECT_PATH" in
+            *[!A-Za-z0-9_.\/-]*|/*|*/|*..*) echo "GITLAB_PROJECT_PATH is invalid."; exit 1 ;;
+          esac
+          git -c "http.extraheader=Authorization: Basic $(printf 'oauth2:%s' "$GITLAB_TOKEN" | base64 | tr -d '\n')" \
+            push "https://gitlab.com/${GITLAB_PROJECT_PATH}.git" main:main

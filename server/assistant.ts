@@ -1,4 +1,4 @@
-// POST /api/assistant: a LaTeX tutor backed by the Anthropic API, streamed to the browser as NDJSON.
+// POST /api/assistant: a LaTeX tutor streamed to the browser as NDJSON.
 // Each line is one event: {"type":"text","text":"…"} while the answer streams, then {"type":"done","stopReason":"…"},
 // or {"type":"error","error":"…"} if the stream fails after it started.
 import express, { type Request, type Response } from 'express';
@@ -113,7 +113,7 @@ export function createRateLimiter(limit: number, windowMs: number, now = () => D
   };
 }
 
-export const assistantModel = () => process.env.ASSISTANT_MODEL || 'claude-haiku-5-5';
+export const assistantModel = () => process.env.ASSISTANT_MODEL || 'claude-haiku-4-5-20251001';
 export const assistantConfigured = () => !!process.env.ANTHROPIC_API_KEY;
 
 const describeApiError = (e: unknown): { status: number; error: string } => {

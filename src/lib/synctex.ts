@@ -15,13 +15,14 @@ export function parseForwardSync(output: string): PdfSyncPosition | null {
   return page !== null && page >= 1 && x !== null && y !== null ? { page, x, y } : null;
 }
 
-export function parseInverseSync(output: string): SourceSyncPosition | null {
+export function parseInverseSync(output: string, sourceRoot = '/work'): SourceSyncPosition | null {
   const result = block(output);
   const raw = result.match(/(?:^|\n)Input:(.+)/)?.[1]?.trim();
   const line = number(result, 'Line');
   const column = number(result, 'Column') ?? 1;
-  if (!raw?.startsWith('/work/') || line === null || line < 1) return null;
-  const parts = raw.slice('/work/'.length).split('/').filter(part => part && part !== '.');
+  const prefix = `${sourceRoot.replace(/\/+$/, '')}/`;
+  if (!raw?.startsWith(prefix) || line === null || line < 1) return null;
+  const parts = raw.slice(prefix.length).split('/').filter(part => part && part !== '.');
   if (!parts.length || parts.some(part => part === '..')) return null;
   return { file: parts.join('/'), line, column: Math.max(1, column) };
 }

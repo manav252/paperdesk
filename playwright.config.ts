@@ -1,5 +1,13 @@
 import { defineConfig, devices } from '@playwright/test';
 
+const externalBaseUrl = process.env.E2E_BASE_URL;
+const matrix = [
+  { name: 'desktop-light', viewport: { width: 1440, height: 900 }, colorScheme: 'light' as const },
+  { name: 'desktop-dark', viewport: { width: 1440, height: 900 }, colorScheme: 'dark' as const },
+  { name: 'phone-light', viewport: { width: 390, height: 844 }, colorScheme: 'light' as const },
+  { name: 'phone-dark', viewport: { width: 390, height: 844 }, colorScheme: 'dark' as const },
+];
+
 export default defineConfig({
   testDir: './test/e2e',
   fullyParallel: false,
@@ -8,15 +16,16 @@ export default defineConfig({
   timeout: 120_000,
   expect: { timeout: 20_000 },
   reporter: 'list',
-  use: { baseURL: 'http://127.0.0.1:4173', trace: 'retain-on-failure', ...devices['Desktop Chrome'] },
-  webServer: [
+  use: { baseURL: externalBaseUrl ?? 'http://127.0.0.1:4173', trace: 'retain-on-failure', ...devices['Desktop Chrome'] },
+  projects: matrix.map(profile => ({ name: profile.name, use: { ...devices['Desktop Chrome'], viewport: profile.viewport, colorScheme: profile.colorScheme } })),
+  ...(externalBaseUrl ? {} : { webServer: [
     {
-      command: 'npm run server',
+      command: 'node --import tsx server.ts',
       url: 'http://127.0.0.1:3002/api/health',
       reuseExistingServer: false,
       timeout: 180_000,
       // An empty key overrides any .env value, so the tests never call the real Anthropic API.
-      env: { ...process.env, PAPERDESK_DATA: '/tmp/paperdesk-playwright-data', PORT: '3002', ANTHROPIC_API_KEY: '' },
+      env: { ...process.env, TMPDIR: '/private/tmp', PAPERDESK_DATA: '/tmp/paperdesk-playwright-data', PORT: '3002', ANTHROPIC_API_KEY: '' },
     },
     {
       // Test the production build: a few bundled files load reliably, unlike the hundreds of modules the dev server serves.
@@ -27,5 +36,5 @@ export default defineConfig({
       timeout: 180_000,
       env: { ...process.env, PAPERDESK_API_PROXY: 'http://127.0.0.1:3002', PAPERDESK_VITE_CACHE: '/tmp/paperdesk-vite-e2e' },
     },
-  ],
+  ] }),
 });

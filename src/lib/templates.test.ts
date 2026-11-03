@@ -7,6 +7,10 @@ describe('template starters', () => {
     for (const template of templateStarters) {
       const fixture = readFileSync(new URL(`../../test/fixtures/compile/${template.id}/main.tex`, import.meta.url), 'utf8');
       expect(template.source).toBe(fixture);
+      for (const file of template.files ?? []) {
+        const asset = readFileSync(new URL(`../../test/fixtures/compile/${template.id}/${file.name}`, import.meta.url), 'utf8');
+        expect(file.content).toBe(asset);
+      }
     }
   });
 });

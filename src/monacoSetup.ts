@@ -34,6 +34,25 @@ export function setupMonaco(monaco: Monaco) {
     autoClosingPairs: [{ open: '{', close: '}' }, { open: '[', close: ']' }, { open: '(', close: ')' }, { open: '$', close: '$' }],
     surroundingPairs: [{ open: '{', close: '}' }, { open: '[', close: ']' }, { open: '$', close: '$' }],
   });
+  monaco.languages.registerCompletionItemProvider('latex', {
+    triggerCharacters: ['\\'],
+    provideCompletionItems(model, position) {
+      const word = model.getWordUntilPosition(position);
+      const range = new monaco.Range(position.lineNumber, Math.max(1, word.startColumn - 1), position.lineNumber, word.endColumn);
+      const commands = [
+        ['\\section', 'Section heading'], ['\\subsection', 'Subsection heading'],
+        ['\\textbf', 'Bold text'], ['\\textit', 'Italic text'], ['\\emph', 'Emphasized text'],
+        ['\\begin', 'Begin an environment'], ['\\end', 'End an environment'],
+        ['\\includegraphics', 'Include an image'], ['\\cite', 'Add a citation'],
+        ['\\label', 'Add a cross-reference label'], ['\\ref', 'Reference a label'],
+      ] as const;
+      const prefix = model.getLineContent(position.lineNumber).slice(range.startColumn - 1, position.column);
+      return { suggestions: commands.filter(([label]) => label.startsWith(prefix)).map(([label, detail]) => ({
+        label, kind: monaco.languages.CompletionItemKind.Function, detail,
+        insertText: label + '{}', range,
+      })) };
+    },
+  });
 
   monaco.languages.register({ id: 'bibtex', extensions: ['.bib'] });
   monaco.languages.setMonarchTokensProvider('bibtex', {

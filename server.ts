@@ -12,6 +12,7 @@ import multer from 'multer';
 import unzipper from 'unzipper';
 import archiver from 'archiver';
 import { parseLatexLog, type LogEntry } from './src/lib/latexLog';
+import { parseForwardSync, parseInverseSync } from './src/lib/synctex';
 import { assistantConfigured, assistantModel, assistantRouter } from './server/assistant';
 
 // Local settings and secrets come from an untracked .env (see .env.example); real environment variables win.
@@ -305,7 +306,7 @@ app.post('/api/projects/:id/compile', async (req, res) => {
       ...(process.getuid && process.getgid ? ['--user', `${process.getuid()}:${process.getgid()}`] : []),
       '-e', 'HOME=/tmp', '-e', 'TEXMFVAR=/tmp/texmf-var', '-e', 'TEXMFCONFIG=/tmp/texmf-config',
       '-v', `${tmp}:/work:rw`, '-w', '/work', IMAGE,
-      'latexmk', ENGINES[engine], '-interaction=nonstopmode', '-file-line-error', ...(stopOnFirstError ? ['-halt-on-error'] : []), ...(draft ? ['-draftmode'] : []), '-norc', mainFile];
+      'latexmk', ENGINES[engine], '-synctex=1', '-interaction=nonstopmode', '-file-line-error', ...(stopOnFirstError ? ['-halt-on-error'] : []), ...(draft ? ['-draftmode'] : []), '-norc', mainFile];
 
     let output = '';
     let exitError: any = null;
@@ -345,6 +346,20 @@ app.post('/api/projects/:id/compile', async (req, res) => {
       const stored = path.join(projectPath(id), 'compiled.pdf');
       await fs.mkdir(path.dirname(stored), { recursive: true });
       await fs.writeFile(stored, pdf);
+      const syncFile = path.join(tmp, base + '.synctex.gz');
+      if (await fs.access(syncFile).then(() => true, () => false)) {
+        const syncRoot = path.join(projectPath(id), 'synctex');
+        await fs.rm(syncRoot, { recursive: true, force: true });
+        await fs.mkdir(syncRoot, { recursive: true });
+        for (const f of files) {
+          const name = safeName(String(f.name));
+          const target = path.join(syncRoot, name);
+          if (f.name.endsWith('/')) await fs.mkdir(target, { recursive: true });
+          else { await fs.mkdir(path.dirname(target), { recursive: true }); await fs.writeFile(target, toBuffer(f)); }
+        }
+        await fs.copyFile(path.join(tmp, base + '.pdf'), path.join(syncRoot, base + '.pdf'));
+        await fs.copyFile(syncFile, path.join(syncRoot, base + '.synctex.gz'));
+      }
     }
     io.to(id).emit('compile:complete', { success });
     res.json(result);
@@ -359,8 +374,48 @@ app.get('/api/projects/:id/pdf', async (req, res) => {
   try { res.type('application/pdf').send(await fs.readFile(path.join(projectPath(req.params.id), 'compiled.pdf'))); } catch { send(res, 404, 'No compiled PDF exists yet'); }
 });
 
+app.post('/api/projects/:id/synctex', async (req, res) => {
+  try {
+    const id = String(req.params.id);
+    const syncRoot = path.join(projectPath(id), 'synctex');
+    const mainFile = safeName(String(req.body.mainFile ?? 'main.tex'));
+    if (!mainFile.endsWith('.tex')) return void send(res, 400, 'Main document must be a .tex file');
+    const pdfFile = mainFile.replace(/\.tex$/i, '.pdf');
+    const mode = String(req.body.mode ?? '');
+    let args: string[];
+    if (mode === 'forward') {
+      const file = safeName(String(req.body.file ?? ''));
+      const line = Number(req.body.line), column = Number(req.body.column ?? 1);
+      if (!Number.isInteger(line) || line < 1 || !Number.isInteger(column) || column < 1) return void send(res, 400, 'A valid source line and column are required');
+      await fs.access(path.join(syncRoot, file));
+      args = ['view', '-i', `${line}:${column}:/work/${file}`, '-o', `/work/${pdfFile}`];
+    } else if (mode === 'inverse') {
+      const page = Number(req.body.page), x = Number(req.body.x), y = Number(req.body.y);
+      if (!Number.isInteger(page) || page < 1 || !Number.isFinite(x) || !Number.isFinite(y) || Math.abs(x) > 100_000 || Math.abs(y) > 100_000) return void send(res, 400, 'A valid PDF page and position are required');
+      args = ['edit', '-o', `${page}:${x}:${y}:/work/${pdfFile}`];
+    } else return void send(res, 400, 'SyncTeX mode must be forward or inverse');
+
+    await fs.access(path.join(syncRoot, pdfFile));
+    await fs.access(path.join(syncRoot, pdfFile.replace(/\.pdf$/i, '.synctex.gz')));
+    const containerArgs = ['run', '--rm', '--network=none', '--memory=256m', '--cpus=1', '--pids-limit=64',
+      '--security-opt=no-new-privileges', '--read-only', '--tmpfs', '/tmp:rw,nosuid,size=16m',
+      ...(process.getuid && process.getgid ? ['--user', `${process.getuid()}:${process.getgid()}`] : []),
+      '-e', 'HOME=/tmp', '-v', `${syncRoot}:/work:ro`, '-w', '/work', IMAGE, 'synctex', ...args];
+    let output = '';
+    try { const result = await exec('docker', containerArgs, { timeout: 10_000, maxBuffer: 1024 * 1024 }); output = result.stdout; }
+    catch { return void send(res, 503, 'SyncTeX lookup failed. Recompile the project and try again.'); }
+    if (mode === 'forward') {
+      const position = parseForwardSync(output);
+      return void res.json(position ? { found: true, ...position } : { found: false });
+    }
+    const position = parseInverseSync(output);
+    if (!position || !await fs.access(path.join(syncRoot, position.file)).then(() => true, () => false)) return void res.json({ found: false });
+    res.json({ found: true, ...position });
+  } catch (e) { send(res, 400, e); }
+});
+
 app.delete('/api/projects/:id/cache', async (req, res) => {
-  try { await fs.rm(path.join(projectPath(req.params.id), 'compiled.pdf'), { force: true }); RESULTS.delete(req.params.id); res.status(204).end(); } catch (e) { send(res, 400, e); }
+  try { await fs.rm(path.join(projectPath(req.params.id), 'compiled.pdf'), { force: true }); await fs.rm(path.join(projectPath(req.params.id), 'synctex'), { recursive: true, force: true }); RESULTS.delete(req.params.id); res.status(204).end(); } catch (e) { send(res, 400, e); }
 });
 
 app.get('/api/projects/:id/logs', (req, res) => {

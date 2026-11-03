@@ -1,11 +1,13 @@
 import { expect, test, type Page } from '@playwright/test';
+import { isolateProjects } from './isolate-projects';
 
 // The broken line is 3: the closing brace of \textbf is missing.
 const source = '\\documentclass{article}\n\\begin{document}\n\\textbf{Hello\n\\end{document}\n';
 const project = () => ({ id: 'p1', name: 'E2E Assistant', modified: Date.now(), mainFile: 'main.tex', files: [{ name: 'main.tex', content: source }] });
 
 const browserErrors = new WeakMap<Page, string[]>();
-test.beforeEach(async ({ page }) => {
+test.beforeEach(async ({ page, request }) => {
+  await isolateProjects(page, request);
   // Tests must not depend on the network: answer Google Fonts requests locally (the system font fallback is used).
   await page.route(/^https:\/\/fonts\.(googleapis|gstatic)\.com\//, route => route.fulfill({ status: 200, contentType: 'text/css', body: '' }));
   const errors: string[] = [];
@@ -62,7 +64,8 @@ test('first-run tour can be skipped and reopened from Help', async ({ page }) =>
   await expect(page.locator('.monaco-editor')).toBeVisible();
   await expect(tour).toHaveCount(0);
 
-  await page.locator('.editor-menus .text-menu').filter({ hasText: 'Help' }).click();
+  if ((page.viewportSize()?.width ?? 1440) <= 640) await page.getByRole('button', { name: 'Menu' }).click();
+  else await page.locator('.editor-menus .text-menu').filter({ hasText: 'Help' }).click();
   await page.getByRole('menuitem', { name: 'Take the tour' }).click();
   for (const title of ['Your project files', 'Write LaTeX here', 'Recompile to see your PDF', 'Your PDF', 'Logs explain problems']) {
     await expect(tour.getByText(title)).toBeVisible();
@@ -86,7 +89,10 @@ test('explain an error, review the diff, and apply the fix only on click', async
   const answer = 'The `\\textbf` command on line 3 never closes its brace.\n\n```latex replace-lines 3-3\n\\textbf{Hello}\n```';
   const requests = await fakeBackend(page, answer);
   await open(page);
-  await page.getByRole('button', { name: /Recompile/ }).first().click();
+  if ((page.viewportSize()?.width ?? 1440) <= 860) {
+    await page.getByRole('button', { name: 'Menu' }).click();
+    await page.getByRole('menuitem', { name: 'Compile' }).click();
+  } else await page.getByRole('button', { name: /Recompile/ }).first().click();
   await page.getByRole('button', { name: 'View log' }).click();
   await page.getByRole('dialog', { name: 'Compile log' }).getByRole('button', { name: 'Explain this error' }).click();
 

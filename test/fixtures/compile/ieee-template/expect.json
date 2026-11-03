@@ -1,1 +1,1 @@
-{"engines": ["pdflatex", "xelatex", "lualatex"], "success": true, "minPages": 1, "contains": ["IEEE Conference Template"]}
+{"engines": ["pdflatex", "xelatex", "lualatex"], "success": true, "minPages": 1, "bibtex": true, "contains": ["Your IEEE Conference Paper Title", "Einstein"]}

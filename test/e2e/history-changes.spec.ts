@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { isolateProjects } from './isolate-projects';
 
 const project = () => ({
   id: 'p1', name: 'E2E Change Review', modified: Date.now(), mainFile: 'main.tex',
@@ -7,7 +8,8 @@ const project = () => ({
 
 const browserErrors = new WeakMap<Page, string[]>();
 
-test.beforeEach(async ({ page }) => {
+test.beforeEach(async ({ page, request }) => {
+  await isolateProjects(page, request);
   // Tests must not depend on the network: answer Google Fonts requests locally (the system font fallback is used).
   await page.route(/^https:\/\/fonts\.(googleapis|gstatic)\.com\//, route => route.fulfill({ status: 200, contentType: 'text/css', body: '' }));
   const errors: string[] = [];
@@ -20,21 +22,28 @@ test.afterEach(async ({ page }) => {
 });
 
 async function openFresh(page: Page) {
-  await page.addInitScript(value => { localStorage.setItem('paperdesk-projects', JSON.stringify([value])); localStorage.setItem('paperdesk-tour-done', '1'); }, project());
+  await page.addInitScript(value => { localStorage.setItem('paperdesk-projects', JSON.stringify([value])); localStorage.setItem('paperdesk-tour-done', '1'); localStorage.setItem('paperdesk-compile-prefs', JSON.stringify({ trackChanges: false })); }, project());
   await page.goto('/');
   await expect(page.locator('.monaco-editor')).toBeVisible();
 }
 
 async function typeAtEnd(page: Page, value: string) {
   const input = page.getByRole('textbox', { name: 'Editor content' });
-  await input.click({ force: true });
-  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+ArrowDown' : 'Control+End');
-  await page.keyboard.type(value);
+  const content = await page.evaluate(() => JSON.parse(localStorage.getItem('paperdesk-projects') ?? '[]')[0]?.files?.[0]?.content as string);
+  await input.fill(`${content}${value}`);
 }
 
 async function openMenuItem(page: Page, menu: string, item: RegExp | string) {
-  await page.locator('.editor-menus .text-menu').filter({ hasText: menu }).first().click();
+  if ((page.viewportSize()?.width ?? 1440) <= 860) await page.getByRole('button', { name: 'Menu' }).click();
+  else await page.locator('.editor-menus .text-menu').filter({ hasText: menu }).first().click();
   await page.getByRole('menuitem', { name: item }).click();
+}
+
+async function openSettings(page: Page) {
+  if ((page.viewportSize()?.width ?? 1440) <= 640) {
+    await page.getByRole('button', { name: 'Menu' }).click();
+    await page.getByRole('menuitem', { name: 'Project settings' }).click();
+  } else await page.getByRole('button', { name: 'Settings' }).first().click();
 }
 
 test('history shows aligned highlighted side-by-side lines and restores a snapshot', async ({ page }) => {
@@ -59,28 +68,28 @@ test('history shows aligned highlighted side-by-side lines and restores a snapsh
 
 test('tracked change can be rejected individually', async ({ page }) => {
   await openFresh(page);
-  await page.getByRole('button', { name: 'Settings' }).first().click();
+  await openSettings(page);
   const trackingRow = page.locator('.field-row').filter({ hasText: 'Track changes' });
   await trackingRow.getByRole('checkbox').check();
   await page.getByRole('button', { name: 'Done' }).click();
   await typeAtEnd(page, ' tracked');
   await openMenuItem(page, 'Edit', /Review changes/);
   const review = page.getByRole('dialog', { name: 'Track changes' });
-  await expect(review.getByText('tracked', { exact: true })).toBeVisible();
+  await expect(review.locator('.tracked-change')).toContainText('tracked');
   await review.getByRole('button', { name: 'Reject change in main.tex' }).first().click();
   await expect(review.getByText('No pending tracked changes.')).toBeVisible();
-  await expect(page.locator('.monaco-editor').getByText('tracked')).toHaveCount(0);
+  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('paperdesk-projects') ?? '[]')[0]?.files?.[0]?.content as string)).not.toContain('tracked');
   await review.getByRole('button', { name: 'Close' }).last().click();
   await typeAtEnd(page, ' accepted');
   await openMenuItem(page, 'Edit', /Review changes/);
   await page.getByRole('dialog', { name: 'Track changes' }).getByRole('button', { name: 'Accept change in main.tex' }).first().click();
-  await expect(page.locator('.monaco-editor').getByText('accepted')).toBeVisible();
+  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('paperdesk-projects') ?? '[]')[0]?.files?.[0]?.content as string)).toContain('accepted');
   await expect(page.getByRole('dialog', { name: 'Track changes' }).getByText('No pending tracked changes.')).toBeVisible();
 });
 
 test('tracked changes can be accepted all or rejected all', async ({ page }) => {
   await openFresh(page);
-  await page.getByRole('button', { name: 'Settings' }).first().click();
+  await openSettings(page);
   await page.locator('.field-row').filter({ hasText: 'Track changes' }).getByRole('checkbox').check();
   await page.getByRole('button', { name: 'Done' }).click();
   await typeAtEnd(page, ' accepted');

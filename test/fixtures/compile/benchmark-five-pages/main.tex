@@ -1,0 +1,16 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=1in]{geometry}
+\title{Five Page Compile Benchmark}
+\author{PaperDesk}
+\date{}
+\newcount\paragraphnumber
+\begin{document}
+\maketitle
+\section{Benchmark}
+\paragraphnumber=0
+\loop\ifnum\paragraphnumber<54
+This paragraph is repeated to create a representative multi-page document for measuring compilation and PDF rendering. The words are ordinary prose with enough length to wrap across multiple lines, which makes the output similar to a short report rather than a mostly empty test page. We retain the same text to keep the benchmark deterministic across runs and TeX engines.
+\par\medskip
+\advance\paragraphnumber by 1
+\repeat
+\end{document}

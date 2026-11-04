@@ -6,7 +6,7 @@ import { spawn } from 'node:child_process';
 import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs';
+import { getDocument, OPS } from 'pdfjs-dist/legacy/build/pdf.mjs';
 
 const ROOT = path.resolve('test/fixtures/compile');
 const PORT = Number(process.env.FIXTURE_PORT ?? 3101);
@@ -88,6 +88,10 @@ try {
           doc = await getDocument({ data: new Uint8Array(pdf), verbosity: 0 }).promise;
           pages = doc.numPages;
           text = (await Promise.all(Array.from({ length: pages }, (_, i) => doc.getPage(i + 1).then(p => p.getTextContent())))).flatMap(c => c.items.map(it => it.str)).join(' ').replace(/\s+/g, ' ').toLowerCase();
+          if (expect.image) {
+            const operators = await doc.getPage(1).then(p => p.getOperatorList());
+            if (!operators.fnArray.some(fn => fn === OPS.paintImageXObject || fn === OPS.paintInlineImageXObject)) problems.push('PDF contains no rendered image operator');
+          }
         } catch (e) {
           problems.push(`PDF text parser failed: ${e instanceof Error ? e.message : String(e)}`);
         } finally {
@@ -96,6 +100,7 @@ try {
         for (const needle of expect.contains ?? []) if (!text.includes(needle.toLowerCase())) problems.push(`PDF text is missing “${needle}”`);
         if (/\?\s*\]|\[\s*\?/.test(text)) problems.push('PDF has unresolved citations ([?])');
         if (expect.minPages && pages < expect.minPages) problems.push(`expected ≥${expect.minPages} pages, got ${pages}`);
+        if (expect.maxPages && pages > expect.maxPages) problems.push(`expected ≤${expect.maxPages} pages, got ${pages}`);
         if ((expect.bibtex || expect.bibliography === 'bibtex') && !/BibTeX|bibtex/i.test(body.log)) problems.push('BibTeX did not run');
         if (expect.bibliography === 'biber' && !/biber/i.test(body.log)) problems.push('Biber did not run');
         if ((expect.bibtex || expect.bibliography) && body.warnings.some(w => /undefined|Citation/.test(w.message) && /cit/i.test(w.message))) problems.push('undefined citations');
@@ -117,7 +122,8 @@ try {
         }
       }
       const secs = ((Date.now() - t) / 1000).toFixed(1).padStart(5);
-      const label = `${name.padEnd(12)} ${engine.padEnd(9)} ${secs}s`;
+      const stages = body?.timings ? ` API ${body.durationMs}ms (sync ${body.timings.fileSyncMs}, startup ${body.timings.engineStartupMs}, TeX ${body.timings.texRunMs}, save ${body.timings.artifactSaveMs}ms)` : '';
+      const label = `${name.padEnd(20)} ${engine.padEnd(9)} ${secs}s${stages}`;
       if (problems.length) { failures++; console.log(`  ✗ ${label}  ${problems.join(' | ')}`); if (expect.bibtex || expect.bibliography) console.log(body.log.slice(-5000)); }
       else console.log(`  ✓ ${label}${expect.success ? '' : `  error → ${body.errors[0].file}:${body.errors[0].line}`}`);
     }

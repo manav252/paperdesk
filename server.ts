@@ -43,9 +43,11 @@ const ENGINES: Record<string, string> = { pdflatex: '-pdf', xelatex: '-xelatex',
 /** Files returned to the client as base64; everything else is UTF-8 text. */
 const BINARY = /\.(png|jpe?g|gif|bmp|tiff?|pdf|eps|ps|zip|gz|ttf|otf|woff2?)$/i;
 
-type CompileResult = { success: boolean; log: string; errors: LogEntry[]; warnings: LogEntry[]; durationMs: number };
+type CompileResult = { success: boolean; log: string; errors: LogEntry[]; warnings: LogEntry[]; durationMs: number; timings?: { fileSyncMs: number; engineStartupMs: number; texRunMs: number; artifactSaveMs: number; totalMs: number } };
 const RESULTS = new Map<string, CompileResult>();
 const COMPILING = new Set<string>();
+const COMPILE_CANCELLERS = new Map<string, () => void>();
+const COMPILE_CANCELLED = new Set<string>();
 const SYNCING = new Set<string>();
 let nativeCompilerReady = COMPILE_MODE !== 'native';
 const resultKey = (id: string, owner: string) => persistence.mode === 'neon-r2' ? `${owner}/${id}` : id;
@@ -233,9 +235,16 @@ function latexmkArgs(engine: string, mainFile: string, stopOnFirstError: boolean
   return [ENGINES[engine]!, '-e', command, '-synctex=1', '-interaction=nonstopmode', '-file-line-error', ...(stopOnFirstError ? ['-halt-on-error'] : []), ...(draft ? ['-draftmode'] : []), '-norc', mainFile];
 }
 
+function compilerArgs(engine: string, mainFile: string, stopOnFirstError: boolean, draft: boolean, files: StoredFile[]) {
+  const source = files.filter(file => file.name.endsWith('.tex')).map(file => typeof file.content === 'string' ? file.content : '').join('\n');
+  const needsLatexmk = /\\(?:ref|eqref|pageref|autoref|cref|Cref|cite\w*|bibliography|addbibresource|printbibliography|input|include|tableofcontents|makeindex|glossary)\b/.test(source);
+  if (needsLatexmk) return ['latexmk', ...latexmkArgs(engine, mainFile, stopOnFirstError, draft)];
+  return [engine, '-no-shell-escape', '-synctex=1', '-interaction=nonstopmode', '-file-line-error', ...(stopOnFirstError ? ['-halt-on-error'] : []), ...(draft ? ['-draftmode'] : []), mainFile];
+}
+
 /** Starts a process group so timeout cleanup also kills TeX and bibliography children. */
-function runNativeCompiler(cwd: string, args: string[], timeoutMs: number) {
-  return new Promise<{ stdout: string; stderr: string; killed: boolean; reason?: 'timeout' | 'output_limit'; code: number | null }>((resolve, reject) => {
+function runNativeCompiler(cwd: string, args: string[], timeoutMs: number, registerCancel: (cancel: () => void) => void) {
+  return new Promise<{ stdout: string; stderr: string; killed: boolean; reason?: 'timeout' | 'output_limit' | 'cancelled'; code: number | null; engineStartupMs: number; texRunMs: number }>((resolve, reject) => {
     const memoryBytes = Math.max(192, COMPILE_MEMORY_MB) * 1024 * 1024;
     const safeEnv = {
       PATH: process.env.PATH ?? '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
@@ -247,12 +256,19 @@ function runNativeCompiler(cwd: string, args: string[], timeoutMs: number) {
       cwd, env: safeEnv,
       detached: true, stdio: ['ignore', 'pipe', 'pipe'],
     });
-    let stdout = '', stderr = '', killed = false, reason: 'timeout' | 'output_limit' | undefined, settled = false;
+    const processStartedAt = performance.now();
+    let spawnedAt = processStartedAt, stdout = '', stderr = '', killed = false, reason: 'timeout' | 'output_limit' | 'cancelled' | undefined, settled = false;
+    const kill = (why: 'cancelled' | 'timeout' | 'output_limit') => {
+      if (settled) return;
+      killed = true; reason = why;
+      if (child.pid) { try { process.kill(-child.pid, 'SIGKILL'); } catch { child.kill('SIGKILL'); } }
+    };
+    child.once('spawn', () => { spawnedAt = performance.now(); if (reason) kill(reason); });
+    registerCancel(() => kill('cancelled'));
     const limitOutput = 4 * 1024 * 1024;
     const collect = (target: 'stdout' | 'stderr') => (chunk: Buffer) => {
       if (stdout.length + stderr.length + chunk.length > limitOutput) {
-        killed = true; reason = 'output_limit';
-        if (child.pid) { try { process.kill(-child.pid, 'SIGKILL'); } catch { child.kill('SIGKILL'); } }
+        kill('output_limit');
         return;
       }
       if (target === 'stdout') stdout += chunk.toString(); else stderr += chunk.toString();
@@ -260,15 +276,15 @@ function runNativeCompiler(cwd: string, args: string[], timeoutMs: number) {
     child.stdout.on('data', collect('stdout'));
     child.stderr.on('data', collect('stderr'));
     const timer = setTimeout(() => {
-      killed = true; reason = 'timeout';
-      if (child.pid) { try { process.kill(-child.pid, 'SIGKILL'); } catch { child.kill('SIGKILL'); } }
+      kill('timeout');
     }, timeoutMs);
     child.once('error', error => { if (settled) return; settled = true; clearTimeout(timer); reject(error); });
     child.once('close', code => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      resolve({ stdout, stderr, killed, reason, code });
+      const engineStartupMs = Math.max(0, Math.round(spawnedAt - processStartedAt));
+      resolve({ stdout, stderr, killed, reason, code, engineStartupMs, texRunMs: Math.max(0, Math.round(performance.now() - spawnedAt)) });
     });
   });
 }
@@ -404,18 +420,36 @@ app.get('/api/projects/:id/download', async (req, res) => {
  * Compiles in a throwaway container: no network, read-only root, resource limits.
  * LaTeX errors are a normal result (200 with success:false); 503 means the compiler itself is unavailable.
  */
+app.post('/api/projects/:id/compile/cancel', async (req, res) => {
+  const key = resultKey(String(req.params.id), projectOwner(res));
+  const cancel = COMPILE_CANCELLERS.get(key);
+  if (!cancel) return void res.json({ cancelled: false });
+  COMPILE_CANCELLED.add(key);
+  cancel();
+  res.json({ cancelled: true });
+});
+
 app.post('/api/projects/:id/compile', async (req, res) => {
   let tmp = '';
   const container = `paperdesk-compile-${crypto.randomUUID()}`;
   const started = Date.now();
   let compileId = '';
+  let cancelKey = '';
+  let engineStartupMs = 0;
+  let texRunMs = 0;
+  let fileSyncMs = 0;
+  let artifactSaveMs = 0;
+  let activeCancel: () => void = () => {};
   try {
     const id = String(req.params.id);
     const owner = projectOwner(res);
+    cancelKey = resultKey(id, owner);
+    COMPILE_CANCELLED.delete(cancelKey);
     projectPath(id);
     compileId = id;
     if (COMPILING.has(id) || COMPILING.size >= 1) return void send(res, 429, 'A compile is already running. Try again when it finishes.');
     COMPILING.add(id);
+    COMPILE_CANCELLERS.set(cancelKey, () => { COMPILE_CANCELLED.add(cancelKey); activeCancel(); });
     // A new browser-only project can reach Compile before its debounced save.
     // Prefer the submitted source; only require a stored project when no files
     // were included. In Neon/R2 mode, register the project so its source and
@@ -444,6 +478,7 @@ app.post('/api/projects/:id/compile', async (req, res) => {
       }, { replace: true }, owner);
     }
 
+    const fileSyncStarted = Date.now();
     if (COMPILE_MODE === 'native') {
       tmp = nativeCompilePath(id, owner);
       await fs.rm(tmp, { recursive: true, force: true });
@@ -461,15 +496,20 @@ app.post('/api/projects/:id/compile', async (req, res) => {
       await fs.mkdir(path.dirname(target), { recursive: true });
       await fs.writeFile(target, toBuffer(f));
     }
+    fileSyncMs = Date.now() - fileSyncStarted;
 
-    const texArgs = latexmkArgs(engine, mainFile, stopOnFirstError, draft);
+    const compileCommand = compilerArgs(engine, mainFile, stopOnFirstError, draft, files);
 
     let output = '';
     let exitError: any = null;
-    if (COMPILE_MODE === 'native') {
+    if (COMPILE_CANCELLED.has(cancelKey)) {
+      exitError = { reason: 'cancelled', killed: true };
+    } else if (COMPILE_MODE === 'native') {
       try {
         await giveCompileFilesToSandboxUser(tmp);
-        const r = await runNativeCompiler(tmp, texArgs, timeoutMs);
+        const r = await runNativeCompiler(tmp, compileCommand, timeoutMs, cancel => { activeCancel = cancel; if (COMPILE_CANCELLED.has(cancelKey)) cancel(); });
+        engineStartupMs = r.engineStartupMs;
+        texRunMs = r.texRunMs;
         output = r.stdout + '\n' + r.stderr;
         if (r.code !== 0 || r.killed) exitError = { code: r.code, killed: r.killed, reason: r.reason, stdout: r.stdout, stderr: r.stderr };
       } catch (e: any) {
@@ -482,14 +522,19 @@ app.post('/api/projects/:id/compile', async (req, res) => {
         // Run as the host user so output files in the bind mount aren't owned by root on Linux hosts.
         ...(process.getuid && process.getgid ? ['--user', `${process.getuid()}:${process.getgid()}`] : []),
         '-e', 'HOME=/tmp', '-e', 'TEXMFVAR=/tmp/texmf-var', '-e', 'TEXMFCONFIG=/tmp/texmf-config',
-        '-v', `${tmp}:/work:rw`, '-w', '/work', IMAGE, 'latexmk', ...texArgs];
+        '-v', `${tmp}:/work:rw`, '-w', '/work', IMAGE, ...compileCommand];
+      const dockerStarted = Date.now();
+      activeCancel = () => { void exec('docker', ['rm', '-f', container]).catch(() => undefined); };
+      if (COMPILE_CANCELLED.has(cancelKey)) activeCancel();
       try {
         const r = await exec('docker', args, { timeout: timeoutMs, maxBuffer: 8 * 1024 * 1024 });
         output = r.stdout + '\n' + r.stderr;
       } catch (e: any) {
         exitError = e;
+        if (COMPILE_CANCELLED.has(cancelKey)) exitError.reason = 'cancelled';
         output = [e.stdout, e.stderr].filter(Boolean).join('\n');
       }
+      texRunMs = Date.now() - dockerStarted;
     }
 
     const stderr = String(exitError?.stderr ?? '');
@@ -499,7 +544,9 @@ app.post('/api/projects/:id/compile', async (req, res) => {
     if (exitError && /Unable to find image|No such image|pull access denied/i.test(stderr)) {
       return void send(res, 503, `The LaTeX compiler image (${IMAGE}) isn’t built. Run “npm run compiler:build” once, then recompile.`);
     }
-    if (exitError?.killed) {
+    if (exitError?.reason === 'cancelled') {
+      output += '\nCompilation cancelled by user.';
+    } else if (exitError?.killed) {
       if (COMPILE_MODE === 'docker') await exec('docker', ['rm', '-f', container]).catch(() => undefined);
       output += exitError.reason === 'output_limit'
         ? '\nCompilation stopped because the output exceeded the 4 MB limit.'
@@ -513,11 +560,11 @@ app.post('/api/projects/:id/compile', async (req, res) => {
     const pdf = await fs.readFile(path.join(tmp, base + '.pdf')).catch(() => null);
     const success = !exitError && !!pdf;
     if (!success && !parsed.errors.length) {
-      parsed.errors.push({ file: mainFile, line: null, message: exitError?.reason === 'output_limit' ? 'Compiler output exceeded the 4 MB limit.' : exitError?.killed ? 'Compilation timed out.' : 'Compilation failed. See the full log for details.' });
+      parsed.errors.push({ file: mainFile, line: null, message: exitError?.reason === 'cancelled' ? 'Compilation cancelled by user.' : exitError?.reason === 'output_limit' ? 'Compiler output exceeded the 4 MB limit.' : exitError?.killed ? `Compilation timed out after ${Math.round(timeoutMs / 1000)} seconds.` : 'Compilation failed. See the full log for details.' });
     }
     const log = [texLog || output, blg && `\n──── BibTeX (${base}.blg) ────\n${blg}`, texLog && `\n──── latexmk ────\n${output}`].filter(Boolean).join('\n');
-    const result: CompileResult = { success, log, errors: parsed.errors, warnings: parsed.warnings, durationMs: Date.now() - started };
-    RESULTS.set(resultKey(id, owner), result);
+    const result: CompileResult = { success, log, errors: parsed.errors, warnings: parsed.warnings, durationMs: 0 };
+    const artifactStarted = Date.now();
     if (pdf && success && !draft) {
       const syncFile = path.join(tmp, base + '.synctex.gz');
       if (persistence.mode === 'neon-r2') {
@@ -542,11 +589,18 @@ app.post('/api/projects/:id/compile', async (req, res) => {
         await fs.copyFile(syncFile, path.join(syncRoot, base + '.synctex.gz'));
       }
     }
+    artifactSaveMs = Date.now() - artifactStarted;
+    const totalMs = Date.now() - started;
+    result.durationMs = totalMs;
+    result.timings = { fileSyncMs, engineStartupMs, texRunMs, artifactSaveMs, totalMs };
+    RESULTS.set(resultKey(id, owner), result);
     io.to(id).emit('compile:complete', { success });
     res.json(result);
   } catch (e) {
     send(res, 400, e);
   } finally {
+    if (cancelKey) COMPILE_CANCELLERS.delete(cancelKey);
+    if (cancelKey) COMPILE_CANCELLED.delete(cancelKey);
     if (compileId) COMPILING.delete(compileId);
     if (tmp) await fs.rm(tmp, { recursive: true, force: true }).catch(() => undefined);
   }

@@ -48,7 +48,12 @@ async function uploadInto(page: Page, folderLabel: string, files: { name: string
 
 test('figures, tables and equations compile to a clean PDF', async ({ page }) => {
   test.setTimeout(300_000);
+  const synced = page.waitForResponse(r => /\/api\/projects$/.test(new URL(r.url()).pathname) && r.request().method() === 'GET');
   await page.goto('/');
+  // The app reopens a project once the project list has loaded; start from the dashboard.
+  await synced;
+  await page.waitForTimeout(300);
+  if (await page.getByRole('button', { name: 'Back to projects' }).isVisible()) await page.getByRole('button', { name: 'Back to projects' }).click();
   await page.getByRole('button', { name: 'New project' }).first().click();
   await page.getByLabel('Project name').fill('Rendering check');
   await page.getByRole('button', { name: 'Create project' }).click();
@@ -68,7 +73,7 @@ test('figures, tables and equations compile to a clean PDF', async ({ page }) =>
     { name: 'plot.png', mimeType: 'image/png', buffer: read('figures/plot.png') },
     { name: 'photo.jpg', mimeType: 'image/jpeg', buffer: read('figures/photo.jpg') },
   ]);
-  await expect(page.getByRole('treeitem', { name: /photo\.jpg/ })).toBeVisible();
+  await expect(page.locator('.file-label').getByText('photo.jpg', { exact: true })).toBeVisible();
 
   // The PDF figure arrives by drag and drop onto the folder.
   const drop = await page.evaluateHandle(bytes => {
@@ -79,15 +84,15 @@ test('figures, tables and equations compile to a clean PDF', async ({ page }) =>
   const figuresRow = page.getByRole('treeitem', { name: /^figures\b/ }).first().locator('.file-row').first();
   await figuresRow.dispatchEvent('dragover', { dataTransfer: drop });
   await figuresRow.dispatchEvent('drop', { dataTransfer: drop });
-  await expect(page.getByRole('treeitem', { name: /diagram\.pdf/ })).toBeVisible();
+  await expect(page.locator('.file-label').getByText('diagram.pdf', { exact: true })).toBeVisible();
 
   await newFolder(page, 'figures/sub');
   await uploadInto(page, 'sub', [{ name: 'gradient.png', mimeType: 'image/png', buffer: read('figures/sub/gradient.png') }]);
-  await expect(page.getByRole('treeitem', { name: /gradient\.png/ })).toBeVisible();
+  await expect(page.locator('.file-label').getByText('gradient.png', { exact: true })).toBeVisible();
 
   // SVG can't be included by LaTeX; uploading one adds a PNG copy.
   await uploadInto(page, 'figures', [{ name: 'logo.svg', mimeType: 'image/svg+xml', buffer: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="40" height="20"><rect width="40" height="20" fill="#1f6f55"/></svg>') }]);
-  await expect(page.getByRole('treeitem', { name: /logo\.png/ })).toBeVisible();
+  await expect(page.locator('.file-label').getByText('logo.png', { exact: true })).toBeVisible();
 
   await page.getByRole('button', { name: /^Recompile/ }).first().click();
   await expect(page.getByRole('region', { name: 'PDF preview' }).getByRole('status')).toContainText('Compiled in', { timeout: 240_000 });
@@ -96,5 +101,5 @@ test('figures, tables and equations compile to a clean PDF', async ({ page }) =>
   await page.getByRole('button', { name: 'Logs' }).click();
   const log = page.getByRole('dialog', { name: 'Compile log' });
   await expect(log).toContainText('Compiled successfully · 0 errors');
-  await expect(log).not.toContainText('undefined references');
+  await expect(log.locator('.log-entry.warning', { hasText: /undefined|not found|Unknown graphics/i })).toHaveCount(0);
 });

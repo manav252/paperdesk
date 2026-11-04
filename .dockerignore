@@ -1,5 +1,4 @@
 .git
-.codex
 node_modules
 dist
 test-results
@@ -7,5 +6,4 @@ playwright-report
 backend/storage
 .env
 .env.*
-AGENTS.md
 PROGRESS.md

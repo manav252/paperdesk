@@ -95,8 +95,10 @@ export class ProjectPersistence {
   }
 
   async write(id: string, ownerId: string, update: ProjectUpdate): Promise<ProjectData> {
-    const previous = await this.read(id, ownerId).catch(() => null);
-    const files = update.files ?? previous?.files ?? [];
+    // Only the metadata row is needed to merge an update; the stored source is fetched only when no files were sent.
+    const { rows } = await this.pool!.query('SELECT * FROM paperdesk_projects WHERE id = $1 AND owner_id = $2', [id, ownerId]);
+    const previous = rows[0] ? this.metaRow(rows[0]) : null;
+    const files = update.files ?? (rows[0] ? (await this.readRow(rows[0])).files : []);
     const name = update.name ?? previous?.name ?? 'Untitled Project';
     const objectKey = `projects/${ownerId}/${id}/source.json`;
     const json = JSON.stringify(files);
@@ -138,8 +140,12 @@ export class ProjectPersistence {
   private async readRow(row: Record<string, unknown>): Promise<ProjectData> {
     const result = await this.s3!.send(new GetObjectCommand({ Bucket: this.bucket, Key: String(row.object_key) }));
     const files = JSON.parse(await result.Body!.transformToString('utf-8')) as StoredFile[];
+    return { ...this.metaRow(row), files };
+  }
+
+  private metaRow(row: Record<string, unknown>): Omit<ProjectData, 'files'> {
     return {
-      id: String(row.id), name: String(row.name), modified: Number(row.modified), files,
+      id: String(row.id), name: String(row.name), modified: Number(row.modified),
       ...(row.main_file ? { mainFile: String(row.main_file) } : {}),
       ...(row.archived === null ? {} : { archived: Boolean(row.archived) }),
       ...(row.settings === null ? {} : { settings: row.settings }),

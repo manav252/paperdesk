@@ -1,4 +1,10 @@
 import type { Monaco } from '@monaco-editor/react';
+import { collectCitations, collectLabels, COMMANDS, completionContext, ENVIRONMENTS, projectPaths } from './lib/completion';
+import type { ProjectFile } from './lib/project';
+
+/** The open project's files, for label, citation and path suggestions. Set by the editor. */
+let projectFiles: () => ProjectFile[] = () => [];
+export const setCompletionFiles = (get: () => ProjectFile[]) => { projectFiles = get; };
 
 let registered = false;
 
@@ -35,22 +41,28 @@ export function setupMonaco(monaco: Monaco) {
     surroundingPairs: [{ open: '{', close: '}' }, { open: '[', close: ']' }, { open: '$', close: '$' }],
   });
   monaco.languages.registerCompletionItemProvider('latex', {
-    triggerCharacters: ['\\'],
+    triggerCharacters: ['\\', '{', ','],
     provideCompletionItems(model, position) {
-      const word = model.getWordUntilPosition(position);
-      const range = new monaco.Range(position.lineNumber, Math.max(1, word.startColumn - 1), position.lineNumber, word.endColumn);
-      const commands = [
-        ['\\section', 'Section heading'], ['\\subsection', 'Subsection heading'],
-        ['\\textbf', 'Bold text'], ['\\textit', 'Italic text'], ['\\emph', 'Emphasized text'],
-        ['\\begin', 'Begin an environment'], ['\\end', 'End an environment'],
-        ['\\includegraphics', 'Include an image'], ['\\cite', 'Add a citation'],
-        ['\\label', 'Add a cross-reference label'], ['\\ref', 'Reference a label'],
-      ] as const;
-      const prefix = model.getLineContent(position.lineNumber).slice(range.startColumn - 1, position.column);
-      return { suggestions: commands.filter(([label]) => label.startsWith(prefix)).map(([label, detail]) => ({
-        label, kind: monaco.languages.CompletionItemKind.Function, detail,
-        insertText: label + '{}', range,
-      })) };
+      const line = model.getLineContent(position.lineNumber);
+      const before = line.slice(0, position.column - 1), after = line.slice(position.column - 1);
+      const ctx = completionContext(before);
+      if (!ctx) return { suggestions: [] };
+      const K = monaco.languages.CompletionItemKind, snippet = monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet;
+      const start = position.column - ctx.partial.length;
+      const range = (from = start, extra = 0) => new monaco.Range(position.lineNumber, from, position.lineNumber, position.column + extra);
+      const files = projectFiles();
+      if (ctx.kind === 'command') {
+        return { suggestions: COMMANDS.map(([name, body, detail]) => ({ label: `\\${name}`, filterText: `\\${name}`, kind: K.Function, detail, insertText: body, insertTextRules: snippet, range: range(start - 1) })) };
+      }
+      if (ctx.kind === 'env') {
+        // Typing "{" auto-closes it, so replace that "}" too; \begin also gets its matching \end.
+        const closes = after.startsWith('}') ? 1 : 0, opening = /\\begin\{[^}]*$/.test(before);
+        return { suggestions: ENVIRONMENTS.map(([name, body]) => ({ label: name, kind: K.Struct, detail: opening ? `\\begin{${name}} … \\end{${name}}` : 'Environment',
+          insertText: opening ? `${name}}\n${body}\n\\end{${name}}` : `${name}}`, insertTextRules: snippet, range: range(start, closes) })) };
+      }
+      if (ctx.kind === 'ref') return { suggestions: collectLabels(files).map(l => ({ label: l.label, kind: K.Reference, detail: `${l.file}:${l.line}`, insertText: l.label, range: range() })) };
+      if (ctx.kind === 'cite') return { suggestions: collectCitations(files).map(c => ({ label: c.key, kind: K.Value, detail: c.detail, insertText: c.key, range: range() })) };
+      return { suggestions: projectPaths(files, ctx.kind).map(p => ({ label: p, kind: K.File, insertText: p, range: range() })) };
     },
   });
 

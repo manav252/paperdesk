@@ -3,7 +3,8 @@ import { createRoot } from 'react-dom/client';
 import Editor, { type OnMount } from '@monaco-editor/react';
 import { FileText, FolderOpen, Folder, Search, Plus, MoreHorizontal, ChevronDown, ChevronRight, ChevronLeft, Settings, HelpCircle, CloudOff, TriangleAlert, Upload, FolderPlus, FilePlus2, Image as ImageIcon, FileCode2, File, BookOpen, Play, Download, Share2, Undo2, Redo2, Bold, Italic, Underline, List, ListOrdered, Table2, Sigma, Quote, Link2, Columns2, Maximize2, Minimize2, Square, Star, ZoomIn, ZoomOut, RefreshCw, CircleCheck, Cloud, X, Copy, Trash2, Pencil, Check, AlertCircle, FileArchive, Menu, Keyboard, Sun, Moon, Monitor, Home, ScrollText, Info, PanelLeft, Code2, Sparkles, Compass, } from 'lucide-react';
 import { useTheme, type ThemePref } from './theme';
-import { setupMonaco } from './monacoSetup';
+import { setCompletionFiles, setupMonaco } from './monacoSetup';
+import { outlineOf } from './lib/outline';
 import { arrayBufferToBase64, buildTree, defaultFile, isBinary, isEditable, isImage, mergeProjects, mimeType, normalizeProject, relative, tabFiles, type Project, type ProjectFile, type TreeNode } from './lib/project';
 import type { LogEntry } from './lib/latexLog';
 import { diffLines } from './lib/diff';
@@ -67,10 +68,10 @@ const seed:Project[]=[{id:'p1',name:'Research Paper — Quantum Computing',modif
 const initial=()=>{try{const s=localStorage.getItem('paperdesk-projects');return s?(JSON.parse(s) as Project[]).map(p=>normalizeProject(p,'storage')):seed}catch{return seed}};
 
 type Layout='split'|'editor'|'pdf';
-type LayoutPrefs={layout:Layout,sidebar:boolean,sidebarWidth:number,previewPct:number,assistant:boolean};
+type LayoutPrefs={layout:Layout,sidebar:boolean,sidebarWidth:number,previewPct:number,assistant:boolean,wrap:boolean,outline:boolean};
 const LAYOUT_KEY='paperdesk-layout';
 const NARROW='(max-width: 860px)';
-const readLayout=():LayoutPrefs=>{const base:LayoutPrefs={layout:'split',sidebar:true,sidebarWidth:232,previewPct:46,assistant:false};try{return{...base,...JSON.parse(localStorage.getItem(LAYOUT_KEY)??'{}')}}catch{return base}};
+const readLayout=():LayoutPrefs=>{const base:LayoutPrefs={layout:'split',sidebar:true,sidebarWidth:232,previewPct:46,assistant:false,wrap:true,outline:true};try{return{...base,...JSON.parse(localStorage.getItem(LAYOUT_KEY)??'{}')}}catch{return base}};
 
 type Tone='info'|'success'|'error';
 type Toast={text:string,tone:Tone};
@@ -112,6 +113,8 @@ function App(){
  const assistant=useAssistant(()=>setHealth(h=>h?{...h,assistant:{model:h.assistant?.model??'',configured:false}}:h));
  const project=projects.find(p=>p.id===projectId)??projects[0]; const currentFile=project?.files.find(f=>f.name===fileName)??project?.files[0]; const content=currentFile?.content??'';
  const contentRef=useRef(content);
+ const projectRef=useRef(project);projectRef.current=project;
+ useEffect(()=>setCompletionFiles(()=>projectRef.current?.files??[]),[]);
  // The selected id can point at a project that no longer exists (the default "p1" after a merge or delete); follow the project actually shown.
  useEffect(()=>{if(project&&project.id!==projectId)setProjectId(project.id)},[project?.id,projectId]);
  useEffect(()=>{contentRef.current=content},[projectId,fileName]);
@@ -369,7 +372,7 @@ function App(){
   {label:'File',items:[{label:'New file',icon:<FilePlus2 size={14}/>,run:()=>addFile()},{label:'New folder',icon:<FolderPlus size={14}/>,run:()=>addFile(true)},{label:'Upload files',icon:<Upload size={14}/>,run:()=>fileInput.current?.click()},'sep',{label:'Project history',icon:<ScrollText size={14}/>,run:()=>setModal('history')},{label:'Download project',icon:<FileArchive size={14}/>,run:downloadProject},{label:'Download PDF',icon:<Download size={14}/>,run:downloadPdf,disabled:!pdfUrl},'sep',{label:'Compile',icon:<Play size={14}/>,shortcut:`${mod}↵`,run:()=>void compile()},'sep',{label:'Back to projects',icon:<Home size={14}/>,run:()=>setActiveTab('dashboard')}]},
   {label:'Edit',items:[{label:'Undo',shortcut:`${mod}Z`,run:()=>editorRef.current?.trigger('keyboard','undo',null)},{label:'Redo',shortcut:isMac?'⇧⌘Z':'Ctrl+Y',run:()=>editorRef.current?.trigger('keyboard','redo',null)},'sep',{label:'Find',shortcut:`${mod}F`,run:()=>edAction('actions.find')},{label:'Find and replace',shortcut:isMac?'⌥⌘F':'Ctrl+H',run:()=>edAction('editor.action.startFindReplaceAction')},'sep',{label:'Select all',shortcut:`${mod}A`,run:()=>edAction('editor.action.selectAll')},{label:`Review changes${project.changes?.length?` (${project.changes.length})`:''}`,icon:<ScrollText size={14}/>,run:()=>setModal('changes')},{label:'Comments',icon:<ScrollText size={14}/>,run:()=>setModal('comments')}]},
   {label:'Insert',items:[{label:'Section',run:()=>insert('\n\\section{Section title}\n')},{label:'Subsection',run:()=>insert('\n\\subsection{Subsection title}\n')},{label:'Equation',run:()=>insert('\n\\begin{equation}\n  \n\\end{equation}\n')},{label:'Figure',run:()=>insert('\n\\begin{figure}[ht]\n  \\centering\n  \\includegraphics[width=0.8\\linewidth]{image.png}\n  \\caption{Caption}\n\\end{figure}\n')},{label:'Table',run:()=>insert('\n\\begin{table}[ht]\n  \\centering\n  \\begin{tabular}{cc}\n    A & B \\\\\n    1 & 2 \\\\\n  \\end{tabular}\n  \\caption{Caption}\n\\end{table}\n')},{label:'Bulleted list',run:()=>insert('\\begin{itemize}\n  \\item Item\n\\end{itemize}')},{label:'Citation',run:()=>wrap('\\cite{','}')}]},
-  {label:'View',items:[...(narrow?[]:[{label:'Editor & PDF',checked:prefs.layout==='split',run:()=>setPref('layout','split')}]),{label:'Editor only',checked:prefs.layout==='editor'||(narrow&&layout==='editor'),run:()=>setPref('layout','editor')},{label:'PDF only',checked:layout==='pdf',run:()=>setPref('layout','pdf')},'sep',{label:'File tree',checked:sidebarOpen,run:()=>setSidebar(!sidebarOpen)},'sep',...themeOptions.map(o=>({label:`${o.label} theme`,icon:o.icon,checked:theme.pref===o.value,run:()=>theme.setPref(o.value)}))]},
+  {label:'View',items:[...(narrow?[]:[{label:'Editor & PDF',checked:prefs.layout==='split',run:()=>setPref('layout','split')}]),{label:'Editor only',checked:prefs.layout==='editor'||(narrow&&layout==='editor'),run:()=>setPref('layout','editor')},{label:'PDF only',checked:layout==='pdf',run:()=>setPref('layout','pdf')},'sep',{label:'File tree',checked:sidebarOpen,run:()=>setSidebar(!sidebarOpen)},{label:'File outline',checked:prefs.outline,run:()=>setPref('outline',!prefs.outline)},{label:'Word wrap',checked:prefs.wrap,run:()=>setPref('wrap',!prefs.wrap)},'sep',...themeOptions.map(o=>({label:`${o.label} theme`,icon:o.icon,checked:theme.pref===o.value,run:()=>theme.setPref(o.value)}))]},
   {label:'Help',items:[{label:'Ask the assistant',icon:<Sparkles size={14}/>,run:()=>setAssistantOpen(true)},{label:'Take the tour',icon:<Compass size={14}/>,run:()=>setTour(true)},'sep',{label:'Keyboard shortcuts',icon:<Keyboard size={14}/>,run:()=>setModal('shortcuts')},{label:'Project settings',icon:<Settings size={14}/>,run:()=>setModal('settings')},{label:'About PaperDesk',icon:<Info size={14}/>,run:()=>notify('PaperDesk is an independent LaTeX editor.')}]},
  ]:[];
 
@@ -419,6 +422,7 @@ function App(){
      <TreeLevel nodes={buildTree(project.files)} depth={0} selected={currentFile?.name??''} collapsed={collapsed} act={{mainFile:project.mainFile??'main.tex',dropTarget,dropProps,onToggle:p=>setCollapsed(c=>{const n=new Set(c);if(n.has(p))n.delete(p);else n.add(p);return n}),onOpen:f=>{setFileName(f.name);if(narrow)setDrawer(false);if(layout==='pdf')setPref('layout',narrow?'editor':'split')},onRename:renameFile,onDelete:deleteFile,onUpload:uploadTo,onSetMain:setMainDocument}}/>
      <p className="drop-hint">Drop files or folders here to upload</p>
     </div>
+    {prefs.outline&&editableFile&&/\.tex$/i.test(editableFile.name)&&<Outline content={editableFile.content} cursorLine={cursor.line} onJump={line=>jumpTo(editableFile.name,line)}/>}
     <div className="side-bottom"><button onClick={downloadProject}><FileArchive size={15}/> Download project</button><button onClick={()=>setModal('settings')}><Settings size={15}/> Project settings</button></div>
     <input ref={fileInput} className="hidden" type="file" multiple accept=".tex,.bib,.bst,.sty,.cls,.png,.jpg,.jpeg,.pdf,.svg,.eps,.csv,.txt,.dat,.zip" onChange={e=>uploadFiles(e.target.files)}/><input ref={folderInput} className="hidden" type="file" multiple aria-label="Upload into folder" onChange={e=>uploadFiles(e.target.files,uploadFolder.current)}/><input ref={zipInput} className="hidden" type="file" accept=".zip" onChange={e=>uploadFiles(e.target.files)}/>
    </aside>
@@ -439,7 +443,7 @@ function App(){
     <div className="editor-canvas">
      {currentFile&&!isEditable(currentFile)&&!currentFile.name.endsWith('/')?<div className="binary-file">{isImage(currentFile.name)&&currentFile.content?<img src={`data:${mimeType(currentFile.name)};base64,${currentFile.content}`} alt={currentFile.name}/>:<ImageIcon size={26}/>}<strong>{currentFile.name}</strong><p>{currentFile.content?`${formatBytes(Math.floor(currentFile.content.length*3/4))} · ${isBinary(currentFile.name)?'binary files':'files that aren’t UTF-8 text'} can’t be edited here; they’re included when the project compiles.`:'This file’s contents aren’t available in this browser. Re-upload it to include it in compiles.'}</p></div>
      :monacoState!=='ready'?<div className="pane-loading">{monacoState==='failed'?<><AlertCircle size={15}/> The editor couldn’t load. Reload the page to try again.</>:<><Spinner/> Loading editor…</>}</div>
-     :<Editor height="100%" path={`${project.id}/${currentFile?.name??fileName}`} language={(currentFile?.name??fileName).endsWith('.bib')?'bibtex':'latex'} theme={theme.resolved==='dark'?'paperdesk-dark':'paperdesk-light'} beforeMount={setupMonaco} loading={<div className="pane-loading"><Spinner/> Loading editor…</div>} value={content} onChange={v=>setContent(v??'')} onMount={onMount} options={{fontFamily:"'DM Mono', ui-monospace, monospace",fontSize:13.5,lineHeight:22,minimap:{enabled:false},padding:{top:14,bottom:24},automaticLayout:true,wordWrap:'on',scrollBeyondLastLine:false,renderLineHighlight:'line',lineNumbers:'on',bracketPairColorization:{enabled:true},autoClosingBrackets:'always',autoClosingQuotes:'always',tabSize:2,folding:true,contextmenu:true,smoothScrolling:true,scrollbar:{verticalScrollbarSize:10,horizontalScrollbarSize:10}}}/>}
+     :<Editor height="100%" path={`${project.id}/${currentFile?.name??fileName}`} language={(currentFile?.name??fileName).endsWith('.bib')?'bibtex':'latex'} theme={theme.resolved==='dark'?'paperdesk-dark':'paperdesk-light'} beforeMount={setupMonaco} loading={<div className="pane-loading"><Spinner/> Loading editor…</div>} value={content} onChange={v=>setContent(v??'')} onMount={onMount} options={{fontFamily:"'DM Mono', ui-monospace, monospace",fontSize:13.5,lineHeight:22,minimap:{enabled:false},padding:{top:14,bottom:24},automaticLayout:true,wordWrap:prefs.wrap?'on':'off',scrollBeyondLastLine:false,renderLineHighlight:'line',lineNumbers:'on',bracketPairColorization:{enabled:true},autoClosingBrackets:'always',autoClosingQuotes:'always',tabSize:2,folding:true,contextmenu:true,smoothScrolling:true,scrollbar:{verticalScrollbarSize:10,horizontalScrollbarSize:10}}}/>}
     </div>
     <div className="status-bar"><span className="status-save"><span className={saveState==='Saved'?'status-dot ok':'status-dot busy'}/> {saveState}</span>{currentFile&&isEditable(currentFile)?<><span>Ln {cursor.line}, Col {cursor.col}</span><span className="hide-sm">Spaces: 2</span><span className="hide-sm">UTF-8</span><span>{currentFile.name.endsWith('.bib')?'BibTeX':'LaTeX'}</span></>:<span>{currentFile?.encoding==='base64'&&!isBinary(currentFile.name)?'Read-only (not UTF-8)':'Binary file'}</span>}<button onClick={()=>setModal('shortcuts')}><Keyboard size={13}/> <span className="hide-sm">Shortcuts</span></button></div>
    </main>}
@@ -606,6 +610,17 @@ function TreeLevel({nodes,depth,selected,collapsed,act}:{nodes:TreeNode[],depth:
   </div>
   {n.folder&&open&&(n.children.length?<TreeLevel nodes={n.children} depth={depth+1} selected={selected} collapsed={collapsed} act={act}/>:<div className="file-row empty-folder" style={{paddingLeft:30+depth*14}}>Empty folder · drop files here</div>)}
  </div>})}</>;
+}
+
+/** Overleaf-style file outline: the open file's sectioning commands; click one to jump to it. */
+function Outline({content,cursorLine,onJump}:{content:string,cursorLine:number,onJump:(line:number)=>void}){
+ const items=useMemo(()=>outlineOf(content),[content]);
+ const [open,setOpen]=useState(true);
+ const current=[...items].reverse().find(i=>i.line<=cursorLine)?.line;
+ return <div className="outline" aria-label="File outline">
+  <button className="outline-head" aria-expanded={open} onClick={()=>setOpen(!open)}>{open?<ChevronDown size={13}/>:<ChevronRight size={13}/>}<span className="pane-title">File outline</span></button>
+  {open&&(items.length?<ul>{items.map(i=><li key={i.line}><button className={i.line===current?'current':''} style={{paddingLeft:10+i.level*12}} title={`Line ${i.line}`} onClick={()=>onJump(i.line)}>{i.title}</button></li>)}</ul>:<p className="outline-empty">Sections you add with {"\\section"} appear here.</p>)}
+ </div>;
 }
 
 function fileIcon(f:ProjectFile){return f.name.endsWith('.tex')?<FileCode2 size={15} className="fi fi-tex"/>:f.name.endsWith('.bib')?<BookOpen size={15} className="fi fi-bib"/>:f.name.endsWith('/')?<FolderOpen size={15}/>:isBinary(f.name)?<ImageIcon size={15} className="fi fi-img"/>:<File size={15} className="fi"/>}

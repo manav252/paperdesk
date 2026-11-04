@@ -116,6 +116,29 @@ test('template project supports ZIP import/export and PDF download', async ({ pa
   expect(zipDownload.suggestedFilename()).toMatch(/\.zip$/);
 });
 
+test('PDF text selection jumps to source and source sync highlights the PDF position', async ({ page }) => {
+  await openTemplate(page, 'Article');
+  await compileAndViewPdf(page);
+  if (test.info().project.name.startsWith('phone')) await page.getByRole('radio', { name: 'Editor' }).click();
+  await page.getByRole('button', { name: 'Sync source to PDF' }).click();
+  if (test.info().project.name.startsWith('phone')) await page.getByRole('radio', { name: 'PDF' }).click();
+  await expect(page.locator('.synctex-pdf-highlight')).toBeVisible();
+
+  const text = page.locator('.textLayer span').filter({ hasText: /PaperDesk browser PDF/ }).first();
+  await expect(text).toBeVisible();
+  await text.evaluate(element => {
+    const range = document.createRange();
+    range.selectNodeContents(element);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    element.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+  });
+  await expect.poll(() => syncModesByPage.get(page)).toContain('inverse');
+  if (test.info().project.name.startsWith('phone')) await page.getByRole('radio', { name: 'Editor' }).click();
+  await expect(page.locator('.status-bar')).toContainText('Ln 3');
+});
+
 test('theme can be switched and the phone layout keeps editor and PDF controls usable', async ({ page }) => {
   await openTemplate(page, 'Article');
   const initialTheme = await page.locator('html').getAttribute('data-theme');

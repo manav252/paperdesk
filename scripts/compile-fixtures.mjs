@@ -99,12 +99,13 @@ try {
         if ((expect.bibtex || expect.bibliography === 'bibtex') && !/BibTeX|bibtex/i.test(body.log)) problems.push('BibTeX did not run');
         if (expect.bibliography === 'biber' && !/biber/i.test(body.log)) problems.push('Biber did not run');
         if ((expect.bibtex || expect.bibliography) && body.warnings.some(w => /undefined|Citation/.test(w.message) && /cit/i.test(w.message))) problems.push('undefined citations');
-        if (name === 'article' && engine === 'pdflatex') {
-          const forward = await json(`${API}/projects/${id}/synctex`, { method: 'POST', body: JSON.stringify({ mode: 'forward', mainFile: 'main.tex', file: 'main.tex', line: 13, column: 1 }) });
+        if ((expect.sync || name === 'article') && engine === 'pdflatex') {
+          const source = expect.sync ?? { file: 'main.tex', line: 13 };
+          const forward = await json(`${API}/projects/${id}/synctex`, { method: 'POST', body: JSON.stringify({ mode: 'forward', mainFile: 'main.tex', file: source.file, line: source.line, column: 1 }) });
           if (forward.status !== 200 || !forward.body?.found) problems.push(`SyncTeX source-to-PDF lookup failed: ${forward.body?.error ?? 'no position'}`);
           else {
             const inverse = await json(`${API}/projects/${id}/synctex`, { method: 'POST', body: JSON.stringify({ mode: 'inverse', mainFile: 'main.tex', page: forward.body.page, x: forward.body.x, y: forward.body.y }) });
-            if (inverse.status !== 200 || !inverse.body?.found || inverse.body.file !== 'main.tex' || inverse.body.line !== 13) problems.push(`SyncTeX PDF-to-source lookup failed: ${JSON.stringify(inverse.body)}`);
+            if (inverse.status !== 200 || !inverse.body?.found || inverse.body.file !== source.file || inverse.body.line !== source.line) problems.push(`SyncTeX PDF-to-source lookup failed: ${JSON.stringify(inverse.body)}`);
           }
         }
       } else {

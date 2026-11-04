@@ -1,0 +1,7 @@
+{
+  "engines": ["pdflatex", "xelatex", "lualatex"],
+  "success": true,
+  "minPages": 1,
+  "contains": ["SyncTeX integration fixture", "Paragraphs, equations, tables and figures", "Measured value"],
+  "sync": { "file": "chapters/observations.tex", "line": 3 }
+}

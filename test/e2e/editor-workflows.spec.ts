@@ -87,7 +87,8 @@ for (const template of templates) {
     await page.getByRole('button', { name: 'Sync source to PDF' }).click();
     const pdfPage = page.locator('canvas[aria-label="PDF page 1"]');
     await expect(pdfPage).not.toHaveClass(/is-loading/);
-    await pdfPage.click();
+    // Like Overleaf, a double-click on the PDF jumps to the source; a single click is for reading.
+    await pdfPage.dblclick();
     if (test.info().project.name.startsWith('phone')) {
       await expect.poll(() => syncModesByPage.get(page)).toContain('inverse');
       await page.getByRole('radio', { name: 'Editor' }).click();

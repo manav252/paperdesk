@@ -349,10 +349,14 @@ body.is-resizing .editor-canvas, body.is-resizing .pdf-workspace { pointer-event
 .banner-link { border: 0; background: none; color: inherit; font-weight: 600; text-decoration: underline; text-underline-offset: 2px; padding: 0; font-size: 12.5px; white-space: nowrap; }
 .banner-close { border: 0; background: none; color: inherit; opacity: .7; padding: 1px; display: grid; place-items: center; border-radius: 3px; }
 .banner-close:hover { opacity: 1; background: rgba(0, 0, 0, .06); }
-.pdf-workspace { min-height: 0; flex: 1; overflow: auto; display: flex; flex-direction: column; position: relative; }
-.pdf-scroll { flex: 1; display: flex; justify-content: center; align-items: flex-start; padding: 20px 20px 72px; position: relative; min-width: min-content; }
-.pdf-scroll canvas { box-shadow: 0 2px 14px rgba(0, 0, 0, .18); background: #fff; transition: opacity .15s; }
-.pdf-scroll canvas.is-loading { opacity: .55; }
+.pdf-workspace { min-height: 0; flex: 1; overflow: hidden; display: flex; flex-direction: column; position: relative; }
+.pdf-scroll { flex: 1; min-height: 0; overflow: auto; padding: 20px 20px 72px; position: relative; overflow-anchor: none; }
+.pdf-pages { display: flex; flex-direction: column; align-items: center; min-width: min-content; }
+.pdf-page { position: relative; flex: none; background: #fff; box-shadow: 0 2px 14px rgba(0, 0, 0, .18); }
+.pdf-page canvas { display: block; width: 100%; height: 100%; transition: opacity .15s; }
+.pdf-page canvas.is-loading { opacity: 0; }
+.sync-marker { position: absolute; width: 12px; height: 12px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 30%, transparent); pointer-events: none; animation: sync-pulse 1.6s ease-out 2; }
+@keyframes sync-pulse { 0% { transform: scale(.6); opacity: 1; } 100% { transform: scale(1.6); opacity: .2; } }
 .pdf-error { margin: 40px auto; max-width: 340px; color: var(--danger-text); background: var(--danger-soft); border-radius: var(--radius); padding: 12px 14px; display: flex; align-items: flex-start; gap: 9px; font-size: 13px; line-height: 1.45; }
 .pdf-error svg { flex: none; margin-top: 1px; }
 .pdf-empty { display: flex; flex-direction: column; align-items: center; text-align: center; margin: auto; padding: 24px; color: var(--text-3); max-width: 320px; animation: fade-up .25s var(--ease); }
@@ -361,7 +365,7 @@ body.is-resizing .editor-canvas, body.is-resizing .pdf-workspace { pointer-event
 .pdf-empty strong { font: 500 19px var(--serif); color: var(--text); }
 .pdf-empty p { font-size: 13px; line-height: 1.6; margin: 8px 0 18px; }
 .pdf-empty code { background: var(--surface-3); padding: 1px 5px; border-radius: 3px; color: var(--text-2); }
-.pdf-controls { position: sticky; bottom: 14px; align-self: center; margin-top: -56px; display: flex; align-items: center; gap: 2px; padding: 4px 6px; background: var(--surface); border: 1px solid var(--border); border-radius: 999px; box-shadow: var(--shadow-md); color: var(--text-3); font-size: 12.5px; z-index: 3; }
+.pdf-controls { position: absolute; bottom: 14px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 2px; padding: 4px 6px; background: var(--surface); border: 1px solid var(--border); border-radius: 999px; box-shadow: var(--shadow-md); color: var(--text-3); font-size: 12.5px; z-index: 3; }
 .pdf-controls button { height: 28px; width: 28px; border: 0; background: none; color: var(--text-2); display: grid; place-items: center; border-radius: 50%; transition: background-color .12s; }
 .pdf-controls button:hover:not(:disabled), .pdf-controls button.on { background: var(--hover); color: var(--text); }
 .pdf-controls strong { font-weight: 600; color: var(--text); }
@@ -564,3 +568,4 @@ body.is-resizing .editor-canvas, body.is-resizing .pdf-workspace { pointer-event
 @media (max-width: 480px) {
   .editor-header .segmented button span { display: none; }
 }
+

@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import Editor, { type OnMount } from '@monaco-editor/react';
-import { FileText, FolderOpen, Folder, Search, Plus, MoreHorizontal, ChevronDown, ChevronRight, ChevronLeft, Settings, HelpCircle, CloudOff, TriangleAlert, Bell, Upload, FolderPlus, FilePlus2, Image as ImageIcon, FileCode2, File, BookOpen, Play, Download, Share2, Undo2, Redo2, Bold, Italic, Underline, List, ListOrdered, Table2, Sigma, Quote, Link2, Columns2, Maximize2, ZoomIn, ZoomOut, RefreshCw, CircleCheck, Cloud, X, Copy, Trash2, Pencil, Check, AlertCircle, FileArchive, Menu, Keyboard, Sun, Moon, Monitor, Home, ScrollText, Info, PanelLeft, Code2, Sparkles, Compass, } from 'lucide-react';
+import { FileText, FolderOpen, Folder, Search, Plus, MoreHorizontal, ChevronDown, ChevronRight, ChevronLeft, Settings, HelpCircle, CloudOff, TriangleAlert, Bell, Upload, FolderPlus, FilePlus2, Image as ImageIcon, FileCode2, File, BookOpen, Play, Download, Share2, Undo2, Redo2, Bold, Italic, Underline, List, ListOrdered, Table2, Sigma, Quote, Link2, Columns2, Maximize2, Minimize2, Square, ZoomIn, ZoomOut, RefreshCw, CircleCheck, Cloud, X, Copy, Trash2, Pencil, Check, AlertCircle, FileArchive, Menu, Keyboard, Sun, Moon, Monitor, Home, ScrollText, Info, PanelLeft, Code2, Sparkles, Compass, } from 'lucide-react';
 import { useTheme, type ThemePref } from './theme';
 import { setupMonaco } from './monacoSetup';
 import { arrayBufferToBase64, buildTree, defaultFile, isBinary, isEditable, isImage, mergeProjects, mimeType, normalizeProject, relative, tabFiles, type Project, type ProjectFile, type TreeNode } from './lib/project';
@@ -13,6 +13,8 @@ import { applyFix, clipSelection, fixStillApplies, logContext, numberedFile, typ
 import { AssistantPanel, ExplainButton, QUICK_PROMPTS, useAssistant, type AssistantStatus } from './Assistant';
 import { Tour, TOUR_KEY, type TourStep } from './Tour';
 import { apiUrl, fetchWithWake, ownerHeaders, projectOwnerId } from './lib/api';
+import { base64ToBytes, compileFiles, type SyncState } from './lib/compileSync';
+import { PdfViewer, type Zoom } from './PdfViewer';
 import './style.css';
 
 const starter=`\\documentclass[12pt,a4paper]{article}
@@ -80,7 +82,6 @@ const readFlag=(key:string)=>{try{return localStorage.getItem(key)}catch{return 
 const writeFlag=(key:string,value:string)=>{try{localStorage.setItem(key,value)}catch{/* storage unavailable: lasts for this visit */}};
 type Dialog={title:string,message?:ReactNode,label?:string,initial?:string,placeholder?:string,confirmLabel:string,danger?:boolean,onConfirm:(value:string)=>string|void};
 type MenuItem={label:string,run:()=>void,shortcut?:string,icon?:ReactNode,checked?:boolean,danger?:boolean,disabled?:boolean}|'sep';
-type Zoom=number|'fit';
 
 const themeOptions:{value:ThemePref,label:string,hint:string,icon:ReactNode}[]=[
  {value:'light',label:'Light',hint:'Always light',icon:<Sun size={15}/>},
@@ -101,9 +102,10 @@ function useMediaQuery(q:string){const [m,setM]=useState(()=>window.matchMedia(q
 
 function App(){
  const theme=useTheme();
- const [projects,setProjects]=useState<Project[]>(initial),[projectId,setProjectId]=useState('p1'),[fileName,setFileName]=useState('main.tex'),[activeTab,setActiveTab]=useState('editor'),[compile_,setCompileState]=useState<CompileState>({status:'idle',message:''}),[pdfUrl,setPdfUrl]=useState(''),[page,setPage]=useState(1),[pageTotal,setPageTotal]=useState(0),[zoom,setZoom]=useState<Zoom>('fit'),[saveState,setSaveState]=useState('Saved'),[query,setQuery]=useState(''),[sortBy,setSortBy]=useState<'modified'|'name'>('modified'),[openMenu,setOpenMenu]=useState(''),[modal,setModal]=useState(''),[dialog,setDialog]=useState<Dialog|null>(null),[toast,setToast]=useState<Toast|null>(null),[engine,setEngine]=useState('pdflatex'),[compilePrefs,setCompilePrefs]=useState<CompilePrefs>(()=>{try{return{autoCompile:false,stopOnFirstError:true,draft:false,timeout:120,trackChanges:false,...JSON.parse(localStorage.getItem('paperdesk-compile-prefs')??'{}')}}catch{return{autoCompile:false,stopOnFirstError:true,draft:false,timeout:120,trackChanges:false}}}),[rawLogs,setRawLogs]=useState(false),[cursor,setCursor]=useState({line:1,col:1}),[result,setResult]=useState<CompileResult|null>(null),[logState,setLogState]=useState<{loading:boolean,error?:string}>({loading:false}),[apiOnline,setApiOnline]=useState<boolean|null>(null),[health,setHealth]=useState<Health|null>(null),[editorReady,setEditorReady]=useState(false),[collapsed,setCollapsed]=useState<Set<string>>(new Set()),[prefs,setPrefs]=useState<LayoutPrefs>(readLayout),[drawer,setDrawer]=useState(false),[selectionChars,setSelectionChars]=useState(0),[shareContext,setShareContext]=useState(()=>readFlag(SHARE_KEY)!=='off'),[fixReview,setFixReview]=useState<LineFix|null>(null),[tour,setTour]=useState(false),[narrowAssistant,setNarrowAssistant]=useState(false);
- const [syncPoint,setSyncPoint]=useState<{page:number,x:number,y:number}|null>(null);
- const editorRef=useRef<any>(null),fileInput=useRef<HTMLInputElement>(null),zipInput=useRef<HTMLInputElement>(null),saveTimer=useRef<number>(),workRef=useRef<HTMLDivElement>(null),searchRef=useRef<HTMLInputElement>(null),compileRef=useRef<()=>void>(()=>{}),scaleRef=useRef(100),monacoRef=useRef<any>(null),pendingJump=useRef<{file:string,line:number}|null>(null),lastEdit=useRef({file:'',content:''}),storageWarned=useRef(false);
+ const [projects,setProjects]=useState<Project[]>(initial),[projectId,setProjectId]=useState('p1'),[fileName,setFileName]=useState('main.tex'),[activeTab,setActiveTab]=useState('editor'),[compile_,setCompileState]=useState<CompileState>({status:'idle',message:''}),[pdfUrl,setPdfUrl]=useState(''),[page,setPage]=useState(1),[pageTotal,setPageTotal]=useState(0),[zoom,setZoom]=useState<Zoom>('fit'),[saveState,setSaveState]=useState('Saved'),[query,setQuery]=useState(''),[sortBy,setSortBy]=useState<'modified'|'name'>('modified'),[openMenu,setOpenMenu]=useState(''),[modal,setModal]=useState(''),[dialog,setDialog]=useState<Dialog|null>(null),[toast,setToast]=useState<Toast|null>(null),[engine,setEngine]=useState('pdflatex'),[compilePrefs,setCompilePrefs]=useState<CompilePrefs>(()=>{try{return{autoCompile:true,stopOnFirstError:true,draft:false,timeout:120,trackChanges:false,...JSON.parse(localStorage.getItem('paperdesk-compile-prefs')??'{}')}}catch{return{autoCompile:true,stopOnFirstError:true,draft:false,timeout:120,trackChanges:false}}}),[rawLogs,setRawLogs]=useState(false),[cursor,setCursor]=useState({line:1,col:1}),[result,setResult]=useState<CompileResult|null>(null),[logState,setLogState]=useState<{loading:boolean,error?:string}>({loading:false}),[apiOnline,setApiOnline]=useState<boolean|null>(null),[health,setHealth]=useState<Health|null>(null),[editorReady,setEditorReady]=useState(false),[collapsed,setCollapsed]=useState<Set<string>>(new Set()),[prefs,setPrefs]=useState<LayoutPrefs>(readLayout),[drawer,setDrawer]=useState(false),[selectionChars,setSelectionChars]=useState(0),[shareContext,setShareContext]=useState(()=>readFlag(SHARE_KEY)!=='off'),[fixReview,setFixReview]=useState<LineFix|null>(null),[tour,setTour]=useState(false),[narrowAssistant,setNarrowAssistant]=useState(false);
+ const [syncPoint,setSyncPoint]=useState<{page:number,x:number,y:number}|null>(null),[pdfData,setPdfData]=useState<Uint8Array|null>(null),[nav,setNav]=useState({page:1,n:0});
+ const compileAbort=useRef<AbortController|null>(null),syncState=useRef<SyncState|null>(null);
+ const editorRef=useRef<any>(null),fileInput=useRef<HTMLInputElement>(null),zipInput=useRef<HTMLInputElement>(null),saveTimer=useRef<number>(),workRef=useRef<HTMLDivElement>(null),searchRef=useRef<HTMLInputElement>(null),compileRef=useRef<(options?:{auto?:boolean})=>void>(()=>{}),scaleRef=useRef(100),monacoRef=useRef<any>(null),pendingJump=useRef<{file:string,line:number}|null>(null),lastEdit=useRef({file:'',content:''}),storageWarned=useRef(false);
  const monacoState=useMonacoLoad();
  const narrow=useMediaQuery(NARROW),compact=useMediaQuery('(max-width: 640px)');
  const assistant=useAssistant(()=>setHealth(h=>h?{...h,assistant:{model:h.assistant?.model??'',configured:false}}:h));
@@ -140,8 +142,7 @@ function App(){
  useEffect(()=>{const name=currentFile?.name??'';const prev=lastEdit.current;lastEdit.current={file:name,content};if(prev.file!==name)return;window.clearTimeout(saveTimer.current);setSaveState('Saving…');saveTimer.current=window.setTimeout(()=>{setSaveState('Saved');update(p=>({...p,modified:Date.now()}))},650);return()=>window.clearTimeout(saveTimer.current)},[content,currentFile?.name]);
  useEffect(()=>{if(toast){const t=window.setTimeout(()=>setToast(null),toast.tone==='error'?6000:2800);return()=>window.clearTimeout(t)}},[toast]);
  useEffect(()=>{if(compile_.status==='success'){const t=window.setTimeout(()=>setCompileState(s=>s.status==='success'?{status:'idle',message:''}:s),4000);return()=>window.clearTimeout(t)}},[compile_]);
- useEffect(()=>{if(pageTotal&&page>pageTotal)setPage(pageTotal)},[pageTotal]);
- useEffect(()=>{if(!compilePrefs.autoCompile||dashboard||!project)return;const t=window.setTimeout(()=>compileRef.current(),1800);return()=>window.clearTimeout(t)},[compilePrefs.autoCompile,project?.files,project?.mainFile,engine]);
+ useEffect(()=>{if(!compilePrefs.autoCompile||dashboard||!project)return;const t=window.setTimeout(()=>compileRef.current({auto:true}),1000);return()=>window.clearTimeout(t)},[compilePrefs.autoCompile,project?.files,project?.mainFile,engine]);
 
  // Close menus on outside click; Escape closes the topmost layer.
  useEffect(()=>{
@@ -150,7 +151,7 @@ function App(){
    if(e.key==='Escape'){if(openMenu)setOpenMenu('');else if(dialog)setDialog(null);else if(modal)setModal('');else if(narrow&&drawer)setDrawer(false);else if(narrow&&narrowAssistant)setNarrowAssistant(false)}
    const cmd=e.metaKey||e.ctrlKey;
    if(cmd&&e.key==='Enter'&&activeTab==='editor'){e.preventDefault();compileRef.current()}
-   if(cmd&&e.key.toLowerCase()==='s'){e.preventDefault();setSaveState('Saved');notify('All changes saved','success')}
+   if(cmd&&e.key.toLowerCase()==='s'){e.preventDefault();if(activeTab==='editor')compileRef.current();else notify('All changes saved','success')}
    if(cmd&&e.key.toLowerCase()==='k'&&activeTab!=='editor'){e.preventDefault();searchRef.current?.focus()}
   };
   document.addEventListener('mousedown',down);document.addEventListener('keydown',key);
@@ -161,40 +162,54 @@ function App(){
  const insert=(s:string)=>{const ed=editorRef.current;if(!ed){notify('Open a text file in the editor to insert LaTeX');return}ed.executeEdits('toolbar',[{range:ed.getSelection(),text:s,forceMoveMarkers:true}]);ed.focus()};
  const edAction=(id:string)=>{const ed=editorRef.current;if(!ed)return;ed.focus();const action=ed.getAction(id);if(action)action.run();else ed.trigger('keyboard',id,null)};
 
- const compile=async()=>{
-  if(compiling||!project)return;
-  const mainFile=project.mainFile??'main.tex';if(!project.files.some(f=>f.name===mainFile)){setCompileState({status:'error',message:`Main document ${mainFile} not found. Choose an existing .tex file in Project settings.`});return}
-  if(narrow&&layout==='editor')setPref('layout','pdf');
+ /** Compiles the open project. Starting a compile replaces one still running, like Overleaf's restart. */
+ const compile=async({auto=false}:{auto?:boolean}={})=>{
+  if(!project)return;
+  const target=project,mainFile=target.mainFile??'main.tex';
+  if(!target.files.some(f=>f.name===mainFile)){setCompileState({status:'error',message:`Main document ${mainFile} not found. Choose an existing .tex file in Project settings.`});return}
+  compileAbort.current?.abort();
+  const controller=new AbortController();compileAbort.current=controller;
+  // A compile you asked for shows the PDF on a phone; an automatic one leaves you in the editor.
+  if(!auto&&narrow&&layout==='editor')setPref('layout','pdf');
   setCompileState({status:'running',message:'Compiling…'});
+  const started=performance.now();
   try{
-   const r=await fetchWithWake(apiUrl(`/api/projects/${projectId}/compile`),{method:'POST',headers:{...json,...ownerHeaders()},body:JSON.stringify({name:project.name,files:project.files,settings:project.settings,versions:project.versions,comments:project.comments,changes:project.changes,engine,mainFile:project.mainFile??'main.tex',timeoutMs:compilePrefs.timeout*1000,draft:compilePrefs.draft,stopOnFirstError:compilePrefs.stopOnFirstError})},()=>setCompileState({status:'running',message:'Waking up the compile server…'}));
+   // Only changed files are uploaded; if the server restarted and lost its copy, it answers 409 and everything is sent once.
+   const send=async(full:boolean)=>{const payload=await compileFiles(target.id,target.files,full?null:syncState.current);const r=await fetchWithWake(apiUrl(`/api/projects/${target.id}/compile`),{method:'POST',signal:controller.signal,headers:{...json,...ownerHeaders()},body:JSON.stringify({name:target.name,files:payload.files,engine,mainFile,timeoutMs:compilePrefs.timeout*1000,draft:compilePrefs.draft,stopOnFirstError:compilePrefs.stopOnFirstError})},()=>setCompileState({status:'running',message:'Waking up the compile server…'}));return{r,payload}};
+   let {r,payload}=await send(false);
+   if(r.status===409)({r,payload}=await send(true));
    let data:any=null;try{data=await r.json()}catch{/* non-JSON body: the API is unreachable */}
+   if(controller.signal.aborted)return;
    if(!data)throw new Error(NETWORK_HELP);
    setApiOnline(true);
    if(!r.ok){setCompileState({status:'error',message:String(data.error??'Compilation failed')});if(r.status===503)fetch(apiUrl('/api/health')).then(h=>h.json()).then(setHealth).catch(()=>undefined);return}
+   syncState.current={session:String(data.session??''),project:target.id,hashes:payload.hashes};
    const res=data as CompileResult;setResult(res);
    if(res.success){
-    setPdfUrl(`${apiUrl(`/api/projects/${projectId}/pdf?t=${Date.now()}`)}&owner=${encodeURIComponent(projectOwnerId())}`);
+    setPdfData(typeof data.pdf==='string'?base64ToBytes(data.pdf):null);
+    setPdfUrl(`${apiUrl(`/api/projects/${target.id}/pdf?t=${Date.now()}`)}&owner=${encodeURIComponent(projectOwnerId())}`);
     const w=res.warnings.length;
-    setCompileState({status:'success',message:`Compiled in ${(res.durationMs/1000).toFixed(1)}s${w?` · ${w} warning${w>1?'s':''}`:''}`});
+    setCompileState({status:'success',message:`Compiled in ${((performance.now()-started)/1000).toFixed(1)}s${w?` · ${w} warning${w>1?'s':''}`:''}`});
    }else{
     const e=res.errors[0];
     setCompileState({status:'error',message:e?`${e.file?`${e.file}${e.line?`:${e.line}`:''} — `:''}${e.message}`:'Compilation failed',entry:e});
    }
   }catch(e){
+   if(controller.signal.aborted)return;
    const message=e instanceof TypeError?NETWORK_HELP:e instanceof Error?e.message:'Compilation failed';
    setApiOnline(false);setCompileState({status:'error',message});
-  }
+  }finally{if(compileAbort.current===controller)compileAbort.current=null}
  };
+ const stopCompile=()=>{compileAbort.current?.abort();compileAbort.current=null;setCompileState({status:'idle',message:''});notify('Compile stopped')};
  compileRef.current=compile;
 
  const askName=(title:string,label:string,initialValue:string,confirmLabel:string,onConfirm:(v:string)=>string|void,placeholder?:string)=>setDialog({title,label,initial:initialValue,confirmLabel,onConfirm,placeholder});
- const newProject=(name='Untitled Project')=>{const p={id:crypto.randomUUID(),name,modified:Date.now(),files:[{name:'main.tex',content:starter}]};setProjects(x=>[p,...x]);setProjectId(p.id);setFileName('main.tex');setPdfUrl('');setResult(null);setCompileState({status:'idle',message:''});setActiveTab('editor')};
+ const newProject=(name='Untitled Project')=>{const p={id:crypto.randomUUID(),name,modified:Date.now(),files:[{name:'main.tex',content:starter}]};setProjects(x=>[p,...x]);setProjectId(p.id);setFileName('main.tex');setPdfUrl('');setPdfData(null);setResult(null);setCompileState({status:'idle',message:''});setActiveTab('editor')};
  const promptNewProject=()=>askName('Create a new project','Project name','','Create project',v=>{if(!v.trim())return 'Enter a project name';newProject(v.trim())},'e.g. My research paper');
  const renameProject=(p:Project)=>{setOpenMenu('');askName('Rename project','Project name',p.name,'Save changes',v=>{if(!v.trim())return 'Enter a project name';setProjects(x=>x.map(q=>q.id===p.id?{...q,name:v.trim()}:q))})};
  const deleteProject=(p:Project)=>{setOpenMenu('');setDialog({title:'Delete project?',message:<>“{p.name}” and its {p.files.length} files will be deleted{p.id===projectId?' and you’ll return to your projects':''}. This can’t be undone.</>,confirmLabel:'Delete project',danger:true,onConfirm:()=>{const next=projects.filter(x=>x.id!==p.id);setProjects(next);apiFetch(`/api/projects/${p.id}`,{method:'DELETE'}).catch(()=>undefined);if(p.id===projectId){setProjectId(next[0]?.id??'');setActiveTab('dashboard')}notify('Project deleted')}})};
  const duplicate=(p:Project)=>{const cp={...p,id:crypto.randomUUID(),name:p.name+' copy',modified:Date.now(),files:p.files.map(f=>({...f}))};setProjects(x=>[cp,...x]);notify('Project duplicated','success');setOpenMenu('')};
- const openProject=(p:Project)=>{if(p.id!==projectId){setPdfUrl('');setResult(null);setCompileState({status:'idle',message:''})}setProjectId(p.id);setFileName(defaultFile(p.files));setActiveTab('editor')};
+ const openProject=(p:Project)=>{if(p.id!==projectId){setPdfUrl('');setPdfData(null);setResult(null);setCompileState({status:'idle',message:''})}setProjectId(p.id);setFileName(defaultFile(p.files));setActiveTab('editor')};
 
  const validName=(name:string,current?:string)=>{if(!name)return 'Enter a name';if(/(^|\/)\.\.(\/|$)/.test(name)||name.startsWith('/'))return 'Names can’t start with “/” or contain “..”';if(name!==current&&project.files.some(f=>f.name===name||f.name===name+'/'))return 'A file or folder with that name already exists'};
  const addFile=(folder=false)=>askName(folder?'New folder':'New file',folder?'Folder name':'File name (use “folder/name.tex” to place it in a folder)',folder?'figures':'notes.tex',folder?'Create folder':'Create file',input=>{const name=folder?input.trim().replace(/\/+$/,'')+'/':input.trim();const err=validName(name.replace(/\/$/,''))??validName(name);if(err)return err;update(p=>({...p,files:[...p.files,{name,content:folder?'':`% ${name}\n`}]}));if(!folder)setFileName(name);else setCollapsed(c=>{const n=new Set(c);n.delete(name);return n})});
@@ -216,7 +231,7 @@ function App(){
   if(fileInput.current)fileInput.current.value='';
  };
  const downloadProject=async()=>{try{const res=await apiFetch(`/api/projects/${projectId}/download`);if(!res.ok)throw 0;const blob=await res.blob();downloadBlob(blob,`${project.name}.zip`)}catch{const data=new Blob([JSON.stringify(project,null,2)],{type:'application/json'});downloadBlob(data,`${project.name.replaceAll(' ','-')}-project.json`);notify('Project downloaded as JSON (start the backend for ZIP export)')}};
- const downloadPdf=async()=>{if(!pdfUrl){notify('Compile the project to create a PDF');return}try{const response=await fetch(pdfUrl);if(!response.ok)throw new Error();downloadBlob(await response.blob(),`${project.name}.pdf`)}catch{notify('Could not download the compiled PDF.','error')}};
+ const downloadPdf=async()=>{if(!pdfUrl){notify('Compile the project to create a PDF');return}if(pdfData){downloadBlob(new Blob([pdfData],{type:'application/pdf'}),`${project.name}.pdf`);return}try{const response=await fetch(pdfUrl);if(!response.ok)throw new Error();downloadBlob(await response.blob(),`${project.name}.pdf`)}catch{notify('Could not download the compiled PDF.','error')}};
  const openLogs=async()=>{setModal('logs');if(result)return;setLogState({loading:true});try{const r=await apiFetch(`/api/projects/${projectId}/logs`);if(!r.ok)throw new Error();const d=await r.json();if(d.success!==null)setResult(d);setLogState({loading:false})}catch{setLogState({loading:false,error:NETWORK_HELP})}};
  const inProject=(file:string|null)=>!!file&&!!project?.files.some(f=>f.name===file);
  /** Opens a file at a line, switching file and layout as needed. Applied once the editor shows that file. */
@@ -234,7 +249,7 @@ function App(){
    const response=await apiFetch(`/api/projects/${projectId}/synctex`,{method:'POST',headers:json,body:JSON.stringify({mode:'forward',file:currentFile.name,line:position?.lineNumber??cursor.line,column:position?.column??cursor.col,mainFile:project.mainFile??'main.tex'})});
    const data=await response.json();if(!response.ok)throw new Error(data.error??'SyncTeX lookup failed.');
    if(!data.found){notify('No PDF position is available here. Recompile and try a line with printed text.');return}
-   setSyncPoint({page:data.page,x:data.x,y:data.y});setPage(data.page);if(narrow)setPref('layout','pdf');
+   setSyncPoint({page:data.page,x:data.x,y:data.y});if(narrow)setPref('layout','pdf');
   }catch(e){notify(e instanceof Error?e.message:'SyncTeX lookup failed.','error')}
  };
  const syncPdfToSource=async(syncPage:number,x:number,y:number)=>{
@@ -292,9 +307,10 @@ function App(){
   if(step.id==='editor'&&layout==='pdf')setPref('layout',narrow?'editor':'split');
   if((step.id==='compile'||step.id==='pdf'||step.id==='logs')&&!showPdf)setPref('layout',narrow?'pdf':'split');
  };
- const changeZoom=(delta:number)=>setZoom(z=>Math.min(300,Math.max(30,Math.round(((z==='fit'?scaleRef.current:z)+delta)/10)*10)));
+ const changeZoom=(delta:number)=>setZoom(z=>Math.min(300,Math.max(30,Math.round(((typeof z==='number'?z:scaleRef.current)+delta)/10)*10)));
+ const goToPage=(n:number)=>setNav(v=>({page:Math.max(1,Math.min(pageTotal||1,n)),n:v.n+1}));
 
- const onMount:OnMount=(editor,monaco)=>{editorRef.current=editor;monacoRef.current=monaco;setEditorReady(true);editor.addCommand(monaco.KeyMod.CtrlCmd|monaco.KeyCode.KeyS,()=>{setSaveState('Saved');notify('All changes saved','success')});editor.addCommand(monaco.KeyMod.CtrlCmd|monaco.KeyCode.Enter,()=>compileRef.current());editor.onDidChangeCursorPosition((e:any)=>setCursor({line:e.position.lineNumber,col:e.position.column}));editor.onDidChangeCursorSelection((e:any)=>{const model=editor.getModel();setSelectionChars(model&&!e.selection.isEmpty()?model.getValueLengthInRange(e.selection):0)});editor.onDidDispose(()=>{editorRef.current=null;setEditorReady(false)})};
+ const onMount:OnMount=(editor,monaco)=>{editorRef.current=editor;monacoRef.current=monaco;setEditorReady(true);editor.addCommand(monaco.KeyMod.CtrlCmd|monaco.KeyCode.KeyS,()=>compileRef.current());editor.addCommand(monaco.KeyMod.CtrlCmd|monaco.KeyCode.Enter,()=>compileRef.current());editor.onDidChangeCursorPosition((e:any)=>setCursor({line:e.position.lineNumber,col:e.position.column}));editor.onDidChangeCursorSelection((e:any)=>{const model=editor.getModel();setSelectionChars(model&&!e.selection.isEmpty()?model.getValueLengthInRange(e.selection):0)});editor.onDidDispose(()=>{editorRef.current=null;setEditorReady(false)})};
  // Jump once the editor shows the requested file, and show compile problems as squiggles in it.
  useEffect(()=>{if(editorReady)applyJump()},[editorReady,currentFile?.name]);
  useEffect(()=>{const ed=editorRef.current,m=monacoRef.current,model=ed?.getModel();if(!m||!model)return;const name=currentFile?.name;const entries=[...(result?.errors??[]).map(e=>({e,sev:m.MarkerSeverity.Error})),...(result?.warnings??[]).map(e=>({e,sev:m.MarkerSeverity.Warning}))].filter(x=>x.e.file===name&&x.e.line);m.editor.setModelMarkers(model,'latex',entries.map(({e,sev})=>({severity:sev,message:e.message,startLineNumber:e.line!,endLineNumber:e.line!,startColumn:1,endColumn:model.getLineMaxColumn(Math.min(e.line!,model.getLineCount()))})))},[result,editorReady,currentFile?.name]);
@@ -304,7 +320,7 @@ function App(){
  const themeMenu=<ThemeMenu pref={theme.pref} resolved={theme.resolved} setPref={theme.setPref} open={openMenu==='theme'} toggle={()=>setOpenMenu(openMenu==='theme'?'':'theme')}/>;
 
  const menus:{label:string,items:MenuItem[]}[]=project?[
-  {label:'File',items:[{label:'New file',icon:<FilePlus2 size={14}/>,run:()=>addFile()},{label:'New folder',icon:<FolderPlus size={14}/>,run:()=>addFile(true)},{label:'Upload files',icon:<Upload size={14}/>,run:()=>fileInput.current?.click()},'sep',{label:'Project history',icon:<ScrollText size={14}/>,run:()=>setModal('history')},{label:'Download project',icon:<FileArchive size={14}/>,run:downloadProject},{label:'Download PDF',icon:<Download size={14}/>,run:downloadPdf,disabled:!pdfUrl},'sep',{label:'Compile',icon:<Play size={14}/>,shortcut:`${mod}↵`,run:compile},'sep',{label:'Back to projects',icon:<Home size={14}/>,run:()=>setActiveTab('dashboard')}]},
+  {label:'File',items:[{label:'New file',icon:<FilePlus2 size={14}/>,run:()=>addFile()},{label:'New folder',icon:<FolderPlus size={14}/>,run:()=>addFile(true)},{label:'Upload files',icon:<Upload size={14}/>,run:()=>fileInput.current?.click()},'sep',{label:'Project history',icon:<ScrollText size={14}/>,run:()=>setModal('history')},{label:'Download project',icon:<FileArchive size={14}/>,run:downloadProject},{label:'Download PDF',icon:<Download size={14}/>,run:downloadPdf,disabled:!pdfUrl},'sep',{label:'Compile',icon:<Play size={14}/>,shortcut:`${mod}↵`,run:()=>void compile()},'sep',{label:'Back to projects',icon:<Home size={14}/>,run:()=>setActiveTab('dashboard')}]},
   {label:'Edit',items:[{label:'Undo',shortcut:`${mod}Z`,run:()=>editorRef.current?.trigger('keyboard','undo',null)},{label:'Redo',shortcut:isMac?'⇧⌘Z':'Ctrl+Y',run:()=>editorRef.current?.trigger('keyboard','redo',null)},'sep',{label:'Find',shortcut:`${mod}F`,run:()=>edAction('actions.find')},{label:'Find and replace',shortcut:isMac?'⌥⌘F':'Ctrl+H',run:()=>edAction('editor.action.startFindReplaceAction')},'sep',{label:'Select all',shortcut:`${mod}A`,run:()=>edAction('editor.action.selectAll')},{label:`Review changes${project.changes?.length?` (${project.changes.length})`:''}`,icon:<ScrollText size={14}/>,run:()=>setModal('changes')},{label:'Comments',icon:<ScrollText size={14}/>,run:()=>setModal('comments')}]},
   {label:'Insert',items:[{label:'Section',run:()=>insert('\n\\section{Section title}\n')},{label:'Subsection',run:()=>insert('\n\\subsection{Subsection title}\n')},{label:'Equation',run:()=>insert('\n\\begin{equation}\n  \n\\end{equation}\n')},{label:'Figure',run:()=>insert('\n\\begin{figure}[ht]\n  \\centering\n  \\includegraphics[width=0.8\\linewidth]{image.png}\n  \\caption{Caption}\n\\end{figure}\n')},{label:'Table',run:()=>insert('\n\\begin{table}[ht]\n  \\centering\n  \\begin{tabular}{cc}\n    A & B \\\\\n    1 & 2 \\\\\n  \\end{tabular}\n  \\caption{Caption}\n\\end{table}\n')},{label:'Bulleted list',run:()=>insert('\\begin{itemize}\n  \\item Item\n\\end{itemize}')},{label:'Citation',run:()=>insert('\\cite{}')}]},
   {label:'View',items:[...(narrow?[]:[{label:'Editor & PDF',checked:prefs.layout==='split',run:()=>setPref('layout','split')}]),{label:'Editor only',checked:prefs.layout==='editor'||(narrow&&layout==='editor'),run:()=>setPref('layout','editor')},{label:'PDF only',checked:layout==='pdf',run:()=>setPref('layout','pdf')},'sep',{label:'File tree',checked:sidebarOpen,run:()=>setSidebar(!sidebarOpen)},'sep',...themeOptions.map(o=>({label:`${o.label} theme`,icon:o.icon,checked:theme.pref===o.value,run:()=>theme.setPref(o.value)}))]},
@@ -386,8 +402,8 @@ function App(){
    {showPdf&&<section className={`preview-panel ${showEditor?'':'full'}`} aria-label="PDF preview">
     <div className="pane-toolbar pdf-toolbar">
      <div className="split-btn" data-menu-root>
-      <button className="btn btn-primary btn-sm compile-main" disabled={compiling} onClick={compile} title={`Recompile (${mod}↵)`}>{compiling?<Spinner light/>:<RefreshCw size={14}/>}{compiling?'Compiling…':'Recompile'}</button>
-      <Dropdown id="engine" open={openMenu==='engine'} setOpen={setOpenMenu} trigger={<button className="btn btn-primary btn-sm compile-caret" aria-label="Compiler options" onClick={()=>setOpenMenu(openMenu==='engine'?'':'engine')}><ChevronDown size={14}/></button>} items={[...[['pdflatex','pdfLaTeX'],['xelatex','XeLaTeX'],['lualatex','LuaLaTeX']].map(([v,l])=>({label:l,checked:engine===v,run:()=>setEngine(v)}))]} heading="Compiler"/>
+      <button className="btn btn-primary btn-sm compile-main" onClick={()=>void compile()} title={compiling?'Restart the compile with your latest changes':`Recompile (${mod}↵ or ${mod}S)`}>{compiling?<Spinner light/>:<RefreshCw size={14}/>}{compiling?'Compiling…':'Recompile'}</button>
+      <Dropdown id="engine" open={openMenu==='engine'} setOpen={setOpenMenu} trigger={<button className="btn btn-primary btn-sm compile-caret" aria-label="Compiler options" onClick={()=>setOpenMenu(openMenu==='engine'?'':'engine')}><ChevronDown size={14}/></button>} items={[...[['pdflatex','pdfLaTeX'],['xelatex','XeLaTeX'],['lualatex','LuaLaTeX']].map(([v,l])=>({label:l,checked:engine===v,run:()=>setEngine(v)})),'sep',{label:'Auto compile',checked:compilePrefs.autoCompile,run:()=>setCompilePrefs({...compilePrefs,autoCompile:!compilePrefs.autoCompile})},{label:'Stop compilation',icon:<Square size={13}/>,disabled:!compiling,run:stopCompile}]} heading="Compiler"/>
      </div>
      <button className={`btn btn-ghost btn-sm logs-btn ${compile_.status==='error'?'has-error':''}`} onClick={openLogs} title="View compile log"><ScrollText size={14}/><span className="hide-xs">Logs</span>{compile_.status==='error'&&<span className="err-badge" aria-label="Compile error">!</span>}</button>
      <span className="pdf-state"><span className={`status-dot ${pdfUrl?'ok':'idle'}`}/>{pdfUrl?'Up to date':'Not compiled'}</span>
@@ -398,20 +414,22 @@ function App(){
     {compile_.status!=='idle'&&<div className={`compile-banner ${compile_.status}`} role={compile_.status==='error'?'alert':'status'}>
      {compile_.status==='running'?<Spinner/>:compile_.status==='success'?<CircleCheck size={15}/>:<AlertCircle size={15}/>}
      <span className="banner-text">{compile_.message}</span>
+     {compile_.status==='running'&&<button className="banner-link" onClick={stopCompile}>Stop</button>}
      {compile_.status==='error'&&<>{compile_.entry&&inProject(compile_.entry.file)&&<button className="banner-link" onClick={()=>jumpTo(compile_.entry!.file,compile_.entry!.line)}>Go to error</button>}<button className="banner-link" onClick={openLogs}>View log</button><button className="banner-close" aria-label="Dismiss" onClick={()=>setCompileState({status:'idle',message:''})}><X size={14}/></button></>}
     </div>}
     <div className="pdf-workspace">
-     {pdfUrl?<PdfViewer url={pdfUrl} zoom={zoom} page={page} syncPoint={syncPoint} onSourceJump={syncPdfToSource} onLoaded={setPageTotal} onScale={s=>{scaleRef.current=s}}/>
-     :<div className="pdf-empty"><div className="paper-placeholder"><FileText size={24}/><span>PDF</span></div><strong>Your document will appear here</strong><p>{apiOnline===false?<>The PaperDesk API isn’t running. Start everything with <code>npm run dev:all</code>.</>:health?.compilerMode==='native'&&health.compilerReady===false?'The server LaTeX compiler is unavailable. Try again in a moment.':health?.compilerMode!=='native'&&health&&!health.docker?<>Docker isn’t running. Start Docker Desktop, then recompile.</>:health?.compilerMode!=='native'&&health&&!health.image?<>The LaTeX compiler image isn’t built yet. Run <code>npm run compiler:build</code> once.</>:'Recompile to render a preview of your PDF.'}</p><button className="btn btn-primary" disabled={compiling} onClick={compile}>{compiling?<Spinner light/>:<Play size={13} fill="currentColor"/>} {compiling?'Compiling…':'Compile document'}</button></div>}
+     {pdfUrl?<PdfViewer url={pdfUrl} data={pdfData} zoom={zoom} nav={nav} syncPoint={syncPoint} onSourceJump={syncPdfToSource} onLoaded={setPageTotal} onPageChange={setPage} onScale={s=>{scaleRef.current=s}}/>
+     :<div className="pdf-empty"><div className="paper-placeholder"><FileText size={24}/><span>PDF</span></div><strong>Your document will appear here</strong><p>{apiOnline===false?<>The PaperDesk API isn’t running. Start everything with <code>npm run dev:all</code>.</>:health?.compilerMode==='native'&&health.compilerReady===false?'The server LaTeX compiler is unavailable. Try again in a moment.':health?.compilerMode!=='native'&&health&&!health.docker?<>Docker isn’t running. Start Docker Desktop, then recompile.</>:health?.compilerMode!=='native'&&health&&!health.image?<>The LaTeX compiler image isn’t built yet. Run <code>npm run compiler:build</code> once.</>:'Recompile to render a preview of your PDF.'}</p><button className="btn btn-primary" onClick={()=>void compile()}>{compiling?<Spinner light/>:<Play size={13} fill="currentColor"/>} {compiling?'Compiling…':'Compile document'}</button></div>}
      {pdfUrl&&<div className="pdf-controls" role="toolbar" aria-label="PDF controls">
-      <button title="Previous page" aria-label="Previous page" disabled={page<=1} onClick={()=>setPage(Math.max(1,page-1))}><ChevronLeft size={15}/></button>
+      <button title="Previous page" aria-label="Previous page" disabled={page<=1} onClick={()=>goToPage(page-1)}><ChevronLeft size={15}/></button>
       <span className="page-label"><strong>{page}</strong> / {pageTotal||'—'}</span>
-      <button title="Next page" aria-label="Next page" disabled={!!pageTotal&&page>=pageTotal} onClick={()=>setPage(Math.min(pageTotal||page+1,page+1))}><ChevronRight size={15}/></button>
+      <button title="Next page" aria-label="Next page" disabled={!!pageTotal&&page>=pageTotal} onClick={()=>goToPage(page+1)}><ChevronRight size={15}/></button>
       <i/>
       <button title="Zoom out" aria-label="Zoom out" onClick={()=>changeZoom(-10)}><ZoomOut size={15}/></button>
-      <span className="zoom-label">{zoom==='fit'?'Fit':`${zoom}%`}</span>
+      <span className="zoom-label">{zoom==='fit'?'Width':zoom==='page'?'Page':`${zoom}%`}</span>
       <button title="Zoom in" aria-label="Zoom in" onClick={()=>changeZoom(10)}><ZoomIn size={15}/></button>
       <button title="Fit to width" aria-label="Fit to width" className={zoom==='fit'?'on':''} onClick={()=>setZoom('fit')}><Maximize2 size={14}/></button>
+      <button title="Fit whole page" aria-label="Fit whole page" className={zoom==='page'?'on':''} onClick={()=>setZoom('page')}><Minimize2 size={14}/></button>
      </div>}
     </div>
    </section>}
@@ -439,7 +457,7 @@ modal==='history'?<div className="logs-body">{(project.versions??[]).length===0?
     <div className="field-row"><div><strong>Track changes</strong><span>Keep a before version for each edit.</span></div><input type="checkbox" checked={!!compilePrefs.trackChanges} onChange={e=>setCompilePrefs({...compilePrefs,trackChanges:e.target.checked})}/></div>
     <div className="field-row"><div><strong>Draft mode</strong><span>Faster preview without final graphics.</span></div><input type="checkbox" checked={compilePrefs.draft} onChange={e=>setCompilePrefs({...compilePrefs,draft:e.target.checked})}/></div>
     <div className="field-row"><div><strong>Compile timeout</strong><span>5 to {maxTimeoutSeconds} seconds for this server.</span></div><input className="select" type="number" min="5" max={maxTimeoutSeconds} value={compilePrefs.timeout} onChange={e=>setCompilePrefs({...compilePrefs,timeout:Math.max(5,Math.min(maxTimeoutSeconds,Number(e.target.value)||5))})}/></div>
-    <div className="field-row"><div><strong>Clear cached files</strong><span>Remove the saved PDF and current log.</span></div><button className="btn btn-secondary btn-sm" onClick={async()=>{await apiFetch(`/api/projects/${projectId}/cache`,{method:'DELETE'});setPdfUrl('');setResult(null);setCompileState({status:'idle',message:''});notify('Cached files cleared','success')}}>Clear cache</button></div>
+    <div className="field-row"><div><strong>Clear cached files</strong><span>Remove the saved PDF and current log.</span></div><button className="btn btn-secondary btn-sm" onClick={async()=>{await apiFetch(`/api/projects/${projectId}/cache`,{method:'DELETE'});setPdfUrl('');setPdfData(null);setResult(null);setCompileState({status:'idle',message:''});notify('Cached files cleared','success')}}>Clear cache</button></div>
     <div className="field-row"><div><strong>Storage</strong><span>Browser local storage; synced to the API when it’s running.</span></div></div>
     <div className="field-row"><div><strong>Collaboration</strong><span>Sharing and real-time editing are not implemented yet.</span></div></div>
    </section>
@@ -540,28 +558,5 @@ function TreeLevel({nodes,depth,selected,collapsed,onToggle,onOpen,onRename,onDe
 function fileIcon(f:ProjectFile){return f.name.endsWith('.tex')?<FileCode2 size={15} className="fi fi-tex"/>:f.name.endsWith('.bib')?<BookOpen size={15} className="fi fi-bib"/>:f.name.endsWith('/')?<FolderOpen size={15}/>:isBinary(f.name)?<ImageIcon size={15} className="fi fi-img"/>:<File size={15} className="fi"/>}
 function formatBytes(n:number){return n<1024?`${n} B`:n<1048576?`${(n/1024).toFixed(1)} KB`:`${(n/1048576).toFixed(1)} MB`}
 function downloadBlob(blob:Blob,name:string){const url=URL.createObjectURL(blob);const a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),3000)}
-
-function PdfViewer({url,zoom,page,onLoaded,onScale,syncPoint,onSourceJump}:{url:string,zoom:Zoom,page:number,onLoaded:(n:number)=>void,onScale:(pct:number)=>void,syncPoint:{page:number,x:number,y:number}|null,onSourceJump:(page:number,x:number,y:number)=>void}){
- const canvasRef=useRef<HTMLCanvasElement>(null),boxRef=useRef<HTMLDivElement>(null),docRef=useRef<{url:string,doc:any}|null>(null),taskRef=useRef<any>(null),viewportRef=useRef<any>(null),cbRef=useRef({onLoaded,onScale,onSourceJump});cbRef.current={onLoaded,onScale,onSourceJump};
- const [loading,setLoading]=useState(true),[err,setErr]=useState(''),[width,setWidth]=useState(0);
- useEffect(()=>{const el=boxRef.current;if(!el)return;let raf=0;const ro=new ResizeObserver(()=>{cancelAnimationFrame(raf);raf=requestAnimationFrame(()=>setWidth(el.clientWidth))});ro.observe(el);return()=>{ro.disconnect();cancelAnimationFrame(raf)}},[]);
- const render=useCallback(async(cancelled:()=>boolean)=>{
-  try{
-   setErr('');
-   const pdfjs=await import('pdfjs-dist');pdfjs.GlobalWorkerOptions.workerSrc=new URL('pdfjs-dist/build/pdf.worker.min.mjs',import.meta.url).toString();
-   if(docRef.current?.url!==url){setLoading(true);docRef.current?.doc.destroy?.();docRef.current={url,doc:await pdfjs.getDocument(url).promise}}
-   const pdf=docRef.current!.doc;if(cancelled())return;cbRef.current.onLoaded(pdf.numPages);
-   const p=await pdf.getPage(Math.min(Math.max(1,page),pdf.numPages));if(cancelled())return;
-   const base=p.getViewport({scale:1});const scale=zoom==='fit'?Math.max(.3,((boxRef.current?.clientWidth??600)-40)/base.width):zoom/100;cbRef.current.onScale(Math.round(scale*100));
-   const viewport=p.getViewport({scale});viewportRef.current=viewport;const canvas=canvasRef.current;if(!canvas)return;const ctx=canvas.getContext('2d');if(!ctx)return;
-   const dpr=window.devicePixelRatio||1;taskRef.current?.cancel();
-   canvas.width=Math.floor(viewport.width*dpr);canvas.height=Math.floor(viewport.height*dpr);canvas.style.width=`${Math.floor(viewport.width)}px`;canvas.style.height=`${Math.floor(viewport.height)}px`;
-   const task=p.render({canvasContext:ctx,viewport,transform:dpr!==1?[dpr,0,0,dpr,0,0]:undefined});taskRef.current=task;await task.promise;if(!cancelled()){setLoading(false);if(syncPoint?.page===page){const [,y]=viewport.convertToViewportPoint(syncPoint.x,syncPoint.y);if(boxRef.current)boxRef.current.scrollTop=Math.max(0,y-boxRef.current.clientHeight/2)}}
-  }catch(e:any){if(e?.name==='RenderingCancelledException'||cancelled())return;setLoading(false);setErr(e?.status===404||/Missing PDF|404/.test(String(e?.message))?'No compiled PDF was found. Recompile the project to generate it.':e instanceof Error?`Couldn’t display the PDF: ${e.message}`:'Couldn’t display the PDF.')}
- },[url,zoom,page,width,syncPoint]);
- useEffect(()=>{let c=false;render(()=>c);return()=>{c=true}},[render]);
- useEffect(()=>()=>{taskRef.current?.cancel();docRef.current?.doc.destroy?.()},[]);
- return <div className="pdf-scroll" ref={boxRef}>{err?<div className="pdf-error" role="alert"><AlertCircle size={18}/><span>{err}</span></div>:<><canvas ref={canvasRef} aria-label={`PDF page ${page}`} title="Click to jump to source" className={loading?'is-loading':''} onClick={e=>{const canvas=canvasRef.current,viewport=viewportRef.current;if(!canvas||!viewport)return;const rect=canvas.getBoundingClientRect();const [x,y]=viewport.convertToPdfPoint(e.clientX-rect.left,e.clientY-rect.top);cbRef.current.onSourceJump(page,x,y)}}/>{loading&&<div className="pane-loading overlay"><Spinner/> Rendering PDF…</div>}</>}</div>;
-}
 
 createRoot(document.getElementById('root')!).render(<React.StrictMode><App/></React.StrictMode>);

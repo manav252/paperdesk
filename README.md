@@ -30,9 +30,14 @@ Open http://localhost:5173. Press **Recompile** (`⌘/Ctrl+Enter`) to build the 
 ## Compiling
 
 - Choose the engine from the arrow next to **Recompile**, or in **Settings**. `latexmk` runs as many passes as the document needs, including BibTeX.
+- **Auto compile** (on by default, toggle it in the compile menu) recompiles one second after you stop typing. **Recompile**, `Ctrl/⌘+Enter` and `Ctrl/⌘+S` compile at once; starting a compile replaces one still running, and **Stop** cancels it.
+- **Fast recompiles.** Each project keeps a warm build folder on the server, so `latexmk` reuses the previous run and repeats only the passes whose inputs changed. The browser sends only the files that changed since the last compile, and the PDF comes back in the same response.
+- **PDF preview.** All pages scroll continuously; pages near the viewport render first and stay in place across recompiles. Zoom, fit width, fit page, page buttons and download are in the floating toolbar. Double-click the PDF to jump to the source; **Sync source to PDF** goes the other way.
 - **Errors.** When compilation fails, the banner shows the first error with **Go to error**. **Logs** lists every error and warning with its file and line; click one to open that file at that line. Problem lines are also underlined in the editor.
-- **Isolation.** Each compile runs in a new container with no network, a read-only root filesystem, CPU, memory and process limits, and a 2-minute timeout. The container runs as your user and is removed afterwards. No TeX runs on the host.
-- **Main file.** The main document must be `main.tex` at the project root.
+- **Isolation.** Locally, each compile runs in a new container with no network, a read-only root filesystem, CPU, memory and process limits, and a 2-minute timeout. On Render, TeX runs as an unprivileged user with resource limits.
+- **Main file.** Choose it with the star next to a root-level `.tex` file in the file tree, or in **Settings**; the main file is marked.
+- **Images.** Upload into a folder with its upload button, or drag files and folders onto the file tree. PNG, JPG and PDF work with `\includegraphics`; an uploaded SVG also gets a PNG copy, because LaTeX can't include SVG.
+- **Sharing.** **Share** creates a read-only copy link: anyone who opens it gets their own copy of the project as it was. There are no accounts, so there is no real-time co-editing.
 
 ### Compile test suite
 
@@ -98,4 +103,4 @@ Production setup uses GitLab Pages for the frontend and Render, Neon and Cloudfl
 ## Notes
 
 - Vite + React + TypeScript; Monaco Editor (bundled, no CDN) for source and PDF.js for the preview.
-- Not implemented yet: sharing, accounts, real-time collaboration, choosing a main file other than `main.tex`.
+- Not implemented yet: accounts and real-time collaboration.

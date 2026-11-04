@@ -61,10 +61,12 @@ async function openTemplate(page: Page, name: string) {
 }
 
 async function appendToEditor(page: Page, text: string) {
-  const source = await page.evaluate(() => {
+  const readSource = () => page.evaluate(() => {
     const projects = JSON.parse(localStorage.getItem('paperdesk-projects') ?? '[]') as { files: { name: string; content?: string }[] }[];
     return String(projects[0]?.files.find(file => file.name === 'main.tex')?.content ?? '');
   });
+  await expect.poll(readSource).toContain('\\documentclass');
+  const source = await readSource();
   const editor = page.getByRole('textbox', { name: 'Editor content' });
   await editor.click({ force: true });
   // Playwright runs this browser with a Windows user agent even on macOS hosts.

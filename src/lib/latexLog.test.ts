@@ -35,6 +35,11 @@ describe('parseLatexLog', () => {
     expect(parseLatexLog(log).errors).toEqual([{ file: 'main.tex', line: 12, message: 'Missing $ inserted.' }]);
   });
 
+  it('makes missing image errors actionable and keeps their source line', () => {
+    const log = "(./main.tex\n! LaTeX Error: File `missing-image.png' not found.\nl.18 \\includegraphics{missing-image.png}\n";
+    expect(parseLatexLog(log).errors[0]).toEqual({ file: 'main.tex', line: 18, message: 'Image or file “missing-image.png” was not found. Check the path on this line.' });
+  });
+
   it('attributes warnings to the file being read', () => {
     const log = [
       '(./main.tex (./chapters/intro.tex',

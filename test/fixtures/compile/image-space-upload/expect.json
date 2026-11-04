@@ -1,0 +1,7 @@
+{
+  "engines": ["pdflatex", "xelatex", "lualatex"],
+  "success": true,
+  "minPages": 1,
+  "contains": ["Uploaded image rendered successfully"],
+  "image": true
+}

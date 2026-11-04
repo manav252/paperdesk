@@ -98,3 +98,13 @@ describe('parseBibtexLog', () => {
     expect(r.errors).toEqual([{ file: null, line: null, message: "BibTeX: couldn't open database file refs.bib" }]);
   });
 });
+
+describe('image hints', () => {
+  it('explains SVG and missing image errors', () => {
+    const log = '(./main.tex\n./main.tex:9: LaTeX Error: Unknown graphics extension: .svg.\n./main.tex:12: LaTeX Error: File `figures/plot.png\' not found.\n';
+    const [svg, missing] = parseLatexLog(log).errors;
+    expect(svg.message).toContain('LaTeX can’t include SVG files');
+    expect(missing).toMatchObject({ file: 'main.tex', line: 12 });
+    expect(missing.message).toContain('capitalisation');
+  });
+});

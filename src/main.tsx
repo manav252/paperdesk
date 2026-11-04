@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import Editor, { type OnMount } from '@monaco-editor/react';
-import { FileText, FolderOpen, Folder, Search, Plus, MoreHorizontal, ChevronDown, ChevronRight, ChevronLeft, Settings, HelpCircle, CloudOff, TriangleAlert, Bell, Upload, FolderPlus, FilePlus2, Image as ImageIcon, FileCode2, File, BookOpen, Play, Download, Share2, Undo2, Redo2, Bold, Italic, Underline, List, ListOrdered, Table2, Sigma, Quote, Link2, Columns2, Maximize2, Minimize2, Square, ZoomIn, ZoomOut, RefreshCw, CircleCheck, Cloud, X, Copy, Trash2, Pencil, Check, AlertCircle, FileArchive, Menu, Keyboard, Sun, Moon, Monitor, Home, ScrollText, Info, PanelLeft, Code2, Sparkles, Compass, } from 'lucide-react';
+import { FileText, FolderOpen, Folder, Search, Plus, MoreHorizontal, ChevronDown, ChevronRight, ChevronLeft, Settings, HelpCircle, CloudOff, TriangleAlert, Bell, Upload, FolderPlus, FilePlus2, Image as ImageIcon, FileCode2, File, BookOpen, Play, Download, Share2, Undo2, Redo2, Bold, Italic, Underline, List, ListOrdered, Table2, Sigma, Quote, Link2, Columns2, Maximize2, Minimize2, Square, Star, ZoomIn, ZoomOut, RefreshCw, CircleCheck, Cloud, X, Copy, Trash2, Pencil, Check, AlertCircle, FileArchive, Menu, Keyboard, Sun, Moon, Monitor, Home, ScrollText, Info, PanelLeft, Code2, Sparkles, Compass, } from 'lucide-react';
 import { useTheme, type ThemePref } from './theme';
 import { setupMonaco } from './monacoSetup';
 import { arrayBufferToBase64, buildTree, defaultFile, isBinary, isEditable, isImage, mergeProjects, mimeType, normalizeProject, relative, tabFiles, type Project, type ProjectFile, type TreeNode } from './lib/project';
@@ -15,6 +15,7 @@ import { Tour, TOUR_KEY, type TourStep } from './Tour';
 import { apiUrl, fetchWithWake, ownerHeaders, projectOwnerId } from './lib/api';
 import { base64ToBytes, compileFiles, type SyncState } from './lib/compileSync';
 import { PdfViewer, type Zoom } from './PdfViewer';
+import { filesFromDrop, isSvg, svgToPngBase64, type Incoming } from './lib/upload';
 import './style.css';
 
 const starter=`\\documentclass[12pt,a4paper]{article}
@@ -105,7 +106,7 @@ function App(){
  const [projects,setProjects]=useState<Project[]>(initial),[projectId,setProjectId]=useState('p1'),[fileName,setFileName]=useState('main.tex'),[activeTab,setActiveTab]=useState('editor'),[compile_,setCompileState]=useState<CompileState>({status:'idle',message:''}),[pdfUrl,setPdfUrl]=useState(''),[page,setPage]=useState(1),[pageTotal,setPageTotal]=useState(0),[zoom,setZoom]=useState<Zoom>('fit'),[saveState,setSaveState]=useState('Saved'),[query,setQuery]=useState(''),[sortBy,setSortBy]=useState<'modified'|'name'>('modified'),[openMenu,setOpenMenu]=useState(''),[modal,setModal]=useState(''),[dialog,setDialog]=useState<Dialog|null>(null),[toast,setToast]=useState<Toast|null>(null),[engine,setEngine]=useState('pdflatex'),[compilePrefs,setCompilePrefs]=useState<CompilePrefs>(()=>{try{return{autoCompile:true,stopOnFirstError:true,draft:false,timeout:120,trackChanges:false,...JSON.parse(localStorage.getItem('paperdesk-compile-prefs')??'{}')}}catch{return{autoCompile:true,stopOnFirstError:true,draft:false,timeout:120,trackChanges:false}}}),[rawLogs,setRawLogs]=useState(false),[cursor,setCursor]=useState({line:1,col:1}),[result,setResult]=useState<CompileResult|null>(null),[logState,setLogState]=useState<{loading:boolean,error?:string}>({loading:false}),[apiOnline,setApiOnline]=useState<boolean|null>(null),[health,setHealth]=useState<Health|null>(null),[editorReady,setEditorReady]=useState(false),[collapsed,setCollapsed]=useState<Set<string>>(new Set()),[prefs,setPrefs]=useState<LayoutPrefs>(readLayout),[drawer,setDrawer]=useState(false),[selectionChars,setSelectionChars]=useState(0),[shareContext,setShareContext]=useState(()=>readFlag(SHARE_KEY)!=='off'),[fixReview,setFixReview]=useState<LineFix|null>(null),[tour,setTour]=useState(false),[narrowAssistant,setNarrowAssistant]=useState(false);
  const [syncPoint,setSyncPoint]=useState<{page:number,x:number,y:number}|null>(null),[pdfData,setPdfData]=useState<Uint8Array|null>(null),[nav,setNav]=useState({page:1,n:0});
  const compileAbort=useRef<AbortController|null>(null),syncState=useRef<SyncState|null>(null);
- const editorRef=useRef<any>(null),fileInput=useRef<HTMLInputElement>(null),zipInput=useRef<HTMLInputElement>(null),saveTimer=useRef<number>(),workRef=useRef<HTMLDivElement>(null),searchRef=useRef<HTMLInputElement>(null),compileRef=useRef<(options?:{auto?:boolean})=>void>(()=>{}),scaleRef=useRef(100),monacoRef=useRef<any>(null),pendingJump=useRef<{file:string,line:number}|null>(null),lastEdit=useRef({file:'',content:''}),storageWarned=useRef(false);
+ const editorRef=useRef<any>(null),fileInput=useRef<HTMLInputElement>(null),folderInput=useRef<HTMLInputElement>(null),uploadFolder=useRef(''),zipInput=useRef<HTMLInputElement>(null),saveTimer=useRef<number>(),workRef=useRef<HTMLDivElement>(null),searchRef=useRef<HTMLInputElement>(null),compileRef=useRef<(options?:{auto?:boolean})=>void>(()=>{}),scaleRef=useRef(100),monacoRef=useRef<any>(null),pendingJump=useRef<{file:string,line:number}|null>(null),lastEdit=useRef({file:'',content:''}),storageWarned=useRef(false);
  const monacoState=useMonacoLoad();
  const narrow=useMediaQuery(NARROW),compact=useMediaQuery('(max-width: 640px)');
  const assistant=useAssistant(()=>setHealth(h=>h?{...h,assistant:{model:h.assistant?.model??'',configured:false}}:h));
@@ -215,21 +216,49 @@ function App(){
  const addFile=(folder=false)=>askName(folder?'New folder':'New file',folder?'Folder name':'File name (use “folder/name.tex” to place it in a folder)',folder?'figures':'notes.tex',folder?'Create folder':'Create file',input=>{const name=folder?input.trim().replace(/\/+$/,'')+'/':input.trim();const err=validName(name.replace(/\/$/,''))??validName(name);if(err)return err;update(p=>({...p,files:[...p.files,{name,content:folder?'':`% ${name}\n`}]}));if(!folder)setFileName(name);else setCollapsed(c=>{const n=new Set(c);n.delete(name);return n})});
  const renameFile=(f:ProjectFile)=>{const isFolder=f.name.endsWith('/');const shown=f.name.replace(/\/$/,'');askName(isFolder?'Rename folder':'Rename file','New name',shown,'Rename',input=>{const next=input.trim().replace(/\/+$/,'');if(next===shown)return;const err=validName(next,shown);if(err)return err;if(isFolder){const from=f.name,to=next+'/';update(p=>({...p,files:p.files.map(x=>x.name.startsWith(from)?{...x,name:to+x.name.slice(from.length)}:x)}));if(fileName.startsWith(from))setFileName(to+fileName.slice(from.length))}else{update(p=>({...p,files:p.files.map(x=>x.name===f.name?{...x,name:next}:x)}));if(fileName===f.name)setFileName(next)}})};
  const deleteFile=(f:ProjectFile)=>{const isFolder=f.name.endsWith('/');const affected=isFolder?project.files.filter(x=>x.name.startsWith(f.name)):[f];const remaining=project.files.filter(x=>!affected.includes(x));if(!remaining.some(x=>!x.name.endsWith('/'))){notify('A project must contain at least one file','error');return}setDialog({title:isFolder?'Delete folder?':'Delete file?',message:isFolder?<>“{f.name}” and the {affected.length-1} file(s) inside it will be deleted.</>:<>“{f.name}” will be deleted from this project.</>,confirmLabel:'Delete',danger:true,onConfirm:()=>{update(p=>({...p,files:p.files.filter(x=>!affected.some(a=>a.name===x.name))}));if(affected.some(a=>a.name===fileName))setFileName(remaining.find(x=>!x.name.endsWith('/'))?.name??'main.tex')}})};
- const uploadFiles=async(list:FileList|null)=>{
+ /** Adds files to the project, into `folder` when given ("figures/"). ZIP archives are imported as a whole project. */
+ const uploadFiles=async(list:FileList|Incoming[]|null,folder='')=>{
   if(!list)return;
-  for(const f of Array.from(list)){
-   if(f.name.toLowerCase().endsWith('.zip')){
+  // ("File" here is the lucide icon, so tell picked files from dropped entries by their shape.)
+  const items:Incoming[]=Array.from(list as ArrayLike<globalThis.File|Incoming>,x=>'path' in x&&'file' in x?x:{file:x as globalThis.File,path:(x as globalThis.File).name});
+  const added:ProjectFile[]=[];
+  for(const {file:f,path:rel} of items){
+   if(!folder&&!rel.includes('/')&&f.name.toLowerCase().endsWith('.zip')){
     try{const current=projects.find(p=>p.id===projectId);if(!current)throw new Error('The project is no longer open.');const saved=await apiFetch(`/api/projects/${projectId}`,{method:'PUT',headers:json,body:JSON.stringify({name:current.name,files:current.files,mainFile:current.mainFile,archived:current.archived,settings:current.settings,versions:current.versions,comments:current.comments,changes:current.changes})});if(!saved.ok)throw new Error('Couldn’t save the project before importing the ZIP.');const form=new FormData();form.append('file',f);const res=await apiFetch(`/api/projects/${projectId}/upload`,{method:'POST',body:form});const d=await res.json().catch(()=>null);if(!res.ok)throw new Error(d?.error??NETWORK_HELP);update(p=>({...p,files:normalizeProject(d,'server').files}));notify(`Imported ${f.name}`,'success')}
     catch(e){notify(e instanceof Error&&!(e instanceof TypeError)?e.message:`ZIP import needs the API. ${NETWORK_HELP}`,'error')}
     continue;
    }
    if(f.size>20*1024*1024){notify(`${f.name} is larger than 20 MB and wasn’t uploaded.`,'error');continue}
+   const name=(folder+rel).replace(/^\/+/,'');
+   if(/(^|\/)\.\.(\/|$)/.test(name)){notify(`${name} has an invalid path.`,'error');continue}
+   if(isSvg(name)){
+    // LaTeX can't include SVG; keep the original and add a PNG copy that \includegraphics can use.
+    try{added.push({name,content:await f.text()},{name:name.replace(/\.svg$/i,'.png'),content:await svgToPngBase64(f),encoding:'base64'});notify(`Added ${name.replace(/\.svg$/i,'.png')} (a PNG copy of ${name}) — LaTeX can’t include SVG directly.`,'success')}
+    catch{notify(`${name} couldn’t be converted to PNG. Export it as PDF or PNG and upload that instead.`,'error')}
+    continue;
+   }
    // Figures and other binary files are stored as base64; reading them as text would corrupt them.
-   const file:ProjectFile=isBinary(f.name)?{name:f.name,content:arrayBufferToBase64(await f.arrayBuffer()),encoding:'base64'}:{name:f.name,content:await f.text()};
-   update(p=>({...p,files:[...p.files.filter(x=>x.name!==f.name),file]}));setFileName(f.name);notify(`Uploaded ${f.name}`,'success');
+   added.push(isBinary(name)?{name,content:arrayBufferToBase64(await f.arrayBuffer()),encoding:'base64'}:{name,content:await f.text()});
+  }
+  if(added.length){
+   // Parent folders become explicit entries so the tree shows them even when they only hold the new files.
+   const folders=new Set<string>();for(const x of added){const parts=x.name.split('/');for(let i=1;i<parts.length;i++)folders.add(parts.slice(0,i).join('/')+'/')}
+   update(p=>{const names=new Set(added.map(x=>x.name));const kept=p.files.filter(x=>!names.has(x.name));const missing=[...folders].filter(d=>!kept.some(x=>x.name===d)).map(d=>({name:d,content:''}));return{...p,files:[...kept,...missing,...added]}});
+   setCollapsed(c=>{const n=new Set(c);for(const d of folders)n.delete(d.replace(/\/$/,''));return n});
+   const opened=added.find(x=>!x.name.endsWith('.svg'));if(opened)setFileName(opened.name);
+   if(!added.some(x=>isSvg(x.name)))notify(added.length===1?`Uploaded ${added[0].name}`:`Uploaded ${added.length} files`,'success');
   }
   if(fileInput.current)fileInput.current.value='';
+  if(folderInput.current)folderInput.current.value='';
  };
+ const [dropTarget,setDropTarget]=useState<string|null>(null);
+ const dropProps=(folder:string)=>({
+  onDragOver:(e:React.DragEvent)=>{if(!e.dataTransfer.types.includes('Files'))return;e.preventDefault();e.stopPropagation();e.dataTransfer.dropEffect='copy';setDropTarget(folder)},
+  onDragLeave:(e:React.DragEvent)=>{if(!(e.currentTarget as HTMLElement).contains(e.relatedTarget as Node))setDropTarget(t=>t===folder?null:t)},
+  onDrop:async(e:React.DragEvent)=>{if(!e.dataTransfer.types.includes('Files'))return;e.preventDefault();e.stopPropagation();setDropTarget(null);await uploadFiles(await filesFromDrop(e.dataTransfer),folder)},
+ });
+ const uploadTo=(folder:string)=>{uploadFolder.current=folder;folderInput.current?.click()};
+ const setMainDocument=(f:ProjectFile)=>{update(p=>({...p,mainFile:f.name}));notify(`${f.name} is now the main document`,'success')};
  const downloadProject=async()=>{try{const res=await apiFetch(`/api/projects/${projectId}/download`);if(!res.ok)throw 0;const blob=await res.blob();downloadBlob(blob,`${project.name}.zip`)}catch{const data=new Blob([JSON.stringify(project,null,2)],{type:'application/json'});downloadBlob(data,`${project.name.replaceAll(' ','-')}-project.json`);notify('Project downloaded as JSON (start the backend for ZIP export)')}};
  const downloadPdf=async()=>{if(!pdfUrl){notify('Compile the project to create a PDF');return}if(pdfData){downloadBlob(new Blob([pdfData],{type:'application/pdf'}),`${project.name}.pdf`);return}try{const response=await fetch(pdfUrl);if(!response.ok)throw new Error();downloadBlob(await response.blob(),`${project.name}.pdf`)}catch{notify('Could not download the compiled PDF.','error')}};
  const openLogs=async()=>{setModal('logs');if(result)return;setLogState({loading:true});try{const r=await apiFetch(`/api/projects/${projectId}/logs`);if(!r.ok)throw new Error();const d=await r.json();if(d.success!==null)setResult(d);setLogState({loading:false})}catch{setLogState({loading:false,error:NETWORK_HELP})}};
@@ -369,11 +398,12 @@ function App(){
    {narrow&&drawer&&<div className="drawer-backdrop" onClick={()=>setDrawer(false)}/>}
    <aside className={`file-sidebar ${sidebarOpen?'':'collapsed'} ${narrow?'drawer':''}`} aria-label="Project files">
     <div className="pane-toolbar side-head"><span className="pane-title">Files</span><span className="side-tools"><button className="icon-btn sm" title="New file" aria-label="New file" onClick={()=>addFile()}><FilePlus2 size={15}/></button><button className="icon-btn sm" title="New folder" aria-label="New folder" onClick={()=>addFile(true)}><FolderPlus size={15}/></button><button className="icon-btn sm" title="Upload files" aria-label="Upload files" onClick={()=>fileInput.current?.click()}><Upload size={14}/></button><button className="icon-btn sm" title="Hide file tree" aria-label="Hide file tree" onClick={()=>setSidebar(false)}><PanelLeft size={15}/></button></span></div>
-    <div className="file-tree" role="tree">
-     <TreeLevel nodes={buildTree(project.files)} depth={0} selected={currentFile?.name??''} collapsed={collapsed} onToggle={p=>setCollapsed(c=>{const n=new Set(c);if(n.has(p))n.delete(p);else n.add(p);return n})} onOpen={f=>{setFileName(f.name);if(narrow)setDrawer(false);if(layout==='pdf')setPref('layout',narrow?'editor':'split')}} onRename={renameFile} onDelete={deleteFile}/>
+    <div className={`file-tree ${dropTarget===''?'drop-target':''}`} role="tree" {...dropProps('')}>
+     <TreeLevel nodes={buildTree(project.files)} depth={0} selected={currentFile?.name??''} collapsed={collapsed} act={{mainFile:project.mainFile??'main.tex',dropTarget,dropProps,onToggle:p=>setCollapsed(c=>{const n=new Set(c);if(n.has(p))n.delete(p);else n.add(p);return n}),onOpen:f=>{setFileName(f.name);if(narrow)setDrawer(false);if(layout==='pdf')setPref('layout',narrow?'editor':'split')},onRename:renameFile,onDelete:deleteFile,onUpload:uploadTo,onSetMain:setMainDocument}}/>
+     <p className="drop-hint">Drop files or folders here to upload</p>
     </div>
     <div className="side-bottom"><button onClick={downloadProject}><FileArchive size={15}/> Download project</button><button onClick={()=>setModal('settings')}><Settings size={15}/> Project settings</button></div>
-    <input ref={fileInput} className="hidden" type="file" multiple accept=".tex,.bib,.sty,.cls,.png,.jpg,.jpeg,.pdf,.csv,.txt,.zip" onChange={e=>uploadFiles(e.target.files)}/><input ref={zipInput} className="hidden" type="file" accept=".zip" onChange={e=>uploadFiles(e.target.files)}/>
+    <input ref={fileInput} className="hidden" type="file" multiple accept=".tex,.bib,.bst,.sty,.cls,.png,.jpg,.jpeg,.pdf,.svg,.eps,.csv,.txt,.dat,.zip" onChange={e=>uploadFiles(e.target.files)}/><input ref={folderInput} className="hidden" type="file" multiple aria-label="Upload into folder" onChange={e=>uploadFiles(e.target.files,uploadFolder.current)}/><input ref={zipInput} className="hidden" type="file" accept=".zip" onChange={e=>uploadFiles(e.target.files)}/>
    </aside>
    {sidebarOpen&&!narrow&&<Resizer label="Resize file tree" value={prefs.sidebarWidth} min={170} max={420} onChange={v=>setPref('sidebarWidth',v)} fromClientX={x=>x-(workRef.current?.getBoundingClientRect().left??0)} onReset={()=>setPref('sidebarWidth',232)}/>}
 
@@ -543,15 +573,21 @@ function Resizer({label,value,min,max,onChange,fromClientX,onReset,invert}:{labe
 }
 
 
-function TreeLevel({nodes,depth,selected,collapsed,onToggle,onOpen,onRename,onDelete}:{nodes:TreeNode[],depth:number,selected:string,collapsed:Set<string>,onToggle:(p:string)=>void,onOpen:(f:ProjectFile)=>void,onRename:(f:ProjectFile)=>void,onDelete:(f:ProjectFile)=>void}){
- return <>{nodes.map(n=>{const open=!collapsed.has(n.path);return <div key={n.path} role="treeitem" aria-expanded={n.folder?open:undefined} aria-selected={selected===n.path}>
-  <div className={`file-row ${selected===n.path?'selected':''}`} style={{paddingLeft:8+depth*14}} tabIndex={0} onClick={()=>n.folder?onToggle(n.path):onOpen(n.file)} onKeyDown={e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();if(n.folder)onToggle(n.path);else onOpen(n.file)}}}>
+type TreeActions={mainFile:string,dropTarget:string|null,dropProps:(folder:string)=>Record<string,unknown>,onToggle:(p:string)=>void,onOpen:(f:ProjectFile)=>void,onRename:(f:ProjectFile)=>void,onDelete:(f:ProjectFile)=>void,onUpload:(folder:string)=>void,onSetMain:(f:ProjectFile)=>void};
+function TreeLevel({nodes,depth,selected,collapsed,act}:{nodes:TreeNode[],depth:number,selected:string,collapsed:Set<string>,act:TreeActions}){
+ return <>{nodes.map(n=>{const open=!collapsed.has(n.path);const folder=n.folder?n.path+'/':'';const isMain=!n.folder&&n.path===act.mainFile;const canBeMain=!n.folder&&n.path.endsWith('.tex')&&!n.path.includes('/')&&!isMain;return <div key={n.path} role="treeitem" aria-expanded={n.folder?open:undefined} aria-selected={selected===n.path} {...(n.folder?act.dropProps(folder):{})}>
+  <div className={`file-row ${selected===n.path?'selected':''} ${n.folder&&act.dropTarget===folder?'drop-target':''}`} style={{paddingLeft:8+depth*14}} tabIndex={0} onClick={()=>n.folder?act.onToggle(n.path):act.onOpen(n.file)} onKeyDown={e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();if(n.folder)act.onToggle(n.path);else act.onOpen(n.file)}}}>
    <span className="tree-caret">{n.folder?(open?<ChevronDown size={13}/>:<ChevronRight size={13}/>):null}</span>
    {n.folder?(open?<FolderOpen size={15}/>:<Folder size={15}/>):fileIcon(n.file)}
    <span className="file-label">{n.name}</span>
-   <span className="file-actions"><button title="Rename" aria-label={`Rename ${n.name}`} onClick={e=>{e.stopPropagation();onRename(n.file)}}><Pencil size={12}/></button><button className="danger" title="Delete" aria-label={`Delete ${n.name}`} onClick={e=>{e.stopPropagation();onDelete(n.file)}}><Trash2 size={12}/></button></span>
+   {isMain&&<span className="main-badge" title="Main document: this file is compiled">main</span>}
+   <span className="file-actions">
+    {n.folder&&<button title={`Upload into ${n.name}`} aria-label={`Upload into ${n.name}`} onClick={e=>{e.stopPropagation();act.onUpload(folder)}}><Upload size={12}/></button>}
+    {canBeMain&&<button title="Set as main document" aria-label={`Set ${n.name} as main document`} onClick={e=>{e.stopPropagation();act.onSetMain(n.file)}}><Star size={12}/></button>}
+    <button title="Rename" aria-label={`Rename ${n.name}`} onClick={e=>{e.stopPropagation();act.onRename(n.file)}}><Pencil size={12}/></button><button className="danger" title="Delete" aria-label={`Delete ${n.name}`} onClick={e=>{e.stopPropagation();act.onDelete(n.file)}}><Trash2 size={12}/></button>
+   </span>
   </div>
-  {n.folder&&open&&(n.children.length?<TreeLevel nodes={n.children} depth={depth+1} selected={selected} collapsed={collapsed} onToggle={onToggle} onOpen={onOpen} onRename={onRename} onDelete={onDelete}/>:<div className="file-row empty-folder" style={{paddingLeft:30+depth*14}}>Empty folder</div>)}
+  {n.folder&&open&&(n.children.length?<TreeLevel nodes={n.children} depth={depth+1} selected={selected} collapsed={collapsed} act={act}/>:<div className="file-row empty-folder" style={{paddingLeft:30+depth*14}}>Empty folder · drop files here</div>)}
  </div>})}</>;
 }
 

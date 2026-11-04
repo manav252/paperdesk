@@ -3,6 +3,18 @@
 
 export type Incoming = { file: File; path: string };
 
+/** Use stable, TeX-friendly image names so includegraphics paths never contain spaces. */
+export function safeImageName(name: string): string {
+  const parts = name.split('/').filter(Boolean);
+  const filename = parts.pop() ?? name;
+  const safePart = (value: string) => value.normalize('NFKD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-zA-Z0-9_-]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '').toLowerCase();
+  const dot = filename.lastIndexOf('.');
+  const ext = dot > 0 ? filename.slice(dot).toLowerCase() : '';
+  const stem = safePart(dot > 0 ? filename.slice(0, dot) : filename);
+  return [...parts.map(part => safePart(part) || 'images'), `${stem || 'image'}${ext}`].join('/');
+}
+
 /** Files from a drop, walking into dropped folders so "figures/plot.png" keeps its folder. */
 export async function filesFromDrop(data: DataTransfer): Promise<Incoming[]> {
   const entries = Array.from(data.items ?? []).map(item => item.webkitGetAsEntry?.()).filter(Boolean) as FileSystemEntry[];

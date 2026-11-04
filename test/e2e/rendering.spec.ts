@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
+import { getDocument, OPS } from 'pdfjs-dist/legacy/build/pdf.mjs';
 import { cleanExternalProjects } from './external-api';
 
 // Builds the figures/tables/equations fixture through the editor UI (folders, uploads, drag and drop, SVG) and
@@ -39,10 +40,10 @@ async function newFolder(page: Page, name: string) {
 }
 
 async function uploadInto(page: Page, folderLabel: string, files: { name: string; mimeType: string; buffer: Buffer }[]) {
-  const row = page.getByRole('treeitem', { name: new RegExp(`^${folderLabel}\\b`) }).first().locator('.file-row').first();
-  await row.hover();
+  const uploadButton = page.getByRole('button', { name: `Upload into ${folderLabel}`, exact: true });
+  await expect(uploadButton).toBeVisible();
   const chooser = page.waitForEvent('filechooser');
-  await row.getByRole('button', { name: `Upload into ${folderLabel}` }).click();
+  await uploadButton.click();
   await (await chooser).setFiles(files);
 }
 
@@ -74,6 +75,7 @@ test('figures, tables and equations compile to a clean PDF', async ({ page }) =>
     { name: 'photo.jpg', mimeType: 'image/jpeg', buffer: read('figures/photo.jpg') },
     { name: 'shape.eps', mimeType: 'application/postscript', buffer: read('figures/shape.eps') },
   ]);
+  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('paperdesk-projects') ?? '[]')[0]?.files?.map((file: { name: string }) => file.name))).toEqual(expect.arrayContaining(['figures/plot.png', 'figures/photo.jpg', 'figures/shape.eps']));
   await expect(page.locator('.file-label').getByText('photo.jpg', { exact: true })).toBeVisible();
 
   // The PDF figure arrives by drag and drop onto the folder.
@@ -95,12 +97,28 @@ test('figures, tables and equations compile to a clean PDF', async ({ page }) =>
   await uploadInto(page, 'figures', [{ name: 'logo.svg', mimeType: 'image/svg+xml', buffer: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="40" height="20"><rect width="40" height="20" fill="#1f6f55"/></svg>') }]);
   await expect(page.locator('.file-label').getByText('logo.png', { exact: true })).toBeVisible();
 
+  const imageChooser = page.waitForEvent('filechooser');
+  await page.getByRole('button', { name: 'Insert image' }).click();
+  await (await imageChooser).setFiles({ name: 'User attachment.png', mimeType: 'image/png', buffer: readFileSync(path.resolve('test/fixtures/compile/image-space-upload/user-attachment.png')) });
+  await expect(page.locator('.file-label').getByText('user-attachment.png', { exact: true })).toBeVisible();
+  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('paperdesk-projects') ?? '[]')[0]?.files?.find((file: { name: string }) => file.name === 'main.tex')?.content)).toContain('\\includegraphics[width=0.8\\linewidth]{user-attachment.png}');
+
+  const compiledResponse = page.waitForResponse(response => /\/api\/projects\/[^/]+\/compile$/.test(new URL(response.url()).pathname));
   await page.getByRole('button', { name: /^Recompile/ }).first().click();
+  const compiled = await (await compiledResponse).json();
   await expect(page.getByRole('region', { name: 'PDF preview' }).getByRole('status')).toContainText('Compiled in', { timeout: 240_000 });
   await expect.poll(() => page.locator('.pdf-page').count()).toBeGreaterThanOrEqual(5);
   await expect(page.locator('.pdf-page canvas').first()).not.toHaveClass(/is-loading/);
+  expect(compiled.success).toBe(true);
+  expect(compiled.pdf).toBeTruthy();
+  const compiledPdf = await getDocument({ data: new Uint8Array(Buffer.from(compiled.pdf, 'base64')), verbosity: 0 }).promise;
+  try {
+    const operators = await Promise.all(Array.from({ length: compiledPdf.numPages }, (_, i) => compiledPdf.getPage(i + 1).then(page => page.getOperatorList())));
+    expect(operators.some(list => list.fnArray.some(fn => [OPS.paintImageXObject, OPS.paintInlineImageXObject, OPS.paintImageMaskXObject].includes(fn)))).toBe(true);
+  } finally { await compiledPdf.destroy(); }
   await page.getByRole('button', { name: 'Logs' }).click();
   const log = page.getByRole('dialog', { name: 'Compile log' });
   await expect(log).toContainText('Compiled successfully · 0 errors');
+  await expect(log.locator('.compile-timings')).toContainText(/browser PDF page render \d+ ms/);
   await expect(log.locator('.log-entry.warning', { hasText: /undefined|not found|Unknown graphics/i })).toHaveCount(0);
 });

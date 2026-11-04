@@ -100,6 +100,21 @@ test('a failed recompile keeps the previous PDF and marks it out of date', async
   await expect(page.locator('.pdf-scroll canvas:not(.is-loading)').first()).toBeVisible();
 });
 
+test('a project created while the first sync is still loading is kept', async ({ page }) => {
+  await page.route('**/api/projects', async route => {
+    if (route.request().method() !== 'GET') return route.continue();
+    await new Promise(r => setTimeout(r, 2500));
+    await route.fulfill({ json: [] });
+  });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Templates' }).click();
+  await page.getByRole('button', { name: /Article/ }).first().click();
+  await expect(page.getByTitle('Rename project')).toContainText('Article');
+  await page.waitForTimeout(3500);
+  await expect(page.getByTitle('Rename project')).toContainText('Article');
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem('paperdesk-projects')!).some((p: { name: string }) => /Article/.test(p.name)))).toBe(true);
+});
+
 test('editor header, menus, panels and dialogs', async ({ page }) => {
   await openControls(page);
   for (const name of ['File', 'Edit', 'Insert', 'View', 'Help']) {

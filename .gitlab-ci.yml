@@ -20,5 +20,7 @@ pages:
     - npm ci
     - npm run build
     - cp dist/index.html dist/404.html
+    # Pages serves these .br/.gz copies to browsers that accept them.
+    - node scripts/precompress.mjs dist
   pages:
     publish: dist

@@ -65,8 +65,8 @@ const seed:Project[]=[{id:'p1',name:'Research Paper — Quantum Computing',modif
   year={1982}
 }
 `}]}];
-const routeProjectId=()=>{const match=window.location.pathname.match(/^\/paper\/([^/]+)\/?$/);if(!match)return null;try{return decodeURIComponent(match[1]!)}catch{return null}};
-const projectPath=(id:string)=>`/paper/${encodeURIComponent(id)}/`;
+const routeProjectId=()=>{const match=window.location.hash.match(/^#\/paper\/([^/?]+)\/?$/)??window.location.pathname.match(/^\/paper\/([^/]+)\/?$/);if(!match)return null;try{return decodeURIComponent(match[1]!)}catch{return null}};
+const projectPath=(id:string)=>`/#/paper/${encodeURIComponent(id)}/`;
 const initial=()=>{try{const s=localStorage.getItem('paperdesk-projects');return s?(JSON.parse(s) as Project[]).map(p=>normalizeProject(p,'storage')):[]}catch{return []}};
 const rewriteImageReferences=(source:string,renames:Map<string,string>)=>[...renames].reduce((body,[from,to])=>{
  const oldName=from.split('/').pop()??from,newName=to.split('/').pop()??to,dot=oldName.lastIndexOf('.');
@@ -157,8 +157,8 @@ function App(){
  useEffect(()=>{try{localStorage.setItem('paperdesk-projects',JSON.stringify(projects))}catch{if(!storageWarned.current){storageWarned.current=true;notify(apiOnline?'Browser storage is full. Your work is saved on the server, but not offline in this browser.':'Browser storage is full and the API is offline: recent changes may not be saved. Start the API with “npm run dev:all”.','error')}}},[projects]);
  useEffect(()=>{
   const onPopState=()=>{const id=routeProjectId();setProjectId(id??'');setActiveTab(id?'editor':'dashboard')};
-  if(routeProjectId())history.replaceState({screen:'project',id:routeProjectId()},'',`${projectPath(routeProjectId()!)}${window.location.search}${window.location.hash}`);
-  else history.replaceState({screen:'dashboard'},'', `/${window.location.search}${window.location.hash}`);
+  const id=routeProjectId(),url=`/${window.location.search}${id?projectPath(id).slice(1):''}`;
+  history.replaceState(id?{screen:'project',id}:{screen:'dashboard'},'',url);
   window.addEventListener('popstate',onPopState);return()=>window.removeEventListener('popstate',onPopState);
  },[]);
  useEffect(()=>{try{localStorage.setItem(LAYOUT_KEY,JSON.stringify(prefs))}catch{/* storage unavailable: layout lasts for this visit */}},[prefs]);
@@ -171,7 +171,7 @@ function App(){
   history.replaceState(null,'',location.pathname+location.hash);
   try{const r=await fetch(apiUrl(`/api/shares/${encodeURIComponent(shareId)}`));const d=await r.json().catch(()=>null);if(!r.ok||!d)throw new Error(d?.error??'This shared project couldn’t be opened.');
    const copy=normalizeProject({id:crypto.randomUUID(),name:`${d.name} (copy)`,modified:Date.now(),mainFile:d.mainFile,files:d.files},'server');
-   setProjects(x=>[copy,...x]);setProjectId(copy.id);setFileName(defaultFile(copy.files));setActiveTab('editor');notify(`Opened a copy of “${d.name}”. Changes stay in your copy.`,'success')}
+   history.pushState({screen:'project',id:copy.id},'',projectPath(copy.id));setProjects(x=>[copy,...x]);setProjectId(copy.id);setFileName(defaultFile(copy.files));setActiveTab('editor');notify(`Opened a copy of “${d.name}”. Changes stay in your copy.`,'success')}
   catch(e){notify(e instanceof Error&&!(e instanceof TypeError)?e.message:NETWORK_HELP,'error')}
  };
  useEffect(()=>{const openSample=()=>{if(!firstVisit.current||routeProjectId()||projects.length)return;const sample=seed[0]!;firstVisit.current=false;setProjects(seed);setProjectId(sample.id);setFileName(defaultFile(sample.files));setActiveTab('editor');history.pushState({screen:'project',id:sample.id},'',projectPath(sample.id))};const sync=async()=>{try{const r=await apiFetch('/api/projects');if(!r.ok)throw new Error();const remote=await r.json();if(!Array.isArray(remote))throw new Error();setApiOnline(true);const {merged,upload}=mergeProjects(projects,remote.map((p:Project)=>normalizeProject(p,'server')));setProjects(merged);if(routeProjectId()){if(merged.some(p=>p.id===routeProjectId())){setProjectId(routeProjectId()!);setActiveTab('editor')}else{history.replaceState({screen:'dashboard'},'', '/');setProjectId('');setActiveTab('dashboard')}}else if(firstVisit.current&&!merged.length)openSample();else if(merged.length)firstVisit.current=false;for(const p of upload)await apiFetch(`/api/projects/${p.id}`,{method:'PUT',headers:json,body:JSON.stringify({name:p.name,files:p.files,mainFile:p.mainFile,archived:p.archived,settings:p.settings,versions:p.versions,comments:p.comments,changes:p.changes})})}catch{setApiOnline(false);if(routeProjectId()&&!projects.some(p=>p.id===routeProjectId())){history.replaceState({screen:'dashboard'},'', '/');setProjectId('');setActiveTab('dashboard')}else openSample()}};// A shared copy is added after the first sync, which would otherwise replace the project list without it.

@@ -22,19 +22,19 @@ test('project URLs survive direct load and refresh; browser back and forward fol
   page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
   page.on('pageerror', error => errors.push(error.message));
 
-  await page.goto('/paper/route-project-one/');
+  await page.goto('/#/paper/route-project-one/');
   await expect(page.getByTitle('Rename project')).toContainText('Route Project One');
-  await expect(page).toHaveURL(/\/paper\/route-project-one\/$/);
+  await expect(page).toHaveURL(/#\/paper\/route-project-one\/$/);
   await page.reload();
   await expect(page.getByTitle('Rename project')).toContainText('Route Project One');
-  await expect(page).toHaveURL(/\/paper\/route-project-one\/$/);
+  await expect(page).toHaveURL(/#\/paper\/route-project-one\/$/);
 
   await page.getByRole('button', { name: 'Back to projects' }).click();
   await expect(page.getByRole('heading', { name: 'Your projects' })).toBeVisible();
   await expect(page).toHaveURL(/\/$/);
   await page.locator('.project-open').filter({ hasText: 'Route Project Two' }).click();
   await expect(page.getByTitle('Rename project')).toContainText('Route Project Two');
-  await expect(page).toHaveURL(/\/paper\/route-project-two\/$/);
+  await expect(page).toHaveURL(/#\/paper\/route-project-two\/$/);
 
   await page.goBack();
   await expect(page.getByRole('heading', { name: 'Your projects' })).toBeVisible();

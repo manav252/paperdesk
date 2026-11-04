@@ -459,6 +459,8 @@ function compileSlot(signal: AbortSignal, waitMs = 90_000) {
 
 /** Running compiles by project, so a newer compile (or the browser going away) stops a stale one. */
 const RUNNING = new Map<string, { cancel: () => void; done: Promise<unknown> }>();
+/** Saves of compile results still in flight, by project; SyncTeX waits for one before reading storage. */
+const PERSISTING = new Map<string, Promise<unknown>>();
 const BOOT_ID = crypto.randomUUID();
 const workspaces = new Workspaces(os.tmpdir(), Number(process.env.COMPILE_WORKSPACES ?? 8));
 /** The last PDF and SyncTeX data per project, so the preview and SyncTeX don't wait for object storage. */
@@ -606,32 +608,27 @@ app.post('/api/projects/:id/compile', async (req, res) => {
     RESULTS.set(key, result);
     const synctex = success && !draft ? await fs.readFile(path.join(ws.dir, base + '.synctex.gz')).catch(() => null) : null;
     if (pdf && success && !draft) rememberArtifacts(key, { pdf, synctex, workspace: ws.key });
-    // Persist before returning: the browser can request SyncTeX immediately after receiving the PDF, and
-    // Render may route that request after a process restart where the warm in-memory workspace is gone.
-    if (pdf && success && !draft) {
-      try {
-        // A new browser project can compile before its debounced autosave reaches the API. Keep the exact
-        // successful source snapshot with the PDF so a cold instance can reconstruct a SyncTeX workspace.
-        if (files.every(file => file.content !== undefined)) {
-          await writeProject(id, {
-            name: String(req.body.name ?? 'Untitled Project'),
-            mainFile,
-            files: files.map(file => ({ name: file.name, content: file.content ?? '', ...(file.encoding ? { encoding: file.encoding } : {}) })),
-          }, { replace: true }, owner);
-        }
-        await storeArtifacts(id, owner, pdf, synctex);
-      }
-      catch (error) {
-        console.error('Saving compile artifacts failed:', error);
-        return void send(res, 503, 'Compilation succeeded, but the source, PDF and SyncTeX files could not be saved. Check project storage settings.');
-      }
-    }
     mark('read', t);
     timings.total = Date.now() - started;
     res.setHeader('Server-Timing', Object.entries(timings).map(([name, ms]) => `${name};dur=${ms}`).join(', '));
     // The PDF travels with the result so the preview needs no second request.
     res.json({ ...result, session: BOOT_ID, timings, ...(pdf && success && pdf.length <= 8 * 1024 * 1024 ? { pdf: pdf.toString('base64') } : {}) });
     io.to(id).emit('compile:complete', { success });
+
+    // Save the source snapshot, PDF and SyncTeX data after answering: waiting for storage added 1.5–3 s to every
+    // compile on Render. SyncTeX normally reads the warm folder; when it has to rebuild from storage (after a
+    // process restart) it first waits for a save still in flight for this project (see PERSISTING).
+    if (pdf && success && !draft) {
+      const sources = files.every(file => file.content !== undefined) ? files : null;
+      const saving = (async () => {
+        // A new browser project can compile before its debounced autosave reaches the API. Keep the exact
+        // successful source snapshot with the PDF so a cold instance can reconstruct a SyncTeX workspace.
+        if (sources) await writeProject(id, { name: String(req.body.name ?? 'Untitled Project'), mainFile, files: sources.map(file => ({ name: file.name, content: file.content ?? '', ...(file.encoding ? { encoding: file.encoding } : {}) })) }, { replace: true }, owner);
+        await storeArtifacts(id, owner, pdf, synctex);
+      })().catch(error => console.error('Saving the compile source, PDF and SyncTeX files failed:', error));
+      PERSISTING.set(key, saving);
+      void saving.finally(() => { if (PERSISTING.get(key) === saving) PERSISTING.delete(key); });
+    }
 
     if (success && fmtKey && ws.format?.key !== fmtKey) void buildPreambleFormat(ws, mainFile, fmtKey).catch(error => console.error('Building the preamble format failed:', error));
   } catch (e) {
@@ -737,6 +734,8 @@ app.post('/api/projects/:id/synctex', async (req, res) => {
     const cached = ARTIFACTS.get(syncLockKey);
     const warm = cached ? workspaces.peek(cached.workspace) : undefined;
     const warmReady = !!warm && await fs.access(path.join(warm.dir, pdfFile.replace(/\.pdf$/i, '.synctex.gz'))).then(() => true, () => false);
+    // Rebuilding from storage: make sure the latest compile's save has finished first.
+    if (!(warm && warmReady)) await PERSISTING.get(syncLockKey);
     if (warm && warmReady) syncRoot = warm.dir;
     else if (COMPILE_MODE === 'native') {
       const project = await readProject(id, owner);

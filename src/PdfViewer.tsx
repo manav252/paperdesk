@@ -18,18 +18,19 @@ function loadPdfjs() {
 /**
  * Continuous PDF preview: every page is laid out at its final size, pages near the viewport are rendered first,
  * and a recompile redraws pages in place so the scroll position and the old image stay until the new one is ready.
- * Double-click a page to jump to the matching source line (SyncTeX).
+ * Click or select text on a page to jump to the matching source line (SyncTeX).
  */
-export function PdfViewer({ url, data, zoom, nav, syncPoint, onLoaded, onScale, onPageChange, onSourceJump }: {
+export function PdfViewer({ url, data, zoom, nav, syncPoint, onLoaded, onScale, onPageChange, onSourceJump, onRenderTime }: {
   url: string; data?: Uint8Array | null; zoom: Zoom; nav: { page: number; n: number };
   syncPoint: { page: number; x: number; y: number } | null;
   onLoaded: (pages: number) => void; onScale: (pct: number) => void; onPageChange: (page: number) => void;
   onSourceJump: (page: number, x: number, y: number) => void;
+  onRenderTime?: (ms: number) => void;
 }) {
   const boxRef = useRef<HTMLDivElement>(null);
   const pageRefs = useRef<(HTMLDivElement | null)[]>([]);
-  const cb = useRef({ onLoaded, onScale, onPageChange, onSourceJump });
-  cb.current = { onLoaded, onScale, onPageChange, onSourceJump };
+  const cb = useRef({ onLoaded, onScale, onPageChange, onSourceJump, onRenderTime });
+  cb.current = { onLoaded, onScale, onPageChange, onSourceJump, onRenderTime };
   const [doc, setDoc] = useState<Loaded | null>(null);
   const docRef = useRef<Loaded | null>(null);
   docRef.current = doc;
@@ -119,7 +120,11 @@ export function PdfViewer({ url, data, zoom, nav, syncPoint, onLoaded, onScale, 
     const current = docRef.current;
     if (!current) return;
     const rect = event.currentTarget.getBoundingClientRect();
-    const at = { x: event.clientX - rect.left, y: event.clientY - rect.top };
+    const selection = window.getSelection();
+    const selected = selection && !selection.isCollapsed && selection.rangeCount ? selection.getRangeAt(0).getBoundingClientRect() : null;
+    const clientX = selected?.width ? selected.left + selected.width / 2 : event.clientX;
+    const clientY = selected?.height ? selected.top + selected.height / 2 : event.clientY;
+    const at = { x: clientX - rect.left, y: clientY - rect.top };
     // A recompile can swap the document mid-click; then retry once with the newest one.
     for (const docNow of [current, docRef.current]) {
       if (!docNow) continue;
@@ -138,8 +143,8 @@ export function PdfViewer({ url, data, zoom, nav, syncPoint, onLoaded, onScale, 
     {err && <div className="pdf-error" role="alert"><AlertCircle size={18} /><span>{err}</span></div>}
     <div className="pdf-pages" style={{ gap: GAP }}>
       {doc?.sizes.map((s, i) => <div key={i} data-index={i} ref={el => { pageRefs.current[i] = el; }} className="pdf-page" style={{ width: Math.floor(s.w * scale), height: Math.floor(s.h * scale) }}
-        title="Double-click to jump to the source" onDoubleClick={e => void jump(i, e)}>
-        <PdfPage pdf={doc.pdf} index={i} scale={scale} active={visible.has(i)} />
+        title="Click or select text to jump to the source" onClick={e => { if (!window.getSelection()?.toString()) void jump(i, e); }} onMouseUp={e => { if (window.getSelection()?.toString()) void jump(i, e); }}>
+        <PdfPage pdf={doc.pdf} index={i} scale={scale} active={visible.has(i)} onRenderTime={cb.current.onRenderTime} />
         {syncPoint?.page === i + 1 && <span className="sync-marker" style={{ left: syncPoint.x * scale - 6, top: (s.h - syncPoint.y) * scale - 6 }} aria-hidden />}
       </div>)}
     </div>
@@ -147,7 +152,7 @@ export function PdfViewer({ url, data, zoom, nav, syncPoint, onLoaded, onScale, 
 }
 
 /** One page. Renders off screen and then copies the result in, so a recompile replaces the image without a blank frame. */
-function PdfPage({ pdf, index, scale, active }: { pdf: any; index: number; scale: number; active: boolean }) {
+function PdfPage({ pdf, index, scale, active, onRenderTime }: { pdf: any; index: number; scale: number; active: boolean; onRenderTime?: (ms: number) => void }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const drawn = useRef<{ pdf: any; scale: number } | null>(null);
   const [ready, setReady] = useState(false);
@@ -158,12 +163,14 @@ function PdfPage({ pdf, index, scale, active }: { pdf: any; index: number; scale
       try {
         const page = await pdf.getPage(index + 1);
         if (cancelled) return;
+        const renderStarted = performance.now();
         const dpr = window.devicePixelRatio || 1;
         const viewport = page.getViewport({ scale });
         const off = document.createElement('canvas');
         off.width = Math.floor(viewport.width * dpr); off.height = Math.floor(viewport.height * dpr);
         task = page.render({ canvasContext: off.getContext('2d')!, viewport, transform: dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : undefined });
         await task.promise;
+        onRenderTime?.(Math.round(performance.now() - renderStarted));
         const canvas = canvasRef.current;
         if (cancelled || !canvas) return;
         canvas.width = off.width; canvas.height = off.height;
@@ -173,6 +180,34 @@ function PdfPage({ pdf, index, scale, active }: { pdf: any; index: number; scale
       } catch (e: any) { if (e?.name !== 'RenderingCancelledException' && !cancelled) console.warn('PDF page render failed', e); }
     })();
     return () => { cancelled = true; task?.cancel?.(); };
-  }, [pdf, scale, active, index]);
-  return <canvas ref={canvasRef} aria-label={`PDF page ${index + 1}`} className={ready ? '' : 'is-loading'} />;
+  }, [pdf, scale, active, index, onRenderTime]);
+  return <><canvas ref={canvasRef} aria-label={`PDF page ${index + 1}`} className={ready ? '' : 'is-loading'} /><PdfTextLayer pdf={pdf} index={index} scale={scale} /></>;
+}
+
+function PdfTextLayer({ pdf, index, scale }: { pdf: any; index: number; scale: number }) {
+  const [items, setItems] = useState<{ text: string; left: number; top: number; width: number; height: number; angle: number }[]>([]);
+  useEffect(() => {
+    let live = true;
+    void (async () => {
+      try {
+        const page = await pdf.getPage(index + 1);
+        const viewport = page.getViewport({ scale });
+        const content = await page.getTextContent();
+        if (!live) return;
+        setItems(content.items.filter((item: any) => typeof item.str === 'string' && item.str).map((item: any) => {
+          const tx = (window as any).pdfjsLib?.Util?.transform?.(viewport.transform, item.transform) ?? multiply(viewport.transform, item.transform);
+          const height = Math.hypot(tx[2], tx[3]);
+          return { text: item.str, left: tx[4], top: tx[5] - height, width: Math.max(1, item.width * scale), height, angle: Math.atan2(tx[1], tx[0]) };
+        }));
+      } catch { if (live) setItems([]); }
+    })();
+    return () => { live = false; };
+  }, [pdf, index, scale]);
+  return <div className="pdf-text-layer" aria-label={`Selectable text on PDF page ${index + 1}`}>
+    {items.map((item, i) => <span key={i} style={{ left: item.left, top: item.top, width: item.width, height: item.height, fontSize: item.height, transform: `rotate(${item.angle}rad)` }}>{item.text}</span>)}
+  </div>;
+}
+
+function multiply(a: number[], b: number[]) {
+  return [a[0]! * b[0]! + a[2]! * b[1]!, a[1]! * b[0]! + a[3]! * b[1]!, a[0]! * b[2]! + a[2]! * b[3]!, a[1]! * b[2]! + a[3]! * b[3]!, a[0]! * b[4]! + a[2]! * b[5]! + a[4]!, a[1]! * b[4]! + a[3]! * b[5]! + a[5]!];
 }

@@ -39,8 +39,8 @@ test.beforeEach(async ({ page, request }) => {
       await route.fulfill({ json: mode === 'forward' ? { found: true, page: 1, x: 110, y: 125 } : { found: true, file: 'main.tex', line: 3, column: 1 } });
     });
   }
-  page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
-  page.on('pageerror', error => errors.push(error.message));
+  page.on('console', message => { if (message.type() === 'error') errors.push(`${message.text()} (${message.location().url}:${message.location().lineNumber})`); });
+  page.on('pageerror', error => errors.push(error.stack ?? error.message));
 });
 
 test.afterEach(async ({ page, request }) => {
@@ -87,13 +87,26 @@ for (const template of templates) {
     await page.getByRole('button', { name: 'Sync source to PDF' }).click();
     const pdfPage = page.locator('canvas[aria-label="PDF page 1"]');
     await expect(pdfPage).not.toHaveClass(/is-loading/);
-    // Like Overleaf, a double-click on the PDF jumps to the source; a single click is for reading. Auto compile may
-    // swap the PDF under the pointer on a slow machine, so repeat the double-click until the jump request is sent.
+    // Clicking or selecting PDF text jumps to its source line. Auto compile may swap the PDF under the pointer on a
+    // slow machine, so repeat until the jump request is sent.
     await expect(async () => {
-      await pdfPage.dblclick();
+      const text = page.locator('.pdf-text-layer span').first();
+      await expect(text).toBeVisible();
+      await text.click();
       expect(syncModesByPage.get(page)).toContain('inverse');
     }).toPass({ timeout: 30_000 });
-    if (test.info().project.name.startsWith('phone')) await page.getByRole('radio', { name: 'Editor' }).click();
+    const previousInverseJumps = syncModesByPage.get(page)?.filter(mode => mode === 'inverse').length ?? 0;
+    if (test.info().project.name.startsWith('phone')) await page.getByRole('radio', { name: 'PDF' }).click();
+    await expect(async () => {
+      const selectableText = page.locator('.pdf-text-layer span').first();
+      const bounds = await selectableText.boundingBox();
+      if (!bounds) throw new Error('PDF text is not visible for selection');
+      await page.mouse.move(bounds.x + Math.min(2, bounds.width / 4), bounds.y + bounds.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(bounds.x + Math.max(3, bounds.width - 2), bounds.y + bounds.height / 2, { steps: 4 });
+      await page.mouse.up();
+      expect(syncModesByPage.get(page)?.filter(mode => mode === 'inverse').length ?? 0).toBeGreaterThan(previousInverseJumps);
+    }).toPass({ timeout: 30_000 });
     await expect(page.locator('.status-bar')).toContainText('Ln 3');
     if (!process.env.E2E_BASE_URL) expect(syncModesByPage.get(page)?.[0]).toBe('forward');
   });

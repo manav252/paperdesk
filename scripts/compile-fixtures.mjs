@@ -6,7 +6,7 @@ import { spawn } from 'node:child_process';
 import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs';
+import { getDocument, OPS } from 'pdfjs-dist/legacy/build/pdf.mjs';
 
 const ROOT = path.resolve('test/fixtures/compile');
 const PORT = Number(process.env.FIXTURE_PORT ?? 3101);
@@ -95,7 +95,9 @@ try {
         try {
           doc = await getDocument({ data: new Uint8Array(pdf), verbosity: 0 }).promise;
           pages = doc.numPages;
-          text = (await Promise.all(Array.from({ length: pages }, (_, i) => doc.getPage(i + 1).then(p => p.getTextContent())))).flatMap(c => c.items.map(it => it.str)).join(' ').replace(/\s+/g, ' ').toLowerCase();
+          const pageData = await Promise.all(Array.from({ length: pages }, (_, i) => doc.getPage(i + 1).then(async p => ({ text: await p.getTextContent(), ops: await p.getOperatorList() }))));
+          text = pageData.flatMap(x => x.text.items.map(it => it.str)).join(' ').replace(/\s+/g, ' ').toLowerCase();
+          if (expect.image && !pageData.some(x => x.ops.fnArray.some(fn => [OPS.paintImageXObject, OPS.paintInlineImageXObject, OPS.paintImageMaskXObject].includes(fn)))) problems.push('PDF contains no rendered image operator');
         } catch (e) {
           problems.push(`PDF text parser failed: ${e instanceof Error ? e.message : String(e)}`);
         } finally {
@@ -108,12 +110,13 @@ try {
         if ((expect.bibtex || expect.bibliography === 'bibtex') && !/BibTeX|bibtex/i.test(body.log)) problems.push('BibTeX did not run');
         if (expect.bibliography === 'biber' && !/biber/i.test(body.log)) problems.push('Biber did not run');
         if ((expect.bibtex || expect.bibliography) && body.warnings.some(w => /undefined|Citation/.test(w.message) && /cit/i.test(w.message))) problems.push('undefined citations');
-        if (name === 'article' && engine === 'pdflatex') {
-          const forward = await json(`${API}/projects/${id}/synctex`, { method: 'POST', body: JSON.stringify({ mode: 'forward', mainFile: 'main.tex', file: 'main.tex', line: 13, column: 1 }) });
+        const syncExpectation = expect.sync ?? (name === 'article' && engine === 'pdflatex' ? { file: 'main.tex', line: 13 } : null);
+        if (syncExpectation) {
+          const forward = await json(`${API}/projects/${id}/synctex`, { method: 'POST', body: JSON.stringify({ mode: 'forward', mainFile: 'main.tex', file: syncExpectation.file, line: syncExpectation.line, column: 1 }) });
           if (forward.status !== 200 || !forward.body?.found) problems.push(`SyncTeX source-to-PDF lookup failed: ${forward.body?.error ?? 'no position'}`);
           else {
             const inverse = await json(`${API}/projects/${id}/synctex`, { method: 'POST', body: JSON.stringify({ mode: 'inverse', mainFile: 'main.tex', page: forward.body.page, x: forward.body.x, y: forward.body.y }) });
-            if (inverse.status !== 200 || !inverse.body?.found || inverse.body.file !== 'main.tex' || inverse.body.line !== 13) problems.push(`SyncTeX PDF-to-source lookup failed: ${JSON.stringify(inverse.body)}`);
+            if (inverse.status !== 200 || !inverse.body?.found || inverse.body.file !== syncExpectation.file || inverse.body.line !== syncExpectation.line) problems.push(`SyncTeX PDF-to-source lookup failed: ${JSON.stringify(inverse.body)}`);
           }
         }
       } else {
@@ -125,7 +128,8 @@ try {
         }
       }
       const secs = ((Date.now() - t) / 1000).toFixed(1).padStart(5);
-      const label = `${name.padEnd(12)} ${engine.padEnd(9)} ${secs}s${edit ? `  (${edit.label}: ${body?.timings?.passes === 1 ? 'single pass' : 'latexmk'})` : ''}`;
+      const timing = body?.timings ? `  [queue ${body.timings.queue}ms · sync ${body.timings.sync}ms · TeX+startup ${body.timings.tex}ms · read ${body.timings.read}ms · total ${body.timings.total}ms]` : '';
+      const label = `${name.padEnd(20)} ${engine.padEnd(9)} ${secs}s${timing}${edit ? `  (${edit.label}: ${body?.timings?.passes === 1 ? 'single pass' : 'latexmk'})` : ''}`;
       if (edit?.expect) expect.contains = expect.contains.filter(c => c !== edit.expect);
       if (problems.length) { failures++; console.log(`  ✗ ${label}  ${problems.join(' | ')}`); if (expect.bibtex || expect.bibliography) console.log(body.log.slice(-5000)); }
       else console.log(`  ✓ ${label}${expect.success ? '' : `  error → ${body.errors[0].file}:${body.errors[0].line}`}`);

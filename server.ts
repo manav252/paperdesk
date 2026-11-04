@@ -448,6 +448,8 @@ let compileBusy = false;
 function compileSlot(signal: AbortSignal, waitMs = 90_000) {
   return new Promise<() => void>((resolve, reject) => {
     const release = () => { compileBusy = false; compileQueue.shift()?.(); };
+    // A request the browser already abandoned must not take a turn (and delay everyone behind it).
+    if (signal.aborted) return reject(new Error('cancelled'));
     if (!compileBusy) { compileBusy = true; return resolve(release); }
     const timer = setTimeout(() => { remove(); reject(new Error('The compile server is busy. Try again in a moment.')); }, waitMs);
     const start = () => { clearTimeout(timer); signal.removeEventListener('abort', cancel); compileBusy = true; resolve(release); };
@@ -519,6 +521,7 @@ app.post('/api/projects/:id/compile', async (req, res) => {
     // A newer compile of the same project replaces a stale one that is still running or waiting.
     const previous = RUNNING.get(key);
     if (previous) { previous.cancel(); await previous.done.catch(() => undefined); }
+    if (closed.signal.aborted) return; // abandoned while the stale compile was stopping
     let cancelRun: () => void = () => undefined;
     const done = new Promise<void>(resolve => { finished = resolve; });
     entry = { cancel: () => { superseded = true; closed.abort(); cancelRun(); }, done };
@@ -526,6 +529,7 @@ app.post('/api/projects/:id/compile', async (req, res) => {
 
     let t = Date.now();
     release = await compileSlot(closed.signal);
+    if (closed.signal.aborted) return; // abandoned while queued
     mark('queue', t);
 
     t = Date.now();

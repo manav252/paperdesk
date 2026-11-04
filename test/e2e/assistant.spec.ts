@@ -29,7 +29,7 @@ async function open(page: Page, { tourDone = true } = {}) {
     localStorage.setItem('paperdesk-projects', JSON.stringify([value]));
     if (done) localStorage.setItem('paperdesk-tour-done', '1');
   }, [project(), tourDone] as const);
-  await page.goto('/');
+  await page.goto('/paper/p1/');
   await expect(page.locator('.monaco-editor')).toBeVisible();
 }
 

@@ -1,9 +1,11 @@
+import { readFileSync } from 'node:fs';
 import { expect, test, type Page } from '@playwright/test';
 import { cleanExternalProjects } from './external-api';
 
 const templates = ['IEEE conference', 'Springer', 'Article', 'Report', 'Beamer', 'CV'];
 const errorsByPage = new WeakMap<Page, string[]>();
 const syncModesByPage = new WeakMap<Page, string[]>();
+const compileRequestsByPage = new WeakMap<Page, { files: unknown[] }[]>();
 
 test.beforeEach(async ({ page, request }) => {
   // A local run gets a fresh API store for every test. Never delete data on an external E2E_BASE_URL.
@@ -15,7 +17,7 @@ test.beforeEach(async ({ page, request }) => {
     }
   }
   await page.addInitScript(() => {
-    localStorage.setItem('paperdesk-projects', '[]');
+    if (localStorage.getItem('paperdesk-projects') === null && sessionStorage.getItem('paperdesk-e2e-first-visit') !== '1') localStorage.setItem('paperdesk-projects', '[]');
     localStorage.setItem('paperdesk-tour-done', '1');
   });
   if (process.env.E2E_BASE_URL) {
@@ -25,7 +27,11 @@ test.beforeEach(async ({ page, request }) => {
   if (!process.env.E2E_BASE_URL) {
     const pdf = onePagePdf();
     await page.route('**/api/health', route => route.fulfill({ json: { ok: true, compilerReady: true, maxCompileTimeoutMs: 120_000, assistant: { configured: false } } }));
-    await page.route('**/api/projects/*/compile', route => route.fulfill({ json: { success: true, log: '', errors: [], warnings: [], durationMs: 100 } }));
+    compileRequestsByPage.set(page, []);
+    await page.route('**/api/projects/*/compile', async route => {
+      compileRequestsByPage.get(page)?.push(route.request().postDataJSON());
+      await route.fulfill({ json: { success: true, log: '', errors: [], warnings: [], durationMs: 100, timings: { fileSyncMs: 2, engineStartupMs: 3, texRunMs: 4, artifactSaveMs: 1, totalMs: 10 } } });
+    });
     await page.route('**/api/projects/*/pdf*', route => route.fulfill({ status: 200, contentType: 'application/pdf', body: pdf }));
   }
   await page.route(/^https:\/\/fonts\.(googleapis|gstatic)\.com\//, route => route.fulfill({ status: 200, contentType: 'text/css', body: '' }));
@@ -85,9 +91,9 @@ for (const template of templates) {
     await compileAndViewPdf(page);
     if (test.info().project.name.startsWith('phone')) await page.getByRole('radio', { name: 'Editor' }).click();
     await page.getByRole('button', { name: 'Sync source to PDF' }).click();
-    const pdfPage = page.locator('canvas[aria-label="PDF page 1"]');
-    await expect(pdfPage).not.toHaveClass(/is-loading/);
-    await pdfPage.click();
+    const pdfText = page.locator('.textLayer span').filter({ hasText: 'PaperDesk browser PDF' }).first();
+    await expect(pdfText).toBeVisible();
+    await pdfText.click();
     if (test.info().project.name.startsWith('phone')) {
       await expect.poll(() => syncModesByPage.get(page)).toContain('inverse');
       await page.getByRole('radio', { name: 'Editor' }).click();
@@ -137,6 +143,120 @@ test('PDF text selection jumps to source and source sync highlights the PDF posi
   await expect.poll(() => syncModesByPage.get(page)).toContain('inverse');
   if (test.info().project.name.startsWith('phone')) await page.getByRole('radio', { name: 'Editor' }).click();
   await expect(page.locator('.status-bar')).toContainText('Ln 3');
+});
+
+test('auto compile waits until editing is idle and the compile shortcut runs immediately', async ({ page }) => {
+  compileRequestsByPage.set(page, []);
+  await openTemplate(page, 'Article');
+  if (test.info().project.name.startsWith('phone')) await page.getByRole('radio', { name: 'PDF' }).click();
+  await page.getByRole('button', { name: 'Compiler options' }).click();
+  await page.getByRole('menuitemcheckbox', { name: 'Auto compile: Off' }).click();
+  if (test.info().project.name.startsWith('phone')) await page.getByRole('radio', { name: 'Editor' }).click();
+  await appendToEditor(page, '\nPasted text should wait for idle.');
+  expect(compileRequestsByPage.get(page)).toHaveLength(0);
+  await page.waitForTimeout(2050);
+  await expect.poll(() => compileRequestsByPage.get(page)?.length).toBe(1);
+  await expect(page.locator('.pdf-scroll canvas:not(.is-loading)')).toBeVisible();
+  if (test.info().project.name.startsWith('phone')) await page.getByRole('radio', { name: 'Editor' }).click();
+  const editor = page.getByRole('textbox', { name: 'Editor content' });
+  await editor.click({ force: true });
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+S' : 'Control+S');
+  await expect.poll(() => compileRequestsByPage.get(page)?.length).toBe(2);
+});
+
+test('image upload sanitizes spaced filenames and updates the source reference', async ({ page }) => {
+  await openTemplate(page, 'Article');
+  await appendToEditor(page, '\n\\includegraphics[width=0.8\\linewidth]{User attachment.png}\n');
+  await page.locator('[data-testid="image-upload-input"]').setInputFiles({
+    name: 'User attachment.png',
+    mimeType: 'image/png',
+    buffer: readFileSync('test/fixtures/compile/springer/figures/sample.png'),
+  });
+  await expect.poll(() => page.evaluate(() => {
+    const project = JSON.parse(localStorage.getItem('paperdesk-projects') ?? '[]')[0];
+    const image = project.files.find((file: { name: string }) => file.name === 'user-attachment.png');
+    const source = project.files.find((file: { name: string }) => file.name === 'main.tex')?.content ?? '';
+    return image?.encoding === 'base64' && image.content.length > 100 && source.includes('\\includegraphics[width=0.8\\linewidth]{user-attachment.png}');
+  })).toBe(true);
+  await expect(page.getByRole('status')).toContainText('Uploaded user-attachment.png');
+});
+
+test('failed compile keeps the last good PDF and marks it out of date', async ({ page }) => {
+  await openTemplate(page, 'Article');
+  await compileAndViewPdf(page);
+  if (test.info().project.name.startsWith('phone')) await page.getByRole('radio', { name: 'Editor' }).click();
+  await page.unroute('**/api/projects/*/compile');
+  await page.route('**/api/projects/*/compile', route => route.fulfill({ json: {
+    success: false, durationMs: 90, log: '! Undefined control sequence.\nl.22 \\badCommand', warnings: [],
+    errors: [{ file: 'main.tex', line: 22, message: 'Undefined control sequence.' }],
+  } }));
+  await appendToEditor(page, '\n\\badCommand\n');
+  if (test.info().project.name.startsWith('phone')) {
+    await page.getByRole('button', { name: 'Menu' }).click();
+    await page.getByRole('menuitem', { name: 'Compile' }).click();
+  } else await page.getByRole('button', { name: /^Recompile/ }).first().click();
+  await expect(page.locator('.compile-banner .banner-stale')).toHaveText('PDF is out of date');
+  await expect(page.locator('.compile-banner[role="alert"]')).toContainText('Undefined control sequence');
+  await expect(page.getByRole('button', { name: 'Download PDF' })).toBeEnabled();
+  await expect(page.locator('.pdf-scroll canvas:not(.is-loading)')).toBeVisible();
+});
+
+test('toolbar has distinct tooltips and the PDF controls and editor status do not cover content', async ({ page }) => {
+  await openTemplate(page, 'Article');
+  const missingTooltips = await page.locator('.tool').evaluateAll(elements => elements.filter(element => !element.getAttribute('title')?.trim()).map(element => element.outerHTML));
+  expect(missingTooltips).toEqual([]);
+  expect(await page.locator('.tool').evaluateAll(elements => elements.map(element => element.getAttribute('title')))).toContain('Insert image');
+  expect(await page.locator('.tool').evaluateAll(elements => elements.map(element => element.getAttribute('title')))).toContain('Reference');
+  await appendToEditor(page, `\n% ${'long-line '.repeat(250)}\n`);
+  const editorLayout = await page.evaluate(() => {
+    const canvas = document.querySelector('.editor-canvas')!.getBoundingClientRect();
+    const status = document.querySelector('.status-bar')!.getBoundingClientRect();
+    return { canvasBottom: canvas.bottom, statusTop: status.top };
+  });
+  expect(editorLayout.canvasBottom).toBeLessThanOrEqual(editorLayout.statusTop + 1);
+  await compileAndViewPdf(page);
+  const pdfOverlap = await page.evaluate(() => {
+    const paper = document.querySelector('.pdf-page')!.getBoundingClientRect();
+    const controls = document.querySelector('.pdf-controls')!.getBoundingClientRect();
+    return paper.bottom > controls.top && paper.top < controls.bottom && paper.right > controls.left && paper.left < controls.right;
+  });
+  expect(pdfOverlap).toBe(false);
+});
+
+test('project URLs load on refresh and browser history moves between projects', async ({ page }) => {
+  await openTemplate(page, 'Article');
+  const first = await page.evaluate(() => JSON.parse(localStorage.getItem('paperdesk-projects') ?? '[]')[0]);
+  await expect(page).toHaveURL(new RegExp(`/paper/${first.id}/$`));
+  await page.goto(`/paper/${first.id}/`);
+  await expect(page.getByRole('button', { name: /Article project/ })).toBeVisible();
+  await page.reload();
+  await expect(page.locator('.monaco-editor')).toBeVisible();
+  await expect(page).toHaveURL(new RegExp(`/paper/${first.id}/$`));
+
+  await page.goBack();
+  await expect(page.getByRole('heading', { name: 'Your projects' })).toBeVisible();
+  await page.goForward();
+  await expect(page.locator('.monaco-editor')).toBeVisible();
+  await expect(page).toHaveURL(new RegExp(`/paper/${first.id}/$`));
+  await page.goBack();
+  await page.getByRole('button', { name: 'Templates' }).click();
+  await page.getByRole('button', { name: /Report/ }).click();
+  const second = await page.evaluate(() => JSON.parse(localStorage.getItem('paperdesk-projects') ?? '[]')[0]);
+  expect(second.id).not.toBe(first.id);
+  await expect(page).toHaveURL(new RegExp(`/paper/${second.id}/$`));
+  await page.goBack();
+  await expect(page.getByRole('heading', { name: 'Your projects' })).toBeVisible();
+  await page.goForward();
+  await expect(page).toHaveURL(new RegExp(`/paper/${second.id}/$`));
+});
+
+test('first visit without projects opens the sample, existing-project visits start at the dashboard', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.getByRole('heading', { name: 'Your projects' })).toBeVisible();
+  await page.evaluate(() => { localStorage.removeItem('paperdesk-projects'); sessionStorage.setItem('paperdesk-e2e-first-visit', '1'); });
+  await page.reload();
+  await expect(page.locator('.monaco-editor')).toBeVisible();
+  await expect(page).toHaveURL(/\/paper\/p1\/$/);
 });
 
 test('theme can be switched and the phone layout keeps editor and PDF controls usable', async ({ page }) => {

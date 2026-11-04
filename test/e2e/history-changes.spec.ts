@@ -25,7 +25,7 @@ test.afterEach(async ({ page, request }) => {
 
 async function openFresh(page: Page) {
   await page.addInitScript(value => { localStorage.setItem('paperdesk-projects', JSON.stringify([value])); localStorage.setItem('paperdesk-tour-done', '1'); localStorage.setItem('paperdesk-compile-prefs', JSON.stringify({ trackChanges: false })); }, project());
-  await page.goto('/');
+  await page.goto('/paper/p1/');
   await expect(page.locator('.monaco-editor')).toBeVisible();
 }
 

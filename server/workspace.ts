@@ -7,7 +7,13 @@ import os from 'node:os';
 import path from 'node:path';
 
 export type SourceFile = { name: string; content?: string; encoding?: 'base64'; hash?: string };
-export type Workspace = { key: string; dir: string; hashes: Map<string, string>; lastUsed: number; fresh: boolean };
+export type Workspace = {
+  key: string; dir: string; hashes: Map<string, string>; lastUsed: number; fresh: boolean;
+  /** The last compile here; a direct single pass is only tried after one that succeeded. */
+  last?: { ok: boolean; mainFile: string };
+  /** The precompiled preamble, if one was built for this preamble key. */
+  format?: { key: string; ok: boolean };
+};
 export type SyncResult = { written: string[]; removed: string[]; missing: string[] };
 
 /** Same value the browser computes (src/lib/compileSync.ts): SHA-256 of "<encoding>:<content>", first 32 hex digits. */

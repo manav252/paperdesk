@@ -72,10 +72,18 @@ try {
       if (!s || s.content !== f.content) throw new Error(`${name}: ${f.name} did not round-trip through the API`);
     }
 
-    for (const engine of expect.engines) {
+    const runs = expect.engines.map(engine => ({ engine, edit: null }));
+    // Recompile after edits too: the first edit (a comment) takes the single direct pass, the second (a new labelled
+    // section) changes the .aux and goes back through latexmk; pdfLaTeX also uses the cached preamble by then.
+    if (expect.success && expect.engines.includes('pdflatex')) runs.push(
+      { engine: 'pdflatex', edit: { label: 'edit', text: '% recompile check\n', expect: null } },
+      { engine: 'pdflatex', edit: { label: 'new label', text: '\\section*{Recompile check}\\label{pd-recheck}Recompile check text \\pageref{pd-recheck}.\n', expect: 'recompile check text' } });
+    for (const { engine, edit } of runs) {
       const t = Date.now();
-      const { status, body } = await json(`${API}/projects/${id}/compile`, { method: 'POST', body: JSON.stringify({ engine, mainFile: 'main.tex' }) });
+      const sent = edit ? files.map(f => f.name === 'main.tex' ? { ...f, content: f.content.replace(/\\end\{document\}/, `${edit.text}\\end{document}`) } : f) : null;
+      const { status, body } = await json(`${API}/projects/${id}/compile`, { method: 'POST', body: JSON.stringify({ engine, mainFile: 'main.tex', ...(sent ? { files: sent } : {}) }) });
       const problems = [];
+      if (edit?.expect) expect.contains = [...(expect.contains ?? []), edit.expect];
       if (status !== 200) problems.push(`HTTP ${status}: ${body?.error}`);
       else if (expect.success) {
         if (!body.success) problems.push(`expected success, got errors: ${body.errors.map(e => `${e.file}:${e.line} ${e.message}`).join('; ')}`);
@@ -116,7 +124,8 @@ try {
         }
       }
       const secs = ((Date.now() - t) / 1000).toFixed(1).padStart(5);
-      const label = `${name.padEnd(12)} ${engine.padEnd(9)} ${secs}s`;
+      const label = `${name.padEnd(12)} ${engine.padEnd(9)} ${secs}s${edit ? `  (${edit.label}: ${body?.timings?.passes === 1 ? 'single pass' : 'latexmk'})` : ''}`;
+      if (edit?.expect) expect.contains = expect.contains.filter(c => c !== edit.expect);
       if (problems.length) { failures++; console.log(`  ✗ ${label}  ${problems.join(' | ')}`); if (expect.bibtex || expect.bibliography) console.log(body.log.slice(-5000)); }
       else console.log(`  ✓ ${label}${expect.success ? '' : `  error → ${body.errors[0].file}:${body.errors[0].line}`}`);
     }

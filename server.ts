@@ -15,7 +15,7 @@ import { parseLatexLog, type LogEntry } from './src/lib/latexLog';
 import { parseForwardSync, parseInverseSync } from './src/lib/synctex';
 import { assistantConfigured, assistantModel, assistantRouter } from './server/assistant';
 import { ProjectPersistence, type ProjectData, type StoredFile } from './server/persistence';
-import { syncWorkspace, Workspaces, type SourceFile } from './server/workspace';
+import { syncWorkspace, Workspaces, type SourceFile, type Workspace } from './server/workspace';
 
 // Local settings and secrets come from an untracked .env (see .env.example); real environment variables win.
 try { process.loadEnvFile(); } catch { /* no .env file */ }
@@ -218,15 +218,31 @@ async function dockerStatus() {
   }
 }
 
-function latexmkArgs(engine: string, mainFile: string, stopOnFirstError: boolean, draft: boolean) {
-  const command = engine === 'pdflatex' ? '$pdflatex = "pdflatex -no-shell-escape %O %S";'
+function latexmkArgs(engine: string, mainFile: string, stopOnFirstError: boolean, draft: boolean, format?: string) {
+  const fmt = format ? ` -fmt=${format}` : '';
+  const command = engine === 'pdflatex' ? `$pdflatex = "pdflatex -no-shell-escape${fmt} %O %S";`
     : engine === 'xelatex' ? '$xelatex = "xelatex -no-shell-escape %O %S";'
       : '$lualatex = "lualatex -no-shell-escape %O %S";';
   return [ENGINES[engine]!, '-e', command, '-synctex=1', '-interaction=nonstopmode', '-file-line-error', ...(stopOnFirstError ? ['-halt-on-error'] : []), ...(draft ? ['-draftmode'] : []), '-norc', mainFile];
 }
 
+/** One engine pass without latexmk, whose startup alone costs most of a second on a small instance. */
+function directArgs(engine: string, mainFile: string, stopOnFirstError: boolean, format?: string) {
+  return ['-no-shell-escape', ...(format ? [`-fmt=${format}`] : []), '-synctex=1', '-interaction=nonstopmode', '-file-line-error', ...(stopOnFirstError ? ['-halt-on-error'] : []), mainFile];
+}
+
+/** Name of the cached preamble format (pdfLaTeX only; see buildPreambleFormat). */
+const PREAMBLE_FORMAT = 'pd-preamble';
+/** Identifies the preamble: its text plus local style files and files it \\inputs. A change means rebuilding the format. */
+function preambleKey(ws: Workspace, source: string) {
+  const preamble = source.split(/\\begin\s*\{document\}/)[0] ?? source;
+  const inputs = [...preamble.matchAll(/\\(?:input|include|usepackage|documentclass|RequirePackage)(?:\[[^\]]*\])?\{([^}]+)\}/g)].flatMap(m => m[1].split(',').map(n => n.trim()));
+  const deps = [...ws.hashes].filter(([name]) => /\.(sty|cls|cfg|def|clo|ldf|fd)$/i.test(name) || inputs.some(i => name === i || name === `${i}.tex`)).sort().map(([n, h]) => `${n}:${h}`);
+  return crypto.createHash('sha256').update(preamble).update(deps.join('|')).digest('hex').slice(0, 24);
+}
+
 /** Starts a process group so timeout cleanup also kills TeX and bibliography children. */
-function runNativeCompiler(cwd: string, args: string[], timeoutMs: number, onStart?: (kill: () => void) => void) {
+function runNativeCompiler(cwd: string, argv: string[], timeoutMs: number, onStart?: (kill: () => void) => void) {
   return new Promise<{ stdout: string; stderr: string; killed: boolean; reason?: 'timeout' | 'output_limit'; code: number | null }>((resolve, reject) => {
     const memoryBytes = Math.max(192, COMPILE_MEMORY_MB) * 1024 * 1024;
     const safeEnv = {
@@ -235,7 +251,7 @@ function runNativeCompiler(cwd: string, args: string[], timeoutMs: number, onSta
       TEXMFVAR: path.join(cwd, 'texmf-var'), TEXMFCONFIG: path.join(cwd, 'texmf-config'),
       FONTCONFIG_CACHE: path.join(cwd, 'font-cache'),
     };
-    const child = spawn('setpriv', ['--reuid=65534', '--regid=65534', '--clear-groups', '--bounding-set=-all', '--', 'prlimit', `--as=${memoryBytes}`, '--cpu=120', '--nproc=64', '--fsize=52428800', '--nofile=128', '--', 'latexmk', ...args], {
+    const child = spawn('setpriv', ['--reuid=65534', '--regid=65534', '--clear-groups', '--bounding-set=-all', '--', 'prlimit', `--as=${memoryBytes}`, '--cpu=120', '--nproc=64', '--fsize=52428800', '--nofile=128', '--', ...argv], {
       cwd, env: safeEnv,
       detached: true, stdio: ['ignore', 'pipe', 'pipe'],
     });
@@ -515,37 +531,47 @@ app.post('/api/projects/:id/compile', async (req, res) => {
     }
     mark('sync', t);
 
-    const texArgs = latexmkArgs(engine, mainFile, stopOnFirstError, draft);
-    const container = `paperdesk-compile-${crypto.randomUUID()}`;
+    const base = mainFile.replace(/\.tex$/i, '');
+    const runTex = (argv: string[]) => runTool(ws.dir, argv, timeoutMs, kill => { cancelRun = kill; });
+    const mainSource = await fs.readFile(path.join(ws.dir, mainFile), 'utf8').catch(() => '');
+    const fmtKey = engine === 'pdflatex' && !draft ? preambleKey(ws, mainSource) : '';
+    let format = fmtKey && ws.format?.key === fmtKey && ws.format.ok ? PREAMBLE_FORMAT : undefined;
+    // Fast path: in a warm folder whose last compile succeeded, one direct engine pass is usually enough. Fall back
+    // to latexmk when references, the table of contents or the bibliography may need more passes.
+    const bibChanged = [...sync.written, ...sync.removed].some(n => /\.(bib|bst|bbx|cbx|bcf)$/i.test(n));
+    const fast = !ws.fresh && !draft && !bibChanged && ws.last?.ok === true && ws.last.mainFile === mainFile;
+    const auxState = async () => (await Promise.all(['aux', 'toc', 'lof', 'lot', 'out', 'nav', 'snm'].map(ext => fs.readFile(path.join(ws.dir, `${base}.${ext}`)).then(b => crypto.createHash('sha1').update(b).digest('hex'), () => '-')))).join(',');
     let output = '';
     let exitError: any = null;
+    let passes = '';
     t = Date.now();
-    if (COMPILE_MODE === 'native') {
-      try {
-        const r = await runNativeCompiler(ws.dir, texArgs, timeoutMs, kill => { cancelRun = kill; });
-        output = r.stdout + '\n' + r.stderr;
-        if (r.code !== 0 || r.killed) exitError = { code: r.code, killed: r.killed, reason: r.reason, stdout: r.stdout, stderr: r.stderr };
-      } catch (e: any) {
-        if (e?.code === 'ENOENT') return void send(res, 503, 'The LaTeX tools are not installed in this service.');
-        throw e;
+    try {
+      let r: TexRun;
+      if (fast) {
+        const before = await auxState();
+        r = await runTex([engine, ...directArgs(engine, mainFile, stopOnFirstError, format)]);
+        passes = 'direct';
+        const log = await fs.readFile(path.join(ws.dir, base + '.log'), 'utf8').catch(() => '');
+        const more = r.code === 0 && !r.killed && (before !== await auxState() || /Rerun to get|Label\(s\) may have changed|Please \(re\)run|run BibTeX|run Biber|Rerun LaTeX/i.test(log));
+        if (more && !closed.signal.aborted) { r = await runTex(['latexmk', ...latexmkArgs(engine, mainFile, stopOnFirstError, draft, format)]); passes += '+latexmk'; }
+      } else { r = await runTex(['latexmk', ...latexmkArgs(engine, mainFile, stopOnFirstError, draft, format)]); passes = 'latexmk'; }
+      // A cached preamble that the document disagrees with must never cost a working compile: retry without it.
+      if (format && (r.code !== 0 || r.killed) && !r.killed && !closed.signal.aborted) {
+        ws.format = { key: fmtKey, ok: false };
+        format = undefined;
+        r = await runTex(['latexmk', ...latexmkArgs(engine, mainFile, stopOnFirstError, draft)]);
+        passes += '+retry';
       }
-    } else {
-      const args = ['run', '--rm', '--name', container, '--network=none', '--memory=1g', '--cpus=2', '--pids-limit=256',
-        '--security-opt=no-new-privileges', '--read-only', '--tmpfs', '/tmp:rw,nosuid,exec,size=256m',
-        // Run as the host user so output files in the bind mount aren't owned by root on Linux hosts.
-        ...(process.getuid && process.getgid ? ['--user', `${process.getuid()}:${process.getgid()}`] : []),
-        '-e', 'HOME=/tmp', '-e', 'TEXMFVAR=/tmp/texmf-var', '-e', 'TEXMFCONFIG=/tmp/texmf-config',
-        '-v', `${ws.dir}:/work:rw`, '-w', '/work', IMAGE, 'latexmk', ...texArgs];
-      cancelRun = () => { void exec('docker', ['rm', '-f', container]).catch(() => undefined); };
-      try {
-        const r = await exec('docker', args, { timeout: timeoutMs, maxBuffer: 8 * 1024 * 1024 });
-        output = r.stdout + '\n' + r.stderr;
-      } catch (e: any) {
-        exitError = e;
-        output = [e.stdout, e.stderr].filter(Boolean).join('\n');
-      }
+      output = r.stdout + '\n' + r.stderr;
+      if (r.code !== 0 || r.killed) exitError = { code: r.code, killed: r.killed, reason: r.reason, stdout: r.stdout, stderr: r.stderr };
+    } catch (e: any) {
+      if (e?.code === 'ENOENT') return void send(res, COMPILE_MODE === 'docker' ? 503 : 503, COMPILE_MODE === 'docker' ? 'Docker isn’t running. Start Docker Desktop, then recompile.' : 'The LaTeX tools are not installed in this service.');
+      throw e;
     }
+    ws.last = { ok: !exitError, mainFile };
     mark('tex', t);
+    timings.passes = passes === 'direct' ? 1 : passes.includes('latexmk') ? 2 : 0;
+    timings.preamble = format ? 1 : 0;
     if (closed.signal.aborted) return; // superseded or the browser left; nothing to send
 
     const stderr = String(exitError?.stderr ?? '');
@@ -556,7 +582,6 @@ app.post('/api/projects/:id/compile', async (req, res) => {
       return void send(res, 503, `The LaTeX compiler image (${IMAGE}) isn’t built. Run “npm run compiler:build” once, then recompile.`);
     }
     if (exitError?.killed) {
-      if (COMPILE_MODE === 'docker') await exec('docker', ['rm', '-f', container]).catch(() => undefined);
       output += exitError.reason === 'output_limit'
         ? '\nCompilation stopped because the output exceeded the 4 MB limit.'
         : `\nCompilation timed out after ${Math.round(timeoutMs / 1000)} seconds.`;
@@ -565,7 +590,6 @@ app.post('/api/projects/:id/compile', async (req, res) => {
     }
 
     t = Date.now();
-    const base = mainFile.replace(/\.tex$/i, '');
     const texLog = await fs.readFile(path.join(ws.dir, base + '.log'), 'utf8').catch(() => '');
     const blg = await fs.readFile(path.join(ws.dir, base + '.blg'), 'utf8').catch(() => '');
     const parsed = parseLatexLog(texLog, blg, mainFile);
@@ -588,6 +612,7 @@ app.post('/api/projects/:id/compile', async (req, res) => {
 
     // Keep a durable copy for downloads and other devices without making the browser wait for it.
     if (pdf && success && !draft) void storeArtifacts(id, owner, pdf, synctex).catch(error => console.error('Saving compile artifacts failed:', error));
+    if (success && fmtKey && ws.format?.key !== fmtKey) void buildPreambleFormat(ws, mainFile, fmtKey).catch(error => console.error('Building the preamble format failed:', error));
   } catch (e) {
     if (closed.signal.aborted || (e instanceof Error && e.message === 'cancelled')) return;
     send(res, e instanceof Error && /busy/.test(e.message) ? 429 : 400, e);
@@ -598,6 +623,46 @@ app.post('/api/projects/:id/compile', async (req, res) => {
     if (entry && RUNNING.get(key) === entry) RUNNING.delete(key);
   }
 });
+
+type TexRun = { stdout: string; stderr: string; killed: boolean; reason?: 'timeout' | 'output_limit'; code: number | null };
+
+/** Runs a TeX tool in the build folder: as the sandbox user natively, or in a throwaway container with Docker. */
+async function runTool(dir: string, argv: string[], timeoutMs: number, onStart?: (kill: () => void) => void): Promise<TexRun> {
+  if (COMPILE_MODE === 'native') return runNativeCompiler(dir, argv, timeoutMs, onStart);
+  const container = `paperdesk-compile-${crypto.randomUUID()}`;
+  const args = ['run', '--rm', '--name', container, '--network=none', '--memory=1g', '--cpus=2', '--pids-limit=256',
+    '--security-opt=no-new-privileges', '--read-only', '--tmpfs', '/tmp:rw,nosuid,exec,size=256m',
+    // Run as the host user so output files in the bind mount aren't owned by root on Linux hosts.
+    ...(process.getuid && process.getgid ? ['--user', `${process.getuid()}:${process.getgid()}`] : []),
+    '-e', 'HOME=/tmp', '-e', 'TEXMFVAR=/tmp/texmf-var', '-e', 'TEXMFCONFIG=/tmp/texmf-config',
+    '-v', `${dir}:/work:rw`, '-w', '/work', IMAGE, ...argv];
+  let killed = false;
+  onStart?.(() => { killed = true; void exec('docker', ['rm', '-f', container]).catch(() => undefined); });
+  try {
+    const r = await exec('docker', args, { timeout: timeoutMs, maxBuffer: 8 * 1024 * 1024 });
+    return { stdout: r.stdout, stderr: r.stderr, killed, code: 0 };
+  } catch (e: any) {
+    if (e?.killed || e?.signal) { killed = true; await exec('docker', ['rm', '-f', container]).catch(() => undefined); }
+    if (e?.code === 'ENOENT' || /Cannot connect to the Docker daemon|failed to connect to the docker API|docker.sock/i.test(String(e?.stderr))) throw Object.assign(new Error('docker'), { code: 'ENOENT' });
+    return { stdout: String(e?.stdout ?? ''), stderr: String(e?.stderr ?? ''), killed, reason: killed ? 'timeout' : undefined, code: typeof e?.code === 'number' ? e.code : 1 };
+  }
+}
+
+/**
+ * Precompiles the preamble (everything before \begin{document}) into a format with mylatexformat, so later pdfLaTeX
+ * passes skip loading the packages. Runs after the response, holding the compile slot; used only while the preamble
+ * and its local files are unchanged.
+ */
+async function buildPreambleFormat(ws: Workspace, mainFile: string, key: string) {
+  const release = await compileSlot(new AbortController().signal).catch(() => null);
+  if (!release) return;
+  try {
+    if (workspaces.peek(ws.key) !== ws || ws.format?.key === key) return;
+    const r = await runTool(ws.dir, ['pdftex', '-ini', '-interaction=nonstopmode', '-halt-on-error', `-jobname=${PREAMBLE_FORMAT}`, '&pdflatex', 'mylatexformat.ltx', mainFile], 60_000);
+    const built = await fs.access(path.join(ws.dir, `${PREAMBLE_FORMAT}.fmt`)).then(() => true, () => false);
+    ws.format = { key, ok: r.code === 0 && !r.killed && built };
+  } finally { release(); }
+}
 
 async function storeArtifacts(id: string, owner: string, pdf: Buffer, synctex: Buffer | null) {
   if (persistence.mode === 'neon-r2') {

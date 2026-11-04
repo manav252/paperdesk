@@ -609,10 +609,21 @@ app.post('/api/projects/:id/compile', async (req, res) => {
     // Persist before returning: the browser can request SyncTeX immediately after receiving the PDF, and
     // Render may route that request after a process restart where the warm in-memory workspace is gone.
     if (pdf && success && !draft) {
-      try { await storeArtifacts(id, owner, pdf, synctex); }
+      try {
+        // A new browser project can compile before its debounced autosave reaches the API. Keep the exact
+        // successful source snapshot with the PDF so a cold instance can reconstruct a SyncTeX workspace.
+        if (files.every(file => file.content !== undefined)) {
+          await writeProject(id, {
+            name: String(req.body.name ?? 'Untitled Project'),
+            mainFile,
+            files: files.map(file => ({ name: file.name, content: file.content ?? '', ...(file.encoding ? { encoding: file.encoding } : {}) })),
+          }, { replace: true }, owner);
+        }
+        await storeArtifacts(id, owner, pdf, synctex);
+      }
       catch (error) {
         console.error('Saving compile artifacts failed:', error);
-        return void send(res, 503, 'Compilation succeeded, but the PDF and SyncTeX files could not be saved. Check project storage settings.');
+        return void send(res, 503, 'Compilation succeeded, but the source, PDF and SyncTeX files could not be saved. Check project storage settings.');
       }
     }
     mark('read', t);

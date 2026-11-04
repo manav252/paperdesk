@@ -119,7 +119,7 @@ function App(){
  const [projects,setProjects]=useState<Project[]>(initial),[projectId,setProjectId]=useState(()=>routeProjectId()??''),[fileName,setFileName]=useState('main.tex'),[activeTab,setActiveTab]=useState(routeProjectId()?'editor':'dashboard'),[compile_,setCompileState]=useState<CompileState>({status:'idle',message:''}),[pdfUrl,setPdfUrl]=useState(''),[page,setPage]=useState(1),[pageTotal,setPageTotal]=useState(0),[zoom,setZoom]=useState<Zoom>('fit'),[saveState,setSaveState]=useState('Saved'),[query,setQuery]=useState(''),[sortBy,setSortBy]=useState<'modified'|'name'>('modified'),[openMenu,setOpenMenu]=useState(''),[modal,setModal]=useState(''),[dialog,setDialog]=useState<Dialog|null>(null),[toast,setToast]=useState<Toast|null>(null),[engine,setEngine]=useState('pdflatex'),[compilePrefs,setCompilePrefs]=useState<CompilePrefs>(()=>{try{return{autoCompile:true,stopOnFirstError:true,draft:false,timeout:120,trackChanges:false,...JSON.parse(localStorage.getItem('paperdesk-compile-prefs')??'{}')}}catch{return{autoCompile:true,stopOnFirstError:true,draft:false,timeout:120,trackChanges:false}}}),[rawLogs,setRawLogs]=useState(false),[cursor,setCursor]=useState({line:1,col:1}),[result,setResult]=useState<CompileResult|null>(null),[logState,setLogState]=useState<{loading:boolean,error?:string}>({loading:false}),[apiOnline,setApiOnline]=useState<boolean|null>(null),[health,setHealth]=useState<Health|null>(null),[editorReady,setEditorReady]=useState(false),[collapsed,setCollapsed]=useState<Set<string>>(new Set()),[prefs,setPrefs]=useState<LayoutPrefs>(readLayout),[drawer,setDrawer]=useState(false),[selectionChars,setSelectionChars]=useState(0),[shareContext,setShareContext]=useState(()=>readFlag(SHARE_KEY)!=='off'),[fixReview,setFixReview]=useState<LineFix|null>(null),[tour,setTour]=useState(false),[narrowAssistant,setNarrowAssistant]=useState(false);
  const [syncPoint,setSyncPoint]=useState<{page:number,x:number,y:number}|null>(null),[pdfData,setPdfData]=useState<Uint8Array|null>(null),[nav,setNav]=useState({page:1,n:0}),[share,setShare]=useState<{state:'idle'|'creating'|'ready'|'error',url?:string,error?:string}>({state:'idle'});
  const [autoCompileRevision,setAutoCompileRevision]=useState(0),[pdfRenderMs,setPdfRenderMs]=useState<number|null>(null);
- const compileAbort=useRef<AbortController|null>(null),syncState=useRef<SyncState|null>(null),sourceRevision=useRef(0);
+ const compileAbort=useRef<AbortController|null>(null),syncState=useRef<SyncState|null>(null),sourceRevision=useRef(0),pdfSyncPending=useRef(false);
  const editorRef=useRef<any>(null),fileInput=useRef<HTMLInputElement>(null),imageInput=useRef<HTMLInputElement>(null),folderInput=useRef<HTMLInputElement>(null),uploadFolder=useRef(''),zipInput=useRef<HTMLInputElement>(null),saveTimer=useRef<number>(),syncHighlightTimer=useRef<number>(),syncDecorations=useRef<any>(null),workRef=useRef<HTMLDivElement>(null),searchRef=useRef<HTMLInputElement>(null),compileRef=useRef<(options?:{auto?:boolean})=>void>(()=>{}),scaleRef=useRef(100),monacoRef=useRef<any>(null),pendingJump=useRef<{file:string,line:number}|null>(null),lastEdit=useRef({file:'',content:''}),storageWarned=useRef(false);
  const monacoState=useMonacoLoad();
  const narrow=useMediaQuery(NARROW),compact=useMediaQuery('(max-width: 640px)');
@@ -342,12 +342,15 @@ function App(){
   }catch(e){notify(e instanceof Error?e.message:'SyncTeX lookup failed.','error')}
  };
  const syncPdfToSource=async(syncPage:number,x:number,y:number)=>{
+  if(pdfSyncPending.current)return;
+  pdfSyncPending.current=true;
   try{
    const response=await apiFetch(`/api/projects/${projectId}/synctex`,{method:'POST',headers:json,body:JSON.stringify({mode:'inverse',page:syncPage,x,y,mainFile:project.mainFile??'main.tex'})});
    const data=await response.json();if(!response.ok)throw new Error(data.error??'SyncTeX lookup failed.');
    if(!data.found){notify('No source position is available here.');return}
    jumpTo(data.file,data.line);
   }catch(e){notify(e instanceof Error?e.message:'SyncTeX lookup failed.','error')}
+  finally{pdfSyncPending.current=false}
  };
  // Assistant: what the panel may share, and the actions that only ever run on a click.
  const editableFile=currentFile&&isEditable(currentFile)&&!currentFile.name.endsWith('/')?currentFile:null;

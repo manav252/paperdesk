@@ -120,11 +120,16 @@ export function PdfViewer({ url, data, zoom, nav, syncPoint, onLoaded, onScale, 
     if (!current) return;
     const rect = event.currentTarget.getBoundingClientRect();
     const at = { x: event.clientX - rect.left, y: event.clientY - rect.top };
-    try {
-      const page = await current.pdf.getPage(index + 1);
-      const [x, y] = page.getViewport({ scale }).convertToPdfPoint(at.x, at.y);
-      cb.current.onSourceJump(index + 1, x, y);
-    } catch { /* the document was replaced by a newer compile mid-click; the next double-click uses the new one */ }
+    // A recompile can swap the document mid-click; then retry once with the newest one.
+    for (const docNow of [current, docRef.current]) {
+      if (!docNow) continue;
+      try {
+        const page = await docNow.pdf.getPage(index + 1);
+        const [x, y] = page.getViewport({ scale }).convertToPdfPoint(at.x, at.y);
+        cb.current.onSourceJump(index + 1, x, y);
+        return;
+      } catch { /* destroyed by a newer compile; try the current document */ }
+    }
   };
 
   if (err && !doc) return <div className="pdf-scroll" ref={boxRef}><div className="pdf-error" role="alert"><AlertCircle size={18} /><span>{err}</span></div></div>;

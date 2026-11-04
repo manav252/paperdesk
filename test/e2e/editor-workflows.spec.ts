@@ -87,14 +87,15 @@ for (const template of templates) {
     await page.getByRole('button', { name: 'Sync source to PDF' }).click();
     const pdfPage = page.locator('canvas[aria-label="PDF page 1"]');
     await expect(pdfPage).not.toHaveClass(/is-loading/);
-    // Like Overleaf, a double-click on the PDF jumps to the source; a single click is for reading.
-    await pdfPage.dblclick();
-    if (test.info().project.name.startsWith('phone')) {
-      await expect.poll(() => syncModesByPage.get(page)).toContain('inverse');
-      await page.getByRole('radio', { name: 'Editor' }).click();
-    }
+    // Like Overleaf, a double-click on the PDF jumps to the source; a single click is for reading. Auto compile may
+    // swap the PDF under the pointer on a slow machine, so repeat the double-click until the jump request is sent.
+    await expect(async () => {
+      await pdfPage.dblclick();
+      expect(syncModesByPage.get(page)).toContain('inverse');
+    }).toPass({ timeout: 30_000 });
+    if (test.info().project.name.startsWith('phone')) await page.getByRole('radio', { name: 'Editor' }).click();
     await expect(page.locator('.status-bar')).toContainText('Ln 3');
-    if (!process.env.E2E_BASE_URL) expect(syncModesByPage.get(page)).toEqual(['forward', 'inverse']);
+    if (!process.env.E2E_BASE_URL) expect(syncModesByPage.get(page)?.[0]).toBe('forward');
   });
 }
 

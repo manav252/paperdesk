@@ -606,6 +606,15 @@ app.post('/api/projects/:id/compile', async (req, res) => {
     RESULTS.set(key, result);
     const synctex = success && !draft ? await fs.readFile(path.join(ws.dir, base + '.synctex.gz')).catch(() => null) : null;
     if (pdf && success && !draft) rememberArtifacts(key, { pdf, synctex, workspace: ws.key });
+    // Persist before returning: the browser can request SyncTeX immediately after receiving the PDF, and
+    // Render may route that request after a process restart where the warm in-memory workspace is gone.
+    if (pdf && success && !draft) {
+      try { await storeArtifacts(id, owner, pdf, synctex); }
+      catch (error) {
+        console.error('Saving compile artifacts failed:', error);
+        return void send(res, 503, 'Compilation succeeded, but the PDF and SyncTeX files could not be saved. Check project storage settings.');
+      }
+    }
     mark('read', t);
     timings.total = Date.now() - started;
     res.setHeader('Server-Timing', Object.entries(timings).map(([name, ms]) => `${name};dur=${ms}`).join(', '));
@@ -613,8 +622,6 @@ app.post('/api/projects/:id/compile', async (req, res) => {
     res.json({ ...result, session: BOOT_ID, timings, ...(pdf && success && pdf.length <= 8 * 1024 * 1024 ? { pdf: pdf.toString('base64') } : {}) });
     io.to(id).emit('compile:complete', { success });
 
-    // Keep a durable copy for downloads and other devices without making the browser wait for it.
-    if (pdf && success && !draft) void storeArtifacts(id, owner, pdf, synctex).catch(error => console.error('Saving compile artifacts failed:', error));
     if (success && fmtKey && ws.format?.key !== fmtKey) void buildPreambleFormat(ws, mainFile, fmtKey).catch(error => console.error('Building the preamble format failed:', error));
   } catch (e) {
     if (closed.signal.aborted || (e instanceof Error && e.message === 'cancelled')) return;

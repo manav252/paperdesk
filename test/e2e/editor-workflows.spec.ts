@@ -32,10 +32,13 @@ test.beforeEach(async ({ page, request }) => {
   const errors: string[] = [];
   errorsByPage.set(page, errors);
   syncModesByPage.set(page, []);
+  page.on('request', request => {
+    if (!request.url().includes('/synctex')) return;
+    try { syncModesByPage.get(page)?.push(String(request.postDataJSON().mode)); } catch { /* malformed request is reported by the assertion */ }
+  });
   if (!process.env.E2E_BASE_URL) {
     await page.route('**/api/projects/*/synctex', async route => {
       const mode = route.request().postDataJSON().mode as string;
-      syncModesByPage.get(page)?.push(mode);
       await route.fulfill({ json: mode === 'forward' ? { found: true, page: 1, x: 110, y: 125 } : { found: true, file: 'main.tex', line: 3, column: 1 } });
     });
   }
@@ -58,10 +61,14 @@ async function openTemplate(page: Page, name: string) {
 }
 
 async function appendToEditor(page: Page, text: string) {
+  const source = await page.evaluate(() => {
+    const projects = JSON.parse(localStorage.getItem('paperdesk-projects') ?? '[]') as { files: { name: string; content?: string }[] }[];
+    return String(projects[0]?.files.find(file => file.name === 'main.tex')?.content ?? '');
+  });
   const editor = page.getByRole('textbox', { name: 'Editor content' });
   await editor.click({ force: true });
-  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+ArrowDown' : 'Control+End');
-  await page.keyboard.type(text);
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+A' : 'Control+A');
+  await page.keyboard.insertText(source + text);
 }
 
 async function compileAndViewPdf(page: Page) {
@@ -89,24 +96,20 @@ for (const template of templates) {
     await expect(pdfPage).not.toHaveClass(/is-loading/);
     // Clicking or selecting PDF text jumps to its source line. Auto compile may swap the PDF under the pointer on a
     // slow machine, so repeat until the jump request is sent.
-    await expect(async () => {
-      const text = page.locator('.pdf-text-layer span').first();
-      await expect(text).toBeVisible();
-      await text.click();
-      expect(syncModesByPage.get(page)).toContain('inverse');
-    }).toPass({ timeout: 30_000 });
+    const text = page.locator('.pdf-text-layer span').first();
+    await expect(text).toBeVisible();
+    await text.click();
+    await expect.poll(() => syncModesByPage.get(page)).toContain('inverse');
     const previousInverseJumps = syncModesByPage.get(page)?.filter(mode => mode === 'inverse').length ?? 0;
     if (test.info().project.name.startsWith('phone')) await page.getByRole('radio', { name: 'PDF' }).click();
-    await expect(async () => {
-      const selectableText = page.locator('.pdf-text-layer span').first();
-      const bounds = await selectableText.boundingBox();
-      if (!bounds) throw new Error('PDF text is not visible for selection');
-      await page.mouse.move(bounds.x + Math.min(2, bounds.width / 4), bounds.y + bounds.height / 2);
-      await page.mouse.down();
-      await page.mouse.move(bounds.x + Math.max(3, bounds.width - 2), bounds.y + bounds.height / 2, { steps: 4 });
-      await page.mouse.up();
-      expect(syncModesByPage.get(page)?.filter(mode => mode === 'inverse').length ?? 0).toBeGreaterThan(previousInverseJumps);
-    }).toPass({ timeout: 30_000 });
+    const selectableText = page.locator('.pdf-text-layer span').first();
+    const bounds = await selectableText.boundingBox();
+    if (!bounds) throw new Error('PDF text is not visible for selection');
+    await page.mouse.move(bounds.x + Math.min(2, bounds.width / 4), bounds.y + bounds.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(bounds.x + Math.max(3, bounds.width - 2), bounds.y + bounds.height / 2, { steps: 4 });
+    await page.mouse.up();
+    await expect.poll(() => syncModesByPage.get(page)?.filter(mode => mode === 'inverse').length ?? 0).toBeGreaterThan(previousInverseJumps);
     await expect(page.locator('.status-bar')).toContainText('Ln 3');
     if (!process.env.E2E_BASE_URL) expect(syncModesByPage.get(page)?.[0]).toBe('forward');
   });

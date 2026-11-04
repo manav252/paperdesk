@@ -60,9 +60,12 @@ export function setupMonaco(monaco: Monaco) {
         return { suggestions: ENVIRONMENTS.map(([name, body]) => ({ label: name, kind: K.Struct, detail: opening ? `\\begin{${name}} … \\end{${name}}` : 'Environment',
           insertText: opening ? `${name}}\n${body}\n\\end{${name}}` : `${name}}`, insertTextRules: snippet, range: range(start, closes) })) };
       }
-      if (ctx.kind === 'ref') return { suggestions: collectLabels(files).map(l => ({ label: l.label, kind: K.Reference, detail: `${l.file}:${l.line}`, insertText: l.label, range: range() })) };
-      if (ctx.kind === 'cite') return { suggestions: collectCitations(files).map(c => ({ label: c.key, kind: K.Value, detail: c.detail, insertText: c.key, range: range() })) };
-      return { suggestions: projectPaths(files, ctx.kind).map(p => ({ label: p, kind: K.File, insertText: p, range: range() })) };
+      // Picking a name also steps over the closing brace, so typing continues after the command, as in Overleaf.
+      const close = after.startsWith('}') ? 1 : 0;
+      const name = (value: string) => ({ insertText: `${value}}`, range: range(start, close) });
+      if (ctx.kind === 'ref') return { suggestions: collectLabels(files).map(l => ({ label: l.label, kind: K.Reference, detail: `${l.file}:${l.line}`, ...name(l.label) })) };
+      if (ctx.kind === 'cite') return { suggestions: collectCitations(files).map(c => ({ label: c.key, kind: K.Value, detail: c.detail, ...name(c.key) })) };
+      return { suggestions: projectPaths(files, ctx.kind).map(p => ({ label: p, kind: K.File, ...name(p) })) };
     },
   });
 

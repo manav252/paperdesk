@@ -46,7 +46,8 @@ const BINARY = /\.(png|jpe?g|gif|bmp|tiff?|pdf|eps|ps|zip|gz|ttf|otf|woff2?)$/i;
 
 type CompileResult = { success: boolean; log: string; errors: LogEntry[]; warnings: LogEntry[]; durationMs: number };
 const RESULTS = new Map<string, CompileResult>();
-const SYNCING = new Set<string>();
+/** SyncTeX lookups per project run one after another; a second lookup waits instead of being refused. */
+const SYNCING = new Map<string, Promise<void>>();
 let nativeCompilerReady = COMPILE_MODE !== 'native';
 const resultKey = (id: string, owner: string) => persistence.mode === 'neon-r2' ? `${owner}/${id}` : id;
 
@@ -705,13 +706,18 @@ app.get('/api/projects/:id/pdf', async (req, res) => {
 app.post('/api/projects/:id/synctex', async (req, res) => {
   let temporaryRoot = '';
   let syncLockKey = '';
+  let endTurn: () => void = () => undefined;
+  const turn = new Promise<void>(resolve => { endTurn = resolve; });
+  let queued: Promise<void> | null = null;
   try {
     const id = String(req.params.id);
     const owner = projectOwner(res);
     projectPath(id);
     syncLockKey = resultKey(id, owner);
-    if (SYNCING.has(syncLockKey)) return void send(res, 429, 'A SyncTeX lookup is already running.');
-    SYNCING.add(syncLockKey);
+    const previous = SYNCING.get(syncLockKey) ?? Promise.resolve();
+    queued = previous.then(() => turn);
+    SYNCING.set(syncLockKey, queued);
+    await previous;
     let syncRoot = path.join(projectPath(id), 'synctex');
     const mainFile = safeName(String(req.body.mainFile ?? 'main.tex'));
     if (!mainFile.endsWith('.tex')) return void send(res, 400, 'Main document must be a .tex file');
@@ -802,7 +808,8 @@ app.post('/api/projects/:id/synctex', async (req, res) => {
   } catch (e) { send(res, 400, e); }
   finally {
     if (temporaryRoot) await fs.rm(temporaryRoot, { recursive: true, force: true }).catch(() => undefined);
-    if (syncLockKey) SYNCING.delete(syncLockKey);
+    endTurn();
+    if (syncLockKey && SYNCING.get(syncLockKey) === queued) SYNCING.delete(syncLockKey);
   }
 });
 

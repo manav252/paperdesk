@@ -67,7 +67,8 @@ async function appendToEditor(page: Page, text: string) {
   });
   const editor = page.getByRole('textbox', { name: 'Editor content' });
   await editor.click({ force: true });
-  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+A' : 'Control+A');
+  // Playwright runs this browser with a Windows user agent even on macOS hosts.
+  await page.keyboard.press('Control+A');
   await page.keyboard.insertText(source + text);
 }
 

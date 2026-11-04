@@ -758,9 +758,16 @@ app.post('/api/projects/:id/synctex', async (req, res) => {
     } else return void send(res, 400, 'SyncTeX mode must be forward or inverse');
 
     // The last compile's warm folder already holds the sources, the PDF and its SyncTeX data.
+    // Prefer the folder of the last answered compile, then any other warm folder of this project that has
+    // SyncTeX data (a compile whose answer the browser abandoned still leaves a usable folder behind).
+    const hasSyncData = (dir: string) => fs.access(path.join(dir, pdfFile.replace(/\.pdf$/i, '.synctex.gz'))).then(() => true, () => false);
     const cached = ARTIFACTS.get(syncLockKey);
-    const warm = cached ? workspaces.peek(cached.workspace) : undefined;
-    const warmReady = !!warm && await fs.access(path.join(warm.dir, pdfFile.replace(/\.pdf$/i, '.synctex.gz'))).then(() => true, () => false);
+    let warm = cached ? workspaces.peek(cached.workspace) : undefined;
+    if (!warm || !await hasSyncData(warm.dir)) {
+      warm = undefined;
+      for (const candidate of workspaces.forProject(`${syncLockKey}:`)) if (await hasSyncData(candidate.dir)) { warm = candidate; break; }
+    }
+    const warmReady = !!warm;
     // Rebuilding from storage: make sure the latest compile's save has finished first.
     if (!(warm && warmReady)) await PERSISTING.get(syncLockKey);
     if (warm && warmReady) syncRoot = warm.dir;
@@ -826,7 +833,11 @@ app.post('/api/projects/:id/synctex', async (req, res) => {
     const position = parseInverseSync(output, sourceRoot);
     if (!position || !await fs.access(path.join(syncRoot, position.file)).then(() => true, () => false)) return void res.json({ found: false });
     res.json({ found: true, ...position });
-  } catch (e) { send(res, 400, e); }
+  } catch (e) {
+    // Nothing compiled is stored yet (for example, the first compile's save hasn't happened): not a client error.
+    if (e instanceof Error && /specified key does not exist|NoSuchKey|ENOENT|Project not found/i.test(e.message)) return void res.json({ found: false, recompile: true });
+    send(res, 400, e);
+  }
   finally {
     if (temporaryRoot) await fs.rm(temporaryRoot, { recursive: true, force: true }).catch(() => undefined);
     endTurn();

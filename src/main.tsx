@@ -109,6 +109,8 @@ function App(){
  const assistant=useAssistant(()=>setHealth(h=>h?{...h,assistant:{model:h.assistant?.model??'',configured:false}}:h));
  const project=projects.find(p=>p.id===projectId)??projects[0]; const currentFile=project?.files.find(f=>f.name===fileName)??project?.files[0]; const content=currentFile?.content??'';
  const contentRef=useRef(content);
+ // The selected id can point at a project that no longer exists (the default "p1" after a merge or delete); follow the project actually shown.
+ useEffect(()=>{if(project&&project.id!==projectId)setProjectId(project.id)},[project?.id,projectId]);
  useEffect(()=>{contentRef.current=content},[projectId,fileName]);
  const update=(fn:(p:Project)=>Project)=>setProjects(prev=>prev.map(p=>p.id===projectId?fn(p):p));
  const notify=(text:string,tone:Tone='info')=>setToast({text,tone});

@@ -24,7 +24,7 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts
 COPY server.ts ./server.ts
 COPY src/lib/latexLog.ts src/lib/synctex.ts ./src/lib/
-COPY server/assistant.ts server/persistence.ts ./server/
+COPY server/assistant.ts server/persistence.ts server/workspace.ts ./server/
 
 EXPOSE 10000
 CMD ["node", "--import", "tsx", "server.ts"]

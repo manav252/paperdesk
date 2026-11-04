@@ -103,6 +103,7 @@ try {
         }
         for (const needle of expect.contains ?? []) if (!text.includes(needle.toLowerCase())) problems.push(`PDF text is missing “${needle}”`);
         if (/\?\s*\]|\[\s*\?/.test(text)) problems.push('PDF has unresolved citations ([?])');
+        if (body.warnings.some(w => /Shell escape feature is not enabled/i.test(w.message))) problems.push('TeX ran without restricted shell escape');
         if (expect.minPages && pages < expect.minPages) problems.push(`expected ≥${expect.minPages} pages, got ${pages}`);
         if ((expect.bibtex || expect.bibliography === 'bibtex') && !/BibTeX|bibtex/i.test(body.log)) problems.push('BibTeX did not run');
         if (expect.bibliography === 'biber' && !/biber/i.test(body.log)) problems.push('Biber did not run');

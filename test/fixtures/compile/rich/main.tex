@@ -22,7 +22,7 @@
 \maketitle
 
 \section{Figures}
-Figure~\ref{fig:plot} is a PNG, Figure~\ref{fig:photo} a JPEG and Figure~\ref{fig:diagram} a vector PDF.
+Figure~\ref{fig:plot} is a PNG, Figure~\ref{fig:photo} a JPEG and Figure~\ref{fig:diagram} a vector PDF and Figure~\ref{fig:eps} an EPS file.
 Figure~\ref{fig:pair} shows two subfigures, one loaded from a nested folder~\cite{knuth1984,lamport1994}.
 
 \begin{figure}[H]
@@ -44,6 +44,13 @@ Figure~\ref{fig:pair} shows two subfigures, one loaded from a nested folder~\cit
   \includegraphics[width=\linewidth]{figures/diagram}
   \caption{A vector PDF diagram at full line width, referenced without its extension.}
   \label{fig:diagram}
+\end{figure}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=0.5\linewidth]{figures/shape.eps}
+  \caption{An EPS drawing, converted to PDF while compiling.}
+  \label{fig:eps}
 \end{figure}
 
 \begin{figure}[htbp]

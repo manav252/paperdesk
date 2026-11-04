@@ -218,17 +218,20 @@ async function dockerStatus() {
   }
 }
 
+// Restricted shell escape (TeX Live's default) lets TeX run only a fixed list of helpers such as repstopdf and
+// kpsewhich. It converts EPS figures and avoids the "epstopdf: Shell escape feature is not enabled" warning that
+// every graphicx document otherwise logs. Arbitrary commands (\write18 with anything else) stay disabled.
 function latexmkArgs(engine: string, mainFile: string, stopOnFirstError: boolean, draft: boolean, format?: string) {
   const fmt = format ? ` -fmt=${format}` : '';
-  const command = engine === 'pdflatex' ? `$pdflatex = "pdflatex -no-shell-escape${fmt} %O %S";`
-    : engine === 'xelatex' ? '$xelatex = "xelatex -no-shell-escape %O %S";'
-      : '$lualatex = "lualatex -no-shell-escape %O %S";';
+  const command = engine === 'pdflatex' ? `$pdflatex = "pdflatex -shell-restricted${fmt} %O %S";`
+    : engine === 'xelatex' ? '$xelatex = "xelatex -shell-restricted %O %S";'
+      : '$lualatex = "lualatex -shell-restricted %O %S";';
   return [ENGINES[engine]!, '-e', command, '-synctex=1', '-interaction=nonstopmode', '-file-line-error', ...(stopOnFirstError ? ['-halt-on-error'] : []), ...(draft ? ['-draftmode'] : []), '-norc', mainFile];
 }
 
 /** One engine pass without latexmk, whose startup alone costs most of a second on a small instance. */
 function directArgs(engine: string, mainFile: string, stopOnFirstError: boolean, format?: string) {
-  return ['-no-shell-escape', ...(format ? [`-fmt=${format}`] : []), '-synctex=1', '-interaction=nonstopmode', '-file-line-error', ...(stopOnFirstError ? ['-halt-on-error'] : []), mainFile];
+  return ['-shell-restricted', ...(format ? [`-fmt=${format}`] : []), '-synctex=1', '-interaction=nonstopmode', '-file-line-error', ...(stopOnFirstError ? ['-halt-on-error'] : []), mainFile];
 }
 
 /** Name of the cached preamble format (pdfLaTeX only; see buildPreambleFormat). */

@@ -1,1 +1,1 @@
-{"engines": ["pdflatex", "xelatex", "lualatex"], "success": true, "minPages": 5, "contains": ["Rendering Check", "Booktabs rules", "A long table that spans pages", "Basel problem", "Knuth"]}
+{"engines": ["pdflatex", "xelatex", "lualatex"], "success": true, "minPages": 5, "contains": ["Rendering Check", "Booktabs rules", "A long table that spans pages", "Basel problem", "Knuth", "An EPS drawing"]}

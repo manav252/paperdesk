@@ -72,6 +72,7 @@ test('figures, tables and equations compile to a clean PDF', async ({ page }) =>
   await uploadInto(page, 'figures', [
     { name: 'plot.png', mimeType: 'image/png', buffer: read('figures/plot.png') },
     { name: 'photo.jpg', mimeType: 'image/jpeg', buffer: read('figures/photo.jpg') },
+    { name: 'shape.eps', mimeType: 'application/postscript', buffer: read('figures/shape.eps') },
   ]);
   await expect(page.locator('.file-label').getByText('photo.jpg', { exact: true })).toBeVisible();
 
@@ -96,7 +97,7 @@ test('figures, tables and equations compile to a clean PDF', async ({ page }) =>
 
   await page.getByRole('button', { name: /^Recompile/ }).first().click();
   await expect(page.getByRole('region', { name: 'PDF preview' }).getByRole('status')).toContainText('Compiled in', { timeout: 240_000 });
-  await expect(page.locator('.pdf-page')).toHaveCount(5);
+  await expect.poll(() => page.locator('.pdf-page').count()).toBeGreaterThanOrEqual(5);
   await expect(page.locator('.pdf-page canvas').first()).not.toHaveClass(/is-loading/);
   await page.getByRole('button', { name: 'Logs' }).click();
   const log = page.getByRole('dialog', { name: 'Compile log' });

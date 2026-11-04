@@ -13,6 +13,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       texlive-latex-base texlive-latex-recommended texlive-latex-extra \
       texlive-fonts-recommended texlive-pictures texlive-publishers \
       texlive-bibtex-extra texlive-xetex texlive-luatex \
+      texlive-font-utils ghostscript \
     && fc-cache -fs \
     && luaotfload-tool --update --force \
     && rm -rf /var/lib/apt/lists/* /tmp/*

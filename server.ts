@@ -379,6 +379,32 @@ app.post('/api/projects/:id/upload', upload.single('file'), async (req, res) => 
   } catch (e) { send(res, 400, `Unable to import ZIP: ${e instanceof Error ? e.message : String(e)}`); }
 });
 
+/**
+ * Read-only copy link. Stores a snapshot of the project as sent by its owner; anyone with the link can open the
+ * snapshot as a new project in their own browser. The owner's project is never exposed or changed.
+ */
+app.post('/api/projects/:id/share', async (req, res) => {
+  try {
+    projectPath(String(req.params.id));
+    const files = Array.isArray(req.body.files) ? req.body.files as StoredFile[] : (await readProject(String(req.params.id), projectOwner(res))).files;
+    validateFiles(files);
+    const snapshot = { name: String(req.body.name ?? 'Shared project').slice(0, 200), mainFile: typeof req.body.mainFile === 'string' ? safeName(req.body.mainFile) : 'main.tex', files, created: Date.now() };
+    const shareId = crypto.randomUUID();
+    if (persistence.mode === 'neon-r2') await persistence.putShare(shareId, snapshot);
+    else { await fs.mkdir(path.join(DATA, 'shares'), { recursive: true }); await fs.writeFile(path.join(DATA, 'shares', `${shareId}.json`), JSON.stringify(snapshot)); }
+    res.status(201).json({ id: shareId });
+  } catch (e) { send(res, 400, e); }
+});
+
+app.get('/api/shares/:shareId', async (req, res) => {
+  try {
+    const shareId = String(req.params.shareId);
+    if (!/^[0-9a-f-]{36}$/i.test(shareId)) return void send(res, 404, 'This link is invalid.');
+    const snapshot = persistence.mode === 'neon-r2' ? await persistence.getShare(shareId) : JSON.parse(await fs.readFile(path.join(DATA, 'shares', `${shareId}.json`), 'utf8'));
+    res.json(snapshot);
+  } catch { send(res, 404, 'This shared project no longer exists.'); }
+});
+
 app.get('/api/projects/:id/download', async (req, res) => {
   try {
     const p = await readProject(req.params.id, projectOwner(res));

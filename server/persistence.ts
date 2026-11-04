@@ -133,6 +133,16 @@ export class ProjectPersistence {
     return Buffer.from(await result.Body.transformToByteArray());
   }
 
+  /** Read-only copy links: an immutable snapshot that anyone with the id can read. */
+  async putShare(shareId: string, snapshot: unknown) {
+    await this.s3!.send(new PutObjectCommand({ Bucket: this.bucket, Key: `shares/${shareId}.json`, Body: JSON.stringify(snapshot), ContentType: 'application/json' }));
+  }
+
+  async getShare(shareId: string) {
+    const result = await this.s3!.send(new GetObjectCommand({ Bucket: this.bucket, Key: `shares/${shareId}.json` }));
+    return JSON.parse(await result.Body!.transformToString('utf-8')) as unknown;
+  }
+
   async deleteArtifacts(id: string, ownerId: string) {
     await Promise.all(['compiled.pdf', 'synctex.gz'].map(name => this.s3!.send(new DeleteObjectCommand({ Bucket: this.bucket, Key: `projects/${ownerId}/${id}/artifacts/${name}` }))));
   }

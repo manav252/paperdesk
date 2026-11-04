@@ -135,6 +135,24 @@ try {
       else console.log(`  ✓ ${label}${expect.success ? '' : `  error → ${body.errors[0].file}:${body.errors[0].line}`}`);
     }
   }
+  // A newer compile replaces one still running: the first must get 410 (not hang) and the second must succeed
+  // even though the first was killed part-way through writing its auxiliary files.
+  const target = fixtures.find(n => n === 'ieee-template') ?? fixtures.find(n => JSON.parse(readFileSync(path.join(ROOT, n, 'expect.json'), 'utf8')).success);
+  if (target) {
+    const files = readTree(path.join(ROOT, target));
+    const id = `fixture-${target}-replaced`;
+    const edited = mark => files.map(f => f.name === 'main.tex' ? { ...f, content: f.content.replace(/\\end\{document\}/, `% ${mark}\n\\end{document}`) } : f);
+    const send = mark => json(`${API}/projects/${id}/compile`, { method: 'POST', body: JSON.stringify({ engine: 'pdflatex', mainFile: 'main.tex', name: id, files: edited(mark) }) });
+    await send('warm');
+    const first = send('first');
+    await new Promise(r => setTimeout(r, 300));
+    const [a, b] = await Promise.all([first, send('second')]);
+    const after = await send('third');
+    const ok = (a.status === 410 || (a.status === 200 && a.body?.success)) && b.status === 200 && b.body?.success && after.body?.success;
+    if (!ok) failures++;
+    console.log(`  ${ok ? '✓' : '✗'} ${target.padEnd(20)} replaced compile: first ${a.status}, newer ${b.status} ${b.body?.success ? 'ok' : JSON.stringify(b.body?.errors?.slice(0, 1))}, next ${after.body?.success ? 'ok' : 'failed'}`);
+    await fetch(`${API}/projects/${id}`, { method: 'DELETE', headers: ownerHeaders }).catch(() => undefined);
+  }
 } catch (e) {
   failures++;
   console.error(`\n✗ ${e.message}`);

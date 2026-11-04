@@ -498,6 +498,8 @@ app.post('/api/projects/:id/compile', async (req, res) => {
   let key = '';
   let finished: () => void = () => undefined;
   let entry: { cancel: () => void; done: Promise<unknown> } | null = null;
+  let superseded = false;
+  let killedWorkspace: Workspace | null = null;
   try {
     const id = String(req.params.id);
     const owner = projectOwner(res);
@@ -519,7 +521,7 @@ app.post('/api/projects/:id/compile', async (req, res) => {
     if (previous) { previous.cancel(); await previous.done.catch(() => undefined); }
     let cancelRun: () => void = () => undefined;
     const done = new Promise<void>(resolve => { finished = resolve; });
-    entry = { cancel: () => { closed.abort(); cancelRun(); }, done };
+    entry = { cancel: () => { superseded = true; closed.abort(); cancelRun(); }, done };
     RUNNING.set(key, entry);
 
     let t = Date.now();
@@ -575,10 +577,13 @@ app.post('/api/projects/:id/compile', async (req, res) => {
       throw e;
     }
     ws.last = { ok: !exitError, mainFile };
+    // A run stopped part-way (by a newer compile or the browser leaving) can leave half-written .aux/.toc files
+    // that make the next compile fail; clear them and let the next run go through latexmk from clean state.
+    if (closed.signal.aborted && exitError?.killed) killedWorkspace = ws;
     mark('tex', t);
     timings.passes = passes === 'direct' ? 1 : passes.includes('latexmk') ? 2 : 0;
     timings.preamble = format ? 1 : 0;
-    if (closed.signal.aborted) return; // superseded or the browser left; nothing to send
+    if (closed.signal.aborted) return; // superseded or the browser left; answered in finally
 
     const stderr = String(exitError?.stderr ?? '');
     if (COMPILE_MODE === 'docker' && exitError && (/Cannot connect to the Docker daemon|failed to connect to the docker API|docker.sock/i.test(stderr) || exitError.code === 'ENOENT')) {
@@ -633,15 +638,31 @@ app.post('/api/projects/:id/compile', async (req, res) => {
 
     if (success && fmtKey && ws.format?.key !== fmtKey) void buildPreambleFormat(ws, mainFile, fmtKey).catch(error => console.error('Building the preamble format failed:', error));
   } catch (e) {
-    if (closed.signal.aborted || (e instanceof Error && e.message === 'cancelled')) return;
+    if (closed.signal.aborted || (e instanceof Error && e.message === 'cancelled')) return; // answered in finally
     send(res, e instanceof Error && /busy/.test(e.message) ? 429 : 400, e);
   } finally {
+    if (killedWorkspace) { await clearBuildProducts(killedWorkspace).catch(() => undefined); killedWorkspace.last = undefined; }
+    // A compile replaced by a newer one still gets an answer, so the request doesn't hang until the proxy times out.
+    if (superseded && !res.headersSent && !res.writableEnded) res.status(410).json({ error: 'Replaced by a newer compile.', superseded: true });
     release?.();
     finished();
     // Only clear our own entry; a newer compile may already have replaced it.
     if (entry && RUNNING.get(key) === entry) RUNNING.delete(key);
   }
 });
+
+/** Removes auxiliary build files (not sources, the PDF or the cached preamble) from a warm folder. */
+async function clearBuildProducts(ws: Workspace) {
+  const AUX = /\.(aux|toc|lof|lot|out|nav|snm|vrb|fls|fdb_latexmk|bbl|blg|bcf|run\.xml|log|synctex\.gz|synctex\(busy\))$/i;
+  const walk = async (rel: string): Promise<void> => {
+    for (const entry of await fs.readdir(path.join(ws.dir, rel), { withFileTypes: true }).catch(() => [])) {
+      const name = path.posix.join(rel, entry.name);
+      if (entry.isDirectory()) { if (!['tmp', 'texmf-var', 'texmf-config', 'font-cache'].includes(name)) await walk(name); }
+      else if (AUX.test(entry.name) && !ws.hashes.has(name)) await fs.rm(path.join(ws.dir, name), { force: true });
+    }
+  };
+  await walk('');
+}
 
 type TexRun = { stdout: string; stderr: string; killed: boolean; reason?: 'timeout' | 'output_limit'; code: number | null };
 

@@ -224,7 +224,8 @@ function App(){
    let {r,payload}=await send(false);
    if(r.status===409)({r,payload}=await send(true));
    let data:any=null;try{data=await r.json()}catch{/* non-JSON body: the API is unreachable */}
-   if(controller.signal.aborted)return;
+   // 410: another compile of this project (e.g. in another tab) replaced this one; its result will arrive there.
+   if(controller.signal.aborted||r.status===410)return;
    if(!data)throw new Error(NETWORK_HELP);
    if(revision!==sourceRevision.current){setCompileState({status:'outdated',message:'PDF is out of date',stale:!!pdfUrl});return}
    setApiOnline(true);

@@ -1,13 +1,21 @@
 import { expect, test, type Page } from '@playwright/test';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 
 // Clicks through the main controls and checks each one visibly does something. Compiles are faked so the test is
 // about the interface; real compiles are covered by rendering.spec.ts and the compile fixture suite.
 const errorsByPage = new WeakMap<Page, string[]>();
 let compiles = 0;
+let compileFails = false;
 
-test.beforeEach(async ({ page }, info) => {
+test.beforeEach(async ({ page, request }, info) => {
   test.skip(info.project.name !== 'desktop-light', 'Control coverage runs once; layout profiles are covered elsewhere.');
+  if (!process.env.E2E_BASE_URL) {
+    const response = await request.get('/api/projects');
+    if (response.ok()) await Promise.all((await response.json() as { id: string }[]).map(project => request.delete(`/api/projects/${project.id}`)));
+  }
   compiles = 0;
+  compileFails = false;
   await page.addInitScript(() => {
     if (sessionStorage.getItem('seeded')) return;
     sessionStorage.setItem('seeded', '1');
@@ -19,7 +27,7 @@ test.beforeEach(async ({ page }, info) => {
     localStorage.setItem('paperdesk-compile-prefs', JSON.stringify({ autoCompile: false }));
   });
   await page.route(/^https:\/\/fonts\.(googleapis|gstatic)\.com\//, route => route.fulfill({ status: 200, contentType: 'text/css', body: '' }));
-  await page.route('**/api/projects/*/compile', route => { compiles++; return route.fulfill({ json: { success: true, log: 'ok', errors: [], warnings: [], durationMs: 50, session: 's', pdf: twoPagePdf().toString('base64') } }); });
+  await page.route('**/api/projects/*/compile', route => { compiles++; return route.fulfill({ json: compileFails ? { success: false, log: '! Package x Error: broken source.', errors: [{ file: 'main.tex', line: 2, message: 'broken source' }], warnings: [], durationMs: 50 } : { success: true, log: 'ok', errors: [], warnings: [], durationMs: 50, session: 's', pdf: twoPagePdf().toString('base64') } }); });
   await page.route('**/api/projects/*/pdf*', route => route.fulfill({ status: 200, contentType: 'application/pdf', body: twoPagePdf() }));
   const errors: string[] = [];
   errorsByPage.set(page, errors);
@@ -31,6 +39,12 @@ test.afterEach(async ({ page }) => { expect(errorsByPage.get(page) ?? []).toEqua
 
 const source = (page: Page) => page.evaluate(() => JSON.parse(localStorage.getItem('paperdesk-projects')!)[0].files.find((f: { name: string }) => f.name === 'main.tex').content as string);
 
+async function openControls(page: Page) {
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Open Controls' }).click();
+  await expect(page.locator('.monaco-editor')).toBeVisible();
+}
+
 async function menu(page: Page, name: string, item: string | RegExp) {
   await page.locator('.editor-menus .text-menu').filter({ hasText: name }).click();
   await page.getByRole('menu').locator('[role^="menuitem"]').filter({ hasText: item }).first().click();
@@ -38,7 +52,6 @@ async function menu(page: Page, name: string, item: string | RegExp) {
 
 test('dashboard controls', async ({ page }) => {
   await page.goto('/');
-  await page.getByRole('button', { name: 'Back to projects' }).click();
   await expect(page.getByRole('heading', { name: 'Your projects' })).toBeVisible();
   await page.getByRole('button', { name: 'Help' }).click();
   await page.getByRole('menuitem', { name: 'Keyboard shortcuts' }).click();
@@ -63,9 +76,32 @@ test('dashboard controls', async ({ page }) => {
   await page.getByRole('button', { name: 'Skip tour', exact: true }).click();
 });
 
+test('auto compile waits until a paste has been idle', async ({ page }) => {
+  await openControls(page);
+  await page.getByRole('button', { name: 'Compiler options' }).click();
+  await page.getByRole('menuitemcheckbox', { name: 'Auto compile: Off' }).click();
+  const editor = page.getByRole('textbox', { name: 'Editor content' });
+  await editor.click({ force: true });
+  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+ArrowDown' : 'Control+End');
+  await page.keyboard.insertText('\n% pasted together\nA whole paste should become one idle compile.\n');
+  await page.waitForTimeout(1000);
+  expect(compiles).toBe(0);
+  await expect.poll(() => compiles, { timeout: 10_000 }).toBe(1);
+});
+
+test('a failed recompile keeps the previous PDF and marks it out of date', async ({ page }) => {
+  await openControls(page);
+  await page.getByRole('button', { name: /^Recompile/ }).click();
+  await expect(page.locator('.pdf-scroll canvas:not(.is-loading)').first()).toBeVisible();
+  compileFails = true;
+  await page.getByRole('button', { name: /^Recompile/ }).click();
+  await expect(page.locator('.compile-banner')).toContainText('broken source');
+  await expect(page.locator('.pdf-state')).toContainText('PDF is out of date');
+  await expect(page.locator('.pdf-scroll canvas:not(.is-loading)').first()).toBeVisible();
+});
+
 test('editor header, menus, panels and dialogs', async ({ page }) => {
-  await page.goto('/');
-  await expect(page.locator('.monaco-editor')).toBeVisible();
+  await openControls(page);
   for (const name of ['File', 'Edit', 'Insert', 'View', 'Help']) {
     await page.locator('.editor-menus .text-menu').filter({ hasText: name }).click();
     await expect(page.getByRole('menu')).toBeVisible();
@@ -130,8 +166,7 @@ test('editor header, menus, panels and dialogs', async ({ page }) => {
 });
 
 test('file tree, toolbar, autocomplete, compile and PDF controls', async ({ page }) => {
-  await page.goto('/');
-  await expect(page.locator('.monaco-editor')).toBeVisible();
+  await openControls(page);
   await page.getByRole('button', { name: 'New file' }).first().click();
   await page.getByLabel(/File name/).fill('notes.tex');
   await page.getByRole('button', { name: 'Create file' }).click();
@@ -156,17 +191,25 @@ test('file tree, toolbar, autocomplete, compile and PDF controls', async ({ page
   await expect.poll(() => source(page)).toMatch(/\\textbf\{(Hello|world)\}/);
   await page.getByRole('button', { name: 'Undo' }).click();
   await expect.poll(() => source(page)).not.toContain('\\textbf');
-  for (const name of ['Italic', 'Table', 'Equation', 'Bulleted list', 'Figure']) await page.getByRole('button', { name, exact: true }).click();
+  for (const name of ['Italic', 'Table', 'Equation', 'Bulleted list']) await page.getByRole('button', { name, exact: true }).click();
   await expect.poll(() => source(page)).toContain('\\begin{tabular}');
+  const imageChooser = page.waitForEvent('filechooser');
+  await page.getByRole('button', { name: 'Insert image' }).click();
+  await (await imageChooser).setFiles({ name: 'User attachment.png', mimeType: 'image/png', buffer: readFileSync(path.resolve('test/fixtures/compile/image-space-upload/user-attachment.png')) });
+  await expect(page.locator('.file-label').getByText('user-attachment.png', { exact: true })).toBeVisible();
+  await expect.poll(() => source(page)).toContain('\\includegraphics[width=0.8\\linewidth]{user-attachment.png}');
 
   // Autocomplete offers the project's labels and citation keys.
+  await page.getByRole('textbox', { name: 'Editor content' }).click({ force: true });
   await page.keyboard.press(process.platform === 'darwin' ? 'Meta+ArrowDown' : 'Control+End');
   await page.keyboard.type('\nSee \\ref{');
-  await expect(page.getByRole('listbox', { name: 'Suggest' }).getByRole('option', { name: /sec:intro/ })).toBeVisible();
-  await page.keyboard.press('Enter');
+  const labelSuggestion = page.getByRole('listbox', { name: 'Suggest' }).getByRole('option', { name: /sec:intro/ });
+  await expect(labelSuggestion).toBeVisible();
+  await labelSuggestion.click();
   await page.keyboard.type(' and \\cite{');
-  await expect(page.getByRole('listbox', { name: 'Suggest' }).getByRole('option', { name: /knuth84/ })).toBeVisible();
-  await page.keyboard.press('Enter');
+  const citationSuggestion = page.getByRole('listbox', { name: 'Suggest' }).getByRole('option', { name: /knuth84/ });
+  await expect(citationSuggestion).toBeVisible();
+  await citationSuggestion.click();
   await expect.poll(() => source(page)).toContain('See \\ref{sec:intro} and \\cite{knuth84}');
 
   await page.getByRole('button', { name: /^Recompile/ }).click();

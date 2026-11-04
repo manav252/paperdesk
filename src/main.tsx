@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import Editor, { type OnMount } from '@monaco-editor/react';
-import { FileText, FolderOpen, Folder, Search, Plus, MoreHorizontal, ChevronDown, ChevronRight, ChevronLeft, Settings, HelpCircle, CloudOff, TriangleAlert, Upload, FolderPlus, FilePlus2, Image as ImageIcon, FileCode2, File, BookOpen, Play, Download, Share2, Undo2, Redo2, Bold, Italic, Underline, List, ListOrdered, Table2, Sigma, Quote, Link2, Columns2, Maximize2, Minimize2, Square, Star, ZoomIn, ZoomOut, RefreshCw, CircleCheck, Cloud, X, Copy, Trash2, Pencil, Check, AlertCircle, FileArchive, Menu, Keyboard, Sun, Moon, Monitor, Home, ScrollText, Info, PanelLeft, Code2, Sparkles, Compass, } from 'lucide-react';
+import { FileText, FolderOpen, Folder, Search, Plus, MoreHorizontal, ChevronDown, ChevronRight, ChevronLeft, Settings, HelpCircle, CloudOff, TriangleAlert, Upload, FolderPlus, FilePlus2, Image as ImageIcon, FileCode2, File, BookOpen, Play, Download, Share2, Undo2, Redo2, Bold, Italic, Underline, List, ListOrdered, Table2, Sigma, Quote, Link2, Columns2, Maximize2, Minimize2, Square, Star, ZoomIn, ZoomOut, RefreshCw, CircleCheck, Cloud, X, Copy, Trash2, Pencil, Check, AlertCircle, FileArchive, Menu, Keyboard, Sun, Moon, Monitor, Home, ScrollText, Info, PanelLeft, Code2, Sparkles, Compass, Crosshair, } from 'lucide-react';
 import { useTheme, type ThemePref } from './theme';
 import { setCompletionFiles, setupMonaco } from './monacoSetup';
 import { outlineOf } from './lib/outline';
@@ -16,7 +16,7 @@ import { Tour, TOUR_KEY, type TourStep } from './Tour';
 import { apiUrl, fetchWithWake, ownerHeaders, projectOwnerId } from './lib/api';
 import { base64ToBytes, compileFiles, type SyncState } from './lib/compileSync';
 import { PdfViewer, type Zoom } from './PdfViewer';
-import { filesFromDrop, isSvg, svgToPngBase64, type Incoming } from './lib/upload';
+import { filesFromDrop, isSvg, safeImageName, svgToPngBase64, type Incoming } from './lib/upload';
 import './style.css';
 
 const starter=`\\documentclass[12pt,a4paper]{article}
@@ -65,7 +65,15 @@ const seed:Project[]=[{id:'p1',name:'Research Paper — Quantum Computing',modif
   year={1982}
 }
 `}]}];
-const initial=()=>{try{const s=localStorage.getItem('paperdesk-projects');return s?(JSON.parse(s) as Project[]).map(p=>normalizeProject(p,'storage')):seed}catch{return seed}};
+const routeProjectId=()=>{const match=window.location.pathname.match(/^\/paper\/([^/]+)\/?$/);if(!match)return null;try{return decodeURIComponent(match[1]!)}catch{return null}};
+const projectPath=(id:string)=>`/paper/${encodeURIComponent(id)}/`;
+const initial=()=>{try{const s=localStorage.getItem('paperdesk-projects');return s?(JSON.parse(s) as Project[]).map(p=>normalizeProject(p,'storage')):[]}catch{return []}};
+const rewriteImageReferences=(source:string,renames:Map<string,string>)=>[...renames].reduce((body,[from,to])=>{
+ const oldName=from.split('/').pop()??from,newName=to.split('/').pop()??to,dot=oldName.lastIndexOf('.');
+ let next=body.split(from).join(to);
+ if(dot>0){const stem=oldName.slice(0,dot),ext=oldName.slice(dot+1).replace(/[.*+?^${}()|[\]\\]/g,'\\$&'),quoted=new RegExp(`\\{\\s*["']${stem.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')}["']\\s*\\.${ext}\\s*\\}`,'g');next=next.replace(quoted,`{${newName}}`)}
+ return next;
+},source);
 
 type Layout='split'|'editor'|'pdf';
 type LayoutPrefs={layout:Layout,sidebar:boolean,sidebarWidth:number,previewPct:number,assistant:boolean,wrap:boolean,outline:boolean};
@@ -75,8 +83,9 @@ const readLayout=():LayoutPrefs=>{const base:LayoutPrefs={layout:'split',sidebar
 
 type Tone='info'|'success'|'error';
 type Toast={text:string,tone:Tone};
-type CompileState={status:'idle'|'running'|'success'|'error',message:string,entry?:LogEntry};
-type CompileResult={success:boolean|null,log:string,errors:LogEntry[],warnings:LogEntry[],durationMs:number};
+type CompileState={status:'idle'|'running'|'success'|'error'|'outdated',message:string,entry?:LogEntry,stale?:boolean};
+type CompileTimings={queue?:number;sync?:number;tex?:number;read?:number;passes?:number;preamble?:number;total?:number};
+type CompileResult={success:boolean|null,log:string,errors:LogEntry[],warnings:LogEntry[],durationMs:number,timings?:CompileTimings};
 type CompilePrefs={autoCompile:boolean;stopOnFirstError:boolean;draft:boolean;timeout:number;trackChanges:boolean};
 type Health={docker:boolean,image:boolean,compilerMode?:'docker'|'native',compilerImage:string,compilerReady?:boolean,maxCompileTimeoutMs?:number,assistant?:AssistantStatus};
 const SHARE_KEY='paperdesk-assistant-context';
@@ -106,14 +115,16 @@ function useMediaQuery(q:string){const [m,setM]=useState(()=>window.matchMedia(q
 
 function App(){
  const theme=useTheme();
- const [projects,setProjects]=useState<Project[]>(initial),[projectId,setProjectId]=useState(()=>readFlag(OPEN_KEY)??'p1'),[fileName,setFileName]=useState('main.tex'),[activeTab,setActiveTab]=useState('editor'),[compile_,setCompileState]=useState<CompileState>({status:'idle',message:''}),[pdfUrl,setPdfUrl]=useState(''),[page,setPage]=useState(1),[pageTotal,setPageTotal]=useState(0),[zoom,setZoom]=useState<Zoom>('fit'),[saveState,setSaveState]=useState('Saved'),[query,setQuery]=useState(''),[sortBy,setSortBy]=useState<'modified'|'name'>('modified'),[openMenu,setOpenMenu]=useState(''),[modal,setModal]=useState(''),[dialog,setDialog]=useState<Dialog|null>(null),[toast,setToast]=useState<Toast|null>(null),[engine,setEngine]=useState('pdflatex'),[compilePrefs,setCompilePrefs]=useState<CompilePrefs>(()=>{try{return{autoCompile:true,stopOnFirstError:true,draft:false,timeout:120,trackChanges:false,...JSON.parse(localStorage.getItem('paperdesk-compile-prefs')??'{}')}}catch{return{autoCompile:true,stopOnFirstError:true,draft:false,timeout:120,trackChanges:false}}}),[rawLogs,setRawLogs]=useState(false),[cursor,setCursor]=useState({line:1,col:1}),[result,setResult]=useState<CompileResult|null>(null),[logState,setLogState]=useState<{loading:boolean,error?:string}>({loading:false}),[apiOnline,setApiOnline]=useState<boolean|null>(null),[health,setHealth]=useState<Health|null>(null),[editorReady,setEditorReady]=useState(false),[collapsed,setCollapsed]=useState<Set<string>>(new Set()),[prefs,setPrefs]=useState<LayoutPrefs>(readLayout),[drawer,setDrawer]=useState(false),[selectionChars,setSelectionChars]=useState(0),[shareContext,setShareContext]=useState(()=>readFlag(SHARE_KEY)!=='off'),[fixReview,setFixReview]=useState<LineFix|null>(null),[tour,setTour]=useState(false),[narrowAssistant,setNarrowAssistant]=useState(false);
+ const firstVisit=useRef(localStorage.getItem('paperdesk-projects')===null);
+ const [projects,setProjects]=useState<Project[]>(initial),[projectId,setProjectId]=useState(()=>routeProjectId()??''),[fileName,setFileName]=useState('main.tex'),[activeTab,setActiveTab]=useState(routeProjectId()?'editor':'dashboard'),[compile_,setCompileState]=useState<CompileState>({status:'idle',message:''}),[pdfUrl,setPdfUrl]=useState(''),[page,setPage]=useState(1),[pageTotal,setPageTotal]=useState(0),[zoom,setZoom]=useState<Zoom>('fit'),[saveState,setSaveState]=useState('Saved'),[query,setQuery]=useState(''),[sortBy,setSortBy]=useState<'modified'|'name'>('modified'),[openMenu,setOpenMenu]=useState(''),[modal,setModal]=useState(''),[dialog,setDialog]=useState<Dialog|null>(null),[toast,setToast]=useState<Toast|null>(null),[engine,setEngine]=useState('pdflatex'),[compilePrefs,setCompilePrefs]=useState<CompilePrefs>(()=>{try{return{autoCompile:true,stopOnFirstError:true,draft:false,timeout:120,trackChanges:false,...JSON.parse(localStorage.getItem('paperdesk-compile-prefs')??'{}')}}catch{return{autoCompile:true,stopOnFirstError:true,draft:false,timeout:120,trackChanges:false}}}),[rawLogs,setRawLogs]=useState(false),[cursor,setCursor]=useState({line:1,col:1}),[result,setResult]=useState<CompileResult|null>(null),[logState,setLogState]=useState<{loading:boolean,error?:string}>({loading:false}),[apiOnline,setApiOnline]=useState<boolean|null>(null),[health,setHealth]=useState<Health|null>(null),[editorReady,setEditorReady]=useState(false),[collapsed,setCollapsed]=useState<Set<string>>(new Set()),[prefs,setPrefs]=useState<LayoutPrefs>(readLayout),[drawer,setDrawer]=useState(false),[selectionChars,setSelectionChars]=useState(0),[shareContext,setShareContext]=useState(()=>readFlag(SHARE_KEY)!=='off'),[fixReview,setFixReview]=useState<LineFix|null>(null),[tour,setTour]=useState(false),[narrowAssistant,setNarrowAssistant]=useState(false);
  const [syncPoint,setSyncPoint]=useState<{page:number,x:number,y:number}|null>(null),[pdfData,setPdfData]=useState<Uint8Array|null>(null),[nav,setNav]=useState({page:1,n:0}),[share,setShare]=useState<{state:'idle'|'creating'|'ready'|'error',url?:string,error?:string}>({state:'idle'});
- const compileAbort=useRef<AbortController|null>(null),syncState=useRef<SyncState|null>(null);
- const editorRef=useRef<any>(null),fileInput=useRef<HTMLInputElement>(null),folderInput=useRef<HTMLInputElement>(null),uploadFolder=useRef(''),zipInput=useRef<HTMLInputElement>(null),saveTimer=useRef<number>(),workRef=useRef<HTMLDivElement>(null),searchRef=useRef<HTMLInputElement>(null),compileRef=useRef<(options?:{auto?:boolean})=>void>(()=>{}),scaleRef=useRef(100),monacoRef=useRef<any>(null),pendingJump=useRef<{file:string,line:number}|null>(null),lastEdit=useRef({file:'',content:''}),storageWarned=useRef(false);
+ const [autoCompileRevision,setAutoCompileRevision]=useState(0),[pdfRenderMs,setPdfRenderMs]=useState<number|null>(null);
+ const compileAbort=useRef<AbortController|null>(null),syncState=useRef<SyncState|null>(null),sourceRevision=useRef(0);
+ const editorRef=useRef<any>(null),fileInput=useRef<HTMLInputElement>(null),imageInput=useRef<HTMLInputElement>(null),folderInput=useRef<HTMLInputElement>(null),uploadFolder=useRef(''),zipInput=useRef<HTMLInputElement>(null),saveTimer=useRef<number>(),syncHighlightTimer=useRef<number>(),syncDecorations=useRef<any>(null),workRef=useRef<HTMLDivElement>(null),searchRef=useRef<HTMLInputElement>(null),compileRef=useRef<(options?:{auto?:boolean})=>void>(()=>{}),scaleRef=useRef(100),monacoRef=useRef<any>(null),pendingJump=useRef<{file:string,line:number}|null>(null),lastEdit=useRef({file:'',content:''}),storageWarned=useRef(false);
  const monacoState=useMonacoLoad();
  const narrow=useMediaQuery(NARROW),compact=useMediaQuery('(max-width: 640px)');
  const assistant=useAssistant(()=>setHealth(h=>h?{...h,assistant:{model:h.assistant?.model??'',configured:false}}:h));
- const project=projects.find(p=>p.id===projectId)??projects[0]; const currentFile=project?.files.find(f=>f.name===fileName)??project?.files[0]; const content=currentFile?.content??'';
+ const project=(projects.find(p=>p.id===projectId)??(projectId?undefined:projects[0])) as Project; const currentFile=project?.files.find(f=>f.name===fileName)??project?.files[0]; const content=currentFile?.content??'';
  const contentRef=useRef(content);
  const projectRef=useRef(project);projectRef.current=project;
  useEffect(()=>setCompletionFiles(()=>projectRef.current?.files??[]),[]);
@@ -122,6 +133,13 @@ function App(){
  useEffect(()=>{if(project?.id)writeFlag(OPEN_KEY,project.id)},[project?.id]);
  useEffect(()=>{contentRef.current=content},[projectId,fileName]);
  const update=(fn:(p:Project)=>Project)=>setProjects(prev=>prev.map(p=>p.id===projectId?fn(p):p));
+ useEffect(()=>{
+  if(!project)return;
+  const used=new Set(project.files.map(file=>file.name)),renames=new Map<string,string>();
+  for(const file of project.files){if(!isImage(file.name)||isSvg(file.name))continue;const safe=safeImageName(file.name);if(safe===file.name)continue;used.delete(file.name);let next=safe,n=2;while(used.has(next)){const dot=safe.lastIndexOf('.'),stem=dot>0?safe.slice(0,dot):safe,ext=dot>0?safe.slice(dot):'';next=`${stem}-${n++}${ext}`}used.add(next);renames.set(file.name,next)}
+  if(!renames.size)return;
+  const id=project.id;setProjects(prev=>prev.map(p=>p.id===id?({...p,files:p.files.map(file=>({...file,name:renames.get(file.name)??file.name,content:file.name.endsWith('.tex')&&typeof file.content==='string'?rewriteImageReferences(file.content,renames):file.content}))}):p));
+ },[projectId,project?.files]);
  const notify=(text:string,tone:Tone='info')=>setToast({text,tone});
  const setPref=<K extends keyof LayoutPrefs>(k:K,v:LayoutPrefs[K])=>setPrefs(p=>({...p,[k]:v}));
  const compiling=compile_.status==='running';
@@ -137,6 +155,12 @@ function App(){
  const setAssistantOpen=(v:boolean)=>{if(narrow){setNarrowAssistant(v);if(v)setDrawer(false)}else setPref('assistant',v)};
 
  useEffect(()=>{try{localStorage.setItem('paperdesk-projects',JSON.stringify(projects))}catch{if(!storageWarned.current){storageWarned.current=true;notify(apiOnline?'Browser storage is full. Your work is saved on the server, but not offline in this browser.':'Browser storage is full and the API is offline: recent changes may not be saved. Start the API with “npm run dev:all”.','error')}}},[projects]);
+ useEffect(()=>{
+  const onPopState=()=>{const id=routeProjectId();setProjectId(id??'');setActiveTab(id?'editor':'dashboard')};
+  if(routeProjectId())history.replaceState({screen:'project',id:routeProjectId()},'',`${projectPath(routeProjectId()!)}${window.location.search}${window.location.hash}`);
+  else history.replaceState({screen:'dashboard'},'', `/${window.location.search}${window.location.hash}`);
+  window.addEventListener('popstate',onPopState);return()=>window.removeEventListener('popstate',onPopState);
+ },[]);
  useEffect(()=>{try{localStorage.setItem(LAYOUT_KEY,JSON.stringify(prefs))}catch{/* storage unavailable: layout lasts for this visit */}},[prefs]);
  useEffect(()=>{try{localStorage.setItem('paperdesk-compile-prefs',JSON.stringify(compilePrefs))}catch{/* settings last for this visit */}},[compilePrefs]);
  useEffect(()=>{const maximum=Math.max(5,Math.floor((health?.maxCompileTimeoutMs??600_000)/1000));if(compilePrefs.timeout>maximum)setCompilePrefs(p=>({...p,timeout:maximum}))},[health?.maxCompileTimeoutMs]);
@@ -150,15 +174,15 @@ function App(){
    setProjects(x=>[copy,...x]);setProjectId(copy.id);setFileName(defaultFile(copy.files));setActiveTab('editor');notify(`Opened a copy of “${d.name}”. Changes stay in your copy.`,'success')}
   catch(e){notify(e instanceof Error&&!(e instanceof TypeError)?e.message:NETWORK_HELP,'error')}
  };
- useEffect(()=>{const sync=async()=>{try{const r=await apiFetch('/api/projects');if(!r.ok)throw new Error();const remote=await r.json();if(!Array.isArray(remote))throw new Error();setApiOnline(true);const {merged,upload}=mergeProjects(projects,remote.map((p:Project)=>normalizeProject(p,'server')));setProjects(merged);if(!merged.some(p=>p.id===projectId)&&merged[0])setProjectId(merged[0].id);for(const p of upload)await apiFetch(`/api/projects/${p.id}`,{method:'PUT',headers:json,body:JSON.stringify({name:p.name,files:p.files,mainFile:p.mainFile,archived:p.archived,settings:p.settings,versions:p.versions,comments:p.comments,changes:p.changes})})}catch{setApiOnline(false)}};// A shared copy is added after the first sync, which would otherwise replace the project list without it.
+ useEffect(()=>{const openSample=()=>{if(!firstVisit.current||routeProjectId()||projects.length)return;const sample=seed[0]!;firstVisit.current=false;setProjects(seed);setProjectId(sample.id);setFileName(defaultFile(sample.files));setActiveTab('editor');history.pushState({screen:'project',id:sample.id},'',projectPath(sample.id))};const sync=async()=>{try{const r=await apiFetch('/api/projects');if(!r.ok)throw new Error();const remote=await r.json();if(!Array.isArray(remote))throw new Error();setApiOnline(true);const {merged,upload}=mergeProjects(projects,remote.map((p:Project)=>normalizeProject(p,'server')));setProjects(merged);if(routeProjectId()){if(merged.some(p=>p.id===routeProjectId())){setProjectId(routeProjectId()!);setActiveTab('editor')}else{history.replaceState({screen:'dashboard'},'', '/');setProjectId('');setActiveTab('dashboard')}}else if(firstVisit.current&&!merged.length)openSample();else if(merged.length)firstVisit.current=false;for(const p of upload)await apiFetch(`/api/projects/${p.id}`,{method:'PUT',headers:json,body:JSON.stringify({name:p.name,files:p.files,mainFile:p.mainFile,archived:p.archived,settings:p.settings,versions:p.versions,comments:p.comments,changes:p.changes})})}catch{setApiOnline(false);if(routeProjectId()&&!projects.some(p=>p.id===routeProjectId())){history.replaceState({screen:'dashboard'},'', '/');setProjectId('');setActiveTab('dashboard')}else openSample()}};// A shared copy is added after the first sync, which would otherwise replace the project list without it.
   void sync().then(openSharedCopy);fetch(apiUrl('/api/health')).then(r=>r.ok?r.json():null).then(h=>setHealth(h)).catch(()=>setHealth(null))},[]);
  useEffect(()=>{if(!projectId||!project)return;const t=window.setTimeout(async()=>{try{const r=await apiFetch(`/api/projects/${projectId}`,{method:'PUT',headers:json,body:JSON.stringify({name:project.name,files:project.files,mainFile:project.mainFile,archived:project.archived,settings:project.settings,versions:project.versions,comments:project.comments,changes:project.changes})});setApiOnline(r.ok)}catch{setApiOnline(false)}},700);return()=>window.clearTimeout(t)},[projectId,project?.name,project?.files,project?.mainFile,project?.archived,project?.settings,project?.versions,project?.comments,project?.changes]);
  useEffect(()=>{if(project&&!project.files.some(f=>f.name===fileName))setFileName(defaultFile(project.files))},[projectId,project?.files.length]);
  // Only real edits count as changes; opening or switching files must not bump “Last modified”.
  useEffect(()=>{const name=currentFile?.name??'';const prev=lastEdit.current;lastEdit.current={file:name,content};if(prev.file!==name)return;window.clearTimeout(saveTimer.current);setSaveState('Saving…');saveTimer.current=window.setTimeout(()=>{setSaveState('Saved');update(p=>({...p,modified:Date.now()}))},650);return()=>window.clearTimeout(saveTimer.current)},[content,currentFile?.name]);
  useEffect(()=>{if(toast){const t=window.setTimeout(()=>setToast(null),toast.tone==='error'?6000:2800);return()=>window.clearTimeout(t)}},[toast]);
- useEffect(()=>{if(compile_.status==='success'){const t=window.setTimeout(()=>setCompileState(s=>s.status==='success'?{status:'idle',message:''}:s),4000);return()=>window.clearTimeout(t)}},[compile_]);
- useEffect(()=>{if(!compilePrefs.autoCompile||dashboard||!project)return;const t=window.setTimeout(()=>compileRef.current({auto:true}),1000);return()=>window.clearTimeout(t)},[compilePrefs.autoCompile,project?.files,project?.mainFile,engine]);
+ useEffect(()=>{if(compile_.status==='success'){const t=window.setTimeout(()=>setCompileState(s=>s.status==='success'?{status:s.stale?'outdated':'idle',message:s.stale?'PDF is out of date':''}:s),4000);return()=>window.clearTimeout(t)}},[compile_]);
+ useEffect(()=>{if(!compilePrefs.autoCompile||dashboard||!project||autoCompileRevision===0)return;const t=window.setTimeout(()=>compileRef.current({auto:true}),1800);return()=>window.clearTimeout(t)},[compilePrefs.autoCompile,autoCompileRevision]);
 
  // Close menus on outside click; Escape closes the topmost layer.
  useEffect(()=>{
@@ -174,7 +198,7 @@ function App(){
   return()=>{document.removeEventListener('mousedown',down);document.removeEventListener('keydown',key)};
  },[openMenu,dialog,modal,activeTab,narrow,drawer,narrowAssistant]);
 
- const setContent=(value:string)=>{const previous=contentRef.current;contentRef.current=value;update(p=>{const now=Date.now(),latest=p.versions?.[0],recent=latest!==undefined&&latest.label==='Automatic snapshot'&&now-latest.created<1200;return{...p,versions:(recent?(p.versions??[]):[{id:crypto.randomUUID(),label:'Automatic snapshot',created:now,files:p.files.map(f=>({...f}))},...(p.versions??[])]).slice(0,30),changes:compilePrefs.trackChanges?recordEdit(previous,value,fileName,p.changes??[]):p.changes??[],files:p.files.map(f=>f.name===fileName?{...f,content:value}:f)}})};
+ const setContent=(value:string)=>{sourceRevision.current++;setAutoCompileRevision(v=>v+1);setCompileState(s=>pdfUrl?{...s,status:s.status==='running'?'running':s.status==='error'?'error':'outdated',message:s.status==='running'?s.message:s.status==='error'?s.message:'PDF is out of date',stale:true}:s);const previous=contentRef.current;contentRef.current=value;update(p=>{const now=Date.now(),latest=p.versions?.[0],recent=latest!==undefined&&latest.label==='Automatic snapshot'&&now-latest.created<1200;return{...p,versions:(recent?(p.versions??[]):[{id:crypto.randomUUID(),label:'Automatic snapshot',created:now,files:p.files.map(f=>({...f}))},...(p.versions??[])]).slice(0,30),changes:compilePrefs.trackChanges?recordEdit(previous,value,fileName,p.changes??[]):p.changes??[],files:p.files.map(f=>f.name===fileName?{...f,content:value}:f)}})};
  const insert=(s:string)=>{const ed=editorRef.current;if(!ed){notify('Open a text file in the editor to insert LaTeX');return}ed.executeEdits('toolbar',[{range:ed.getSelection(),text:s,forceMoveMarkers:true}]);ed.focus()};
  /** Wraps the selection (or places the cursor between `before` and `after` when nothing is selected), like Overleaf's toolbar. */
  const wrap=(before:string,after:string)=>{const ed=editorRef.current,model=ed?.getModel();if(!ed||!model){notify('Open a text file in the editor to insert LaTeX');return}const sels=ed.getSelections()??[];ed.pushUndoStop();ed.executeEdits('toolbar',sels.map((sel:any)=>({range:sel,text:before+model.getValueInRange(sel)+after,forceMoveMarkers:true})));const first=sels[0];if(first&&first.isEmpty()){const pos={lineNumber:first.startLineNumber,column:first.startColumn+before.length};ed.setSelection({startLineNumber:pos.lineNumber,startColumn:pos.column,endLineNumber:pos.lineNumber,endColumn:pos.column})}ed.pushUndoStop();ed.focus()};
@@ -183,10 +207,11 @@ function App(){
  /** Compiles the open project. Starting a compile replaces one still running, like Overleaf's restart. */
  const compile=async({auto=false}:{auto?:boolean}={})=>{
   if(!project)return;
-  const target=project,mainFile=target.mainFile??'main.tex';
+  const target=project,mainFile=target.mainFile??'main.tex',revision=sourceRevision.current;
   if(!target.files.some(f=>f.name===mainFile)){setCompileState({status:'error',message:`Main document ${mainFile} not found. Choose an existing .tex file in Project settings.`});return}
   compileAbort.current?.abort();
-  const controller=new AbortController();compileAbort.current=controller;
+  const controller=new AbortController();compileAbort.current=controller;let timedOut=false;
+  const timeoutTimer=window.setTimeout(()=>{timedOut=true;controller.abort();if(compileAbort.current===controller)compileAbort.current=null;setCompileState({status:'error',message:`Compile timed out after ${compilePrefs.timeout} seconds. Check the compile log or increase the timeout.`,stale:!!pdfUrl})},(compilePrefs.timeout+15)*1000);
   // A compile you asked for shows the PDF on a phone; an automatic one leaves you in the editor.
   if(!auto&&narrow&&layout==='editor')setPref('layout','pdf');
   setCompileState({status:'running',message:'Compiling…'});
@@ -199,8 +224,9 @@ function App(){
    let data:any=null;try{data=await r.json()}catch{/* non-JSON body: the API is unreachable */}
    if(controller.signal.aborted)return;
    if(!data)throw new Error(NETWORK_HELP);
+   if(revision!==sourceRevision.current){setCompileState({status:'outdated',message:'PDF is out of date',stale:!!pdfUrl});return}
    setApiOnline(true);
-   if(!r.ok){setCompileState({status:'error',message:String(data.error??'Compilation failed')});if(r.status===503)fetch(apiUrl('/api/health')).then(h=>h.json()).then(setHealth).catch(()=>undefined);return}
+   if(!r.ok){setCompileState({status:'error',message:String(data.error??'Compilation failed'),stale:!!pdfUrl});if(r.status===503)fetch(apiUrl('/api/health')).then(h=>h.json()).then(setHealth).catch(()=>undefined);return}
    syncState.current={session:String(data.session??''),project:target.id,hashes:payload.hashes};
    const res=data as CompileResult;setResult(res);
    if(res.success){
@@ -210,35 +236,38 @@ function App(){
     setCompileState({status:'success',message:`Compiled in ${((performance.now()-started)/1000).toFixed(1)}s${w?` · ${w} warning${w>1?'s':''}`:''}`});
    }else{
     const e=res.errors[0];
-    setCompileState({status:'error',message:e?`${e.file?`${e.file}${e.line?`:${e.line}`:''} — `:''}${e.message}`:'Compilation failed',entry:e});
+    setCompileState({status:'error',message:e?`${e.file?`${e.file}${e.line?`:${e.line}`:''} — `:''}${e.message}`:'Compilation failed',entry:e,stale:!!pdfUrl});
    }
   }catch(e){
+   if(timedOut)return;
    if(controller.signal.aborted)return;
    const message=e instanceof TypeError?NETWORK_HELP:e instanceof Error?e.message:'Compilation failed';
-   setApiOnline(false);setCompileState({status:'error',message});
-  }finally{if(compileAbort.current===controller)compileAbort.current=null}
+   setApiOnline(false);setCompileState({status:'error',message,stale:!!pdfUrl});
+  }finally{window.clearTimeout(timeoutTimer);if(compileAbort.current===controller)compileAbort.current=null}
  };
- const stopCompile=()=>{compileAbort.current?.abort();compileAbort.current=null;setCompileState({status:'idle',message:''});notify('Compile stopped')};
+ const stopCompile=()=>{compileAbort.current?.abort();compileAbort.current=null;setCompileState(pdfUrl?{status:'outdated',message:'PDF is out of date',stale:true}:{status:'idle',message:''});notify('Compile stopped')};
  compileRef.current=compile;
 
  const askName=(title:string,label:string,initialValue:string,confirmLabel:string,onConfirm:(v:string)=>string|void,placeholder?:string)=>setDialog({title,label,initial:initialValue,confirmLabel,onConfirm,placeholder});
- const newProject=(name='Untitled Project')=>{const p={id:crypto.randomUUID(),name,modified:Date.now(),files:[{name:'main.tex',content:starter}]};setProjects(x=>[p,...x]);setProjectId(p.id);setFileName('main.tex');setPdfUrl('');setPdfData(null);setResult(null);setCompileState({status:'idle',message:''});setActiveTab('editor')};
+ const navigateDashboard=()=>{if(routeProjectId())history.pushState({screen:'dashboard'},'', '/');setProjectId('');setActiveTab('dashboard')};
+ const newProject=(name='Untitled Project')=>{const p={id:crypto.randomUUID(),name,modified:Date.now(),files:[{name:'main.tex',content:starter}]};history.pushState({screen:'project',id:p.id},'',projectPath(p.id));setProjects(x=>[p,...x]);setProjectId(p.id);setFileName('main.tex');setPdfUrl('');setPdfData(null);setResult(null);setCompileState({status:'idle',message:''});setActiveTab('editor')};
  const promptNewProject=()=>askName('Create a new project','Project name','','Create project',v=>{if(!v.trim())return 'Enter a project name';newProject(v.trim())},'e.g. My research paper');
  const renameProject=(p:Project)=>{setOpenMenu('');askName('Rename project','Project name',p.name,'Save changes',v=>{if(!v.trim())return 'Enter a project name';setProjects(x=>x.map(q=>q.id===p.id?{...q,name:v.trim()}:q))})};
- const deleteProject=(p:Project)=>{setOpenMenu('');setDialog({title:'Delete project?',message:<>“{p.name}” and its {p.files.length} files will be deleted{p.id===projectId?' and you’ll return to your projects':''}. This can’t be undone.</>,confirmLabel:'Delete project',danger:true,onConfirm:()=>{const next=projects.filter(x=>x.id!==p.id);setProjects(next);apiFetch(`/api/projects/${p.id}`,{method:'DELETE'}).catch(()=>undefined);if(p.id===projectId){setProjectId(next[0]?.id??'');setActiveTab('dashboard')}notify('Project deleted')}})};
+ const deleteProject=(p:Project)=>{setOpenMenu('');setDialog({title:'Delete project?',message:<>“{p.name}” and its {p.files.length} files will be deleted{p.id===projectId?' and you’ll return to your projects':''}. This can’t be undone.</>,confirmLabel:'Delete project',danger:true,onConfirm:()=>{const next=projects.filter(x=>x.id!==p.id);setProjects(next);apiFetch(`/api/projects/${p.id}`,{method:'DELETE'}).catch(()=>undefined);if(p.id===projectId){navigateDashboard()}notify('Project deleted')}})};
  const duplicate=(p:Project)=>{const cp={...p,id:crypto.randomUUID(),name:p.name+' copy',modified:Date.now(),files:p.files.map(f=>({...f}))};setProjects(x=>[cp,...x]);notify('Project duplicated','success');setOpenMenu('')};
- const openProject=(p:Project)=>{if(p.id!==projectId){setPdfUrl('');setPdfData(null);setResult(null);setCompileState({status:'idle',message:''})}setProjectId(p.id);setFileName(defaultFile(p.files));setActiveTab('editor')};
+ const openProject=(p:Project)=>{if(routeProjectId()!==p.id)history.pushState({screen:'project',id:p.id},'',projectPath(p.id));if(p.id!==projectId){setPdfUrl('');setPdfData(null);setResult(null);setCompileState({status:'idle',message:''})}setProjectId(p.id);setFileName(defaultFile(p.files));setActiveTab('editor')};
 
  const validName=(name:string,current?:string)=>{if(!name)return 'Enter a name';if(/(^|\/)\.\.(\/|$)/.test(name)||name.startsWith('/'))return 'Names can’t start with “/” or contain “..”';if(name!==current&&project.files.some(f=>f.name===name||f.name===name+'/'))return 'A file or folder with that name already exists'};
  const addFile=(folder=false)=>askName(folder?'New folder':'New file',folder?'Folder name':'File name (use “folder/name.tex” to place it in a folder)',folder?'figures':'notes.tex',folder?'Create folder':'Create file',input=>{const name=folder?input.trim().replace(/\/+$/,'')+'/':input.trim();const err=validName(name.replace(/\/$/,''))??validName(name);if(err)return err;update(p=>({...p,files:[...p.files,{name,content:folder?'':`% ${name}\n`}]}));if(!folder)setFileName(name);else setCollapsed(c=>{const n=new Set(c);n.delete(name);return n})});
  const renameFile=(f:ProjectFile)=>{const isFolder=f.name.endsWith('/');const shown=f.name.replace(/\/$/,'');askName(isFolder?'Rename folder':'Rename file','New name',shown,'Rename',input=>{const next=input.trim().replace(/\/+$/,'');if(next===shown)return;const err=validName(next,shown);if(err)return err;if(isFolder){const from=f.name,to=next+'/';update(p=>({...p,files:p.files.map(x=>x.name.startsWith(from)?{...x,name:to+x.name.slice(from.length)}:x)}));if(fileName.startsWith(from))setFileName(to+fileName.slice(from.length))}else{update(p=>({...p,files:p.files.map(x=>x.name===f.name?{...x,name:next}:x)}));if(fileName===f.name)setFileName(next)}})};
  const deleteFile=(f:ProjectFile)=>{const isFolder=f.name.endsWith('/');const affected=isFolder?project.files.filter(x=>x.name.startsWith(f.name)):[f];const remaining=project.files.filter(x=>!affected.includes(x));if(!remaining.some(x=>!x.name.endsWith('/'))){notify('A project must contain at least one file','error');return}setDialog({title:isFolder?'Delete folder?':'Delete file?',message:isFolder?<>“{f.name}” and the {affected.length-1} file(s) inside it will be deleted.</>:<>“{f.name}” will be deleted from this project.</>,confirmLabel:'Delete',danger:true,onConfirm:()=>{update(p=>({...p,files:p.files.filter(x=>!affected.some(a=>a.name===x.name))}));if(affected.some(a=>a.name===fileName))setFileName(remaining.find(x=>!x.name.endsWith('/'))?.name??'main.tex')}})};
  /** Adds files to the project, into `folder` when given ("figures/"). ZIP archives are imported as a whole project. */
- const uploadFiles=async(list:FileList|Incoming[]|null,folder='')=>{
+ const uploadFiles=async(list:FileList|Incoming[]|null,folder='',insertImage=false)=>{
   if(!list)return;
   // ("File" here is the lucide icon, so tell picked files from dropped entries by their shape.)
   const items:Incoming[]=Array.from(list as ArrayLike<globalThis.File|Incoming>,x=>'path' in x&&'file' in x?x:{file:x as globalThis.File,path:(x as globalThis.File).name});
-  const added:ProjectFile[]=[];
+  const added:ProjectFile[]=[],renames=new Map<string,string>();
+  const usedNames=new Set(project?.files.map(f=>f.name)??[]);
   for(const {file:f,path:rel} of items){
    if(!folder&&!rel.includes('/')&&f.name.toLowerCase().endsWith('.zip')){
     try{const current=projects.find(p=>p.id===projectId);if(!current)throw new Error('The project is no longer open.');const saved=await apiFetch(`/api/projects/${projectId}`,{method:'PUT',headers:json,body:JSON.stringify({name:current.name,files:current.files,mainFile:current.mainFile,archived:current.archived,settings:current.settings,versions:current.versions,comments:current.comments,changes:current.changes})});if(!saved.ok)throw new Error('Couldn’t save the project before importing the ZIP.');const form=new FormData();form.append('file',f);const res=await apiFetch(`/api/projects/${projectId}/upload`,{method:'POST',body:form});const d=await res.json().catch(()=>null);if(!res.ok)throw new Error(d?.error??NETWORK_HELP);update(p=>({...p,files:normalizeProject(d,'server').files}));notify(`Imported ${f.name}`,'success')}
@@ -246,8 +275,11 @@ function App(){
     continue;
    }
    if(f.size>20*1024*1024){notify(`${f.name} is larger than 20 MB and wasn’t uploaded.`,'error');continue}
-   const name=(folder+rel).replace(/^\/+/,'');
-   if(/(^|\/)\.\.(\/|$)/.test(name)){notify(`${name} has an invalid path.`,'error');continue}
+   const originalName=(folder+rel).replace(/^\/+/,'');
+   if(/(^|\/)\.\.(\/|$)/.test(originalName)){notify(`${originalName} has an invalid path.`,'error');continue}
+   let name=isImage(originalName)?safeImageName(originalName):originalName;
+   if(name!==originalName){const dot=name.lastIndexOf('.'),stem=dot>0?name.slice(0,dot):name,ext=dot>0?name.slice(dot):'';let candidate=name,n=2;while(usedNames.has(candidate)){candidate=`${stem}-${n++}${ext}`}name=candidate;renames.set(originalName,name)}
+   usedNames.add(name);
    if(isSvg(name)){
     // LaTeX can't include SVG; keep the original and add a PNG copy that \includegraphics can use.
     try{added.push({name,content:await f.text()},{name:name.replace(/\.svg$/i,'.png'),content:await svgToPngBase64(f),encoding:'base64'});notify(`Added ${name.replace(/\.svg$/i,'.png')} (a PNG copy of ${name}) — LaTeX can’t include SVG directly.`,'success')}
@@ -260,12 +292,16 @@ function App(){
   if(added.length){
    // Parent folders become explicit entries so the tree shows them even when they only hold the new files.
    const folders=new Set<string>();for(const x of added){const parts=x.name.split('/');for(let i=1;i<parts.length;i++)folders.add(parts.slice(0,i).join('/')+'/')}
-   update(p=>{const names=new Set(added.map(x=>x.name));const kept=p.files.filter(x=>!names.has(x.name));const missing=[...folders].filter(d=>!kept.some(x=>x.name===d)).map(d=>({name:d,content:''}));return{...p,files:[...kept,...missing,...added]}});
+   const image=added.find(x=>isImage(x.name)&&!isSvg(x.name));
+   const mainTex=project?.files.find(x=>x.name===(project.mainFile??'main.tex'))??project?.files.find(x=>x.name.endsWith('.tex'));
+   const figure=image&&insertImage?`\\begin{figure}[ht]\n  \\centering\n  \\includegraphics[width=0.8\\linewidth]{${image.name}}\n  \\caption{Caption}\n  \\label{fig:${image.name.split('/').pop()?.replace(/\.[^.]+$/,'')}}\n\\end{figure}`:'';
+   update(p=>{const names=new Set(added.map(x=>x.name));let kept=p.files.filter(x=>!names.has(x.name));const missing=[...folders].filter(d=>!kept.some(x=>x.name===d)).map(d=>({name:d,content:''}));kept=[...kept,...missing,...added];if(renames.size)kept=kept.map(x=>x.name.endsWith('.tex')&&typeof x.content==='string'?{...x,content:rewriteImageReferences(x.content,renames)}:x);if(figure&&mainTex)kept=kept.map(x=>{if(x.name!==mainTex.name)return x;const body=String(x.content??'');const content=/\\end\{document\}/.test(body)?body.replace(/\\end\{document\}/,`${figure}\n\\end{document}`):`${body}\n\n${figure}\n`;return{...x,content}});return{...p,files:kept}});
    setCollapsed(c=>{const n=new Set(c);for(const d of folders)n.delete(d.replace(/\/$/,''));return n});
-   const opened=added.find(x=>!x.name.endsWith('.svg'));if(opened)setFileName(opened.name);
+   const opened=added.find(x=>!x.name.endsWith('.svg'));if(opened&&!insertImage)setFileName(opened.name);if(figure&&mainTex)setFileName(mainTex.name);
    if(!added.some(x=>isSvg(x.name)))notify(added.length===1?`Uploaded ${added[0].name}`:`Uploaded ${added.length} files`,'success');
   }
   if(fileInput.current)fileInput.current.value='';
+  if(imageInput.current)imageInput.current.value='';
   if(folderInput.current)folderInput.current.value='';
  };
  const [dropTarget,setDropTarget]=useState<string|null>(null);
@@ -294,7 +330,7 @@ function App(){
   if(layout==='pdf')setPref('layout',narrow?'editor':'split');
   if(file!==currentFile?.name)setFileName(file);else applyJump();
  };
- const applyJump=()=>{const j=pendingJump.current,ed=editorRef.current;if(!j||!ed||j.file!==currentFile?.name)return;pendingJump.current=null;const ln=Math.min(j.line,ed.getModel()?.getLineCount()??j.line);ed.revealLineInCenter(ln);ed.setPosition({lineNumber:ln,column:1});ed.focus()};
+ const applyJump=()=>{const j=pendingJump.current,ed=editorRef.current,monaco=monacoRef.current;if(!j||!ed||j.file!==currentFile?.name)return;pendingJump.current=null;const ln=Math.min(j.line,ed.getModel()?.getLineCount()??j.line);ed.revealLineInCenter(ln);ed.setPosition({lineNumber:ln,column:1});syncDecorations.current?.clear();syncDecorations.current=ed.createDecorationsCollection([{range:{startLineNumber:ln,startColumn:1,endLineNumber:ln,endColumn:ed.getModel()?.getLineMaxColumn(ln)??1},options:{isWholeLine:true,className:'sync-source-highlight',overviewRuler:{color:'rgba(45, 157, 111, .85)',position:monaco?.editor?.OverviewRulerLane?.Full}}}]);window.clearTimeout(syncHighlightTimer.current);syncHighlightTimer.current=window.setTimeout(()=>syncDecorations.current?.clear(),1800);ed.focus()};
  const syncSourceToPdf=async()=>{
   if(!currentFile||!isEditable(currentFile)){notify('Open a text file before syncing to the PDF.');return}
   const position=editorRef.current?.getPosition();
@@ -302,7 +338,7 @@ function App(){
    const response=await apiFetch(`/api/projects/${projectId}/synctex`,{method:'POST',headers:json,body:JSON.stringify({mode:'forward',file:currentFile.name,line:position?.lineNumber??cursor.line,column:position?.column??cursor.col,mainFile:project.mainFile??'main.tex'})});
    const data=await response.json();if(!response.ok)throw new Error(data.error??'SyncTeX lookup failed.');
    if(!data.found){notify('No PDF position is available here. Recompile and try a line with printed text.');return}
-   setSyncPoint({page:data.page,x:data.x,y:data.y});if(narrow)setPref('layout','pdf');
+  setSyncPoint({page:data.page,x:data.x,y:data.y});if(narrow)setPref('layout','pdf');
   }catch(e){notify(e instanceof Error?e.message:'SyncTeX lookup failed.','error')}
  };
  const syncPdfToSource=async(syncPage:number,x:number,y:number)=>{
@@ -369,17 +405,19 @@ function App(){
  useEffect(()=>{const ed=editorRef.current,m=monacoRef.current,model=ed?.getModel();if(!m||!model)return;const name=currentFile?.name;const entries=[...(result?.errors??[]).map(e=>({e,sev:m.MarkerSeverity.Error})),...(result?.warnings??[]).map(e=>({e,sev:m.MarkerSeverity.Warning}))].filter(x=>x.e.file===name&&x.e.line);m.editor.setModelMarkers(model,'latex',entries.map(({e,sev})=>({severity:sev,message:e.message,startLineNumber:e.line!,endLineNumber:e.line!,startColumn:1,endColumn:model.getLineMaxColumn(Math.min(e.line!,model.getLineCount()))})))},[result,editorReady,currentFile?.name]);
  const sortedProjects=useMemo(()=>projects.filter(p=>p.name.toLowerCase().includes(query.toLowerCase())).sort((a,b)=>sortBy==='name'?a.name.localeCompare(b.name):b.modified-a.modified),[projects,query,sortBy]);
  const dashboard=activeTab!=='editor'||!project;
+ const routePending=!!routeProjectId()&&!projects.some(p=>p.id===routeProjectId());
  useEffect(()=>{if(!dashboard&&editorReady&&!readFlag(TOUR_KEY))setTour(true)},[dashboard,editorReady]);
  const themeMenu=<ThemeMenu pref={theme.pref} resolved={theme.resolved} setPref={theme.setPref} open={openMenu==='theme'} toggle={()=>setOpenMenu(openMenu==='theme'?'':'theme')}/>;
 
  const menus:{label:string,items:MenuItem[]}[]=project?[
-  {label:'File',items:[{label:'New file',icon:<FilePlus2 size={14}/>,run:()=>addFile()},{label:'New folder',icon:<FolderPlus size={14}/>,run:()=>addFile(true)},{label:'Upload files',icon:<Upload size={14}/>,run:()=>fileInput.current?.click()},'sep',{label:'Project history',icon:<ScrollText size={14}/>,run:()=>setModal('history')},{label:'Download project',icon:<FileArchive size={14}/>,run:downloadProject},{label:'Download PDF',icon:<Download size={14}/>,run:downloadPdf,disabled:!pdfUrl},'sep',{label:'Compile',icon:<Play size={14}/>,shortcut:`${mod}↵`,run:()=>void compile()},'sep',{label:'Back to projects',icon:<Home size={14}/>,run:()=>setActiveTab('dashboard')}]},
+  {label:'File',items:[{label:'New file',icon:<FilePlus2 size={14}/>,run:()=>addFile()},{label:'New folder',icon:<FolderPlus size={14}/>,run:()=>addFile(true)},{label:'Upload files',icon:<Upload size={14}/>,run:()=>fileInput.current?.click()},'sep',{label:'Project history',icon:<ScrollText size={14}/>,run:()=>setModal('history')},{label:'Download project',icon:<FileArchive size={14}/>,run:downloadProject},{label:'Download PDF',icon:<Download size={14}/>,run:downloadPdf,disabled:!pdfUrl},'sep',{label:'Compile',icon:<Play size={14}/>,shortcut:`${mod}↵`,run:()=>void compile()},'sep',{label:'Back to projects',icon:<Home size={14}/>,run:navigateDashboard}]},
   {label:'Edit',items:[{label:'Undo',shortcut:`${mod}Z`,run:()=>editorRef.current?.trigger('keyboard','undo',null)},{label:'Redo',shortcut:isMac?'⇧⌘Z':'Ctrl+Y',run:()=>editorRef.current?.trigger('keyboard','redo',null)},'sep',{label:'Find',shortcut:`${mod}F`,run:()=>edAction('actions.find')},{label:'Find and replace',shortcut:isMac?'⌥⌘F':'Ctrl+H',run:()=>edAction('editor.action.startFindReplaceAction')},'sep',{label:'Select all',shortcut:`${mod}A`,run:()=>edAction('editor.action.selectAll')},{label:`Review changes${project.changes?.length?` (${project.changes.length})`:''}`,icon:<ScrollText size={14}/>,run:()=>setModal('changes')},{label:'Comments',icon:<ScrollText size={14}/>,run:()=>setModal('comments')}]},
-  {label:'Insert',items:[{label:'Section',run:()=>insert('\n\\section{Section title}\n')},{label:'Subsection',run:()=>insert('\n\\subsection{Subsection title}\n')},{label:'Equation',run:()=>insert('\n\\begin{equation}\n  \n\\end{equation}\n')},{label:'Figure',run:()=>insert('\n\\begin{figure}[ht]\n  \\centering\n  \\includegraphics[width=0.8\\linewidth]{image.png}\n  \\caption{Caption}\n\\end{figure}\n')},{label:'Table',run:()=>insert('\n\\begin{table}[ht]\n  \\centering\n  \\begin{tabular}{cc}\n    A & B \\\\\n    1 & 2 \\\\\n  \\end{tabular}\n  \\caption{Caption}\n\\end{table}\n')},{label:'Bulleted list',run:()=>insert('\\begin{itemize}\n  \\item Item\n\\end{itemize}')},{label:'Citation',run:()=>wrap('\\cite{','}')}]},
+  {label:'Insert',items:[{label:'Section',run:()=>insert('\n\\section{Section title}\n')},{label:'Subsection',run:()=>insert('\n\\subsection{Subsection title}\n')},{label:'Equation',run:()=>insert('\n\\begin{equation}\n  \n\\end{equation}\n')},{label:'Image',icon:<ImageIcon size={14}/>,run:()=>imageInput.current?.click()},{label:'Table',run:()=>insert('\n\\begin{table}[ht]\n  \\centering\n  \\begin{tabular}{cc}\n    A & B \\\\\n    1 & 2 \\\\\n  \\end{tabular}\n  \\caption{Caption}\n\\end{table}\n')},{label:'Bulleted list',run:()=>insert('\\begin{itemize}\n  \\item Item\n\\end{itemize}')},{label:'Citation',run:()=>wrap('\\cite{','}')}]},
   {label:'View',items:[...(narrow?[]:[{label:'Editor & PDF',checked:prefs.layout==='split',run:()=>setPref('layout','split')}]),{label:'Editor only',checked:prefs.layout==='editor'||(narrow&&layout==='editor'),run:()=>setPref('layout','editor')},{label:'PDF only',checked:layout==='pdf',run:()=>setPref('layout','pdf')},'sep',{label:'File tree',checked:sidebarOpen,run:()=>setSidebar(!sidebarOpen)},{label:'File outline',checked:prefs.outline,run:()=>setPref('outline',!prefs.outline)},{label:'Word wrap',checked:prefs.wrap,run:()=>setPref('wrap',!prefs.wrap)},'sep',...themeOptions.map(o=>({label:`${o.label} theme`,icon:o.icon,checked:theme.pref===o.value,run:()=>theme.setPref(o.value)}))]},
   {label:'Help',items:[{label:'Ask the assistant',icon:<Sparkles size={14}/>,run:()=>setAssistantOpen(true)},{label:'Take the tour',icon:<Compass size={14}/>,run:()=>setTour(true)},'sep',{label:'Keyboard shortcuts',icon:<Keyboard size={14}/>,run:()=>setModal('shortcuts')},{label:'Project settings',icon:<Settings size={14}/>,run:()=>setModal('settings')},{label:'About PaperDesk',icon:<Info size={14}/>,run:()=>notify('PaperDesk is an independent LaTeX editor.')}]},
  ]:[];
 
+ if(routePending)return <div className="app-shell"><div className="pane-loading">Loading project…</div></div>;
  return <div className="app-shell">
  {dashboard?<>
   <header className="dash-header">
@@ -389,7 +427,7 @@ function App(){
   </header>
   <main className="dash-main">
    <div className="dash-heading"><div><div className="eyebrow">Workspace / My projects</div><h1>{activeTab==='templates'?'Start from a template':'Your projects'}</h1><p className="subhead">{activeTab==='templates'?'Choose a starting point for your next document.':'Pick up where you left off.'}</p></div><button className="btn btn-primary" onClick={promptNewProject}><Plus size={16}/> New project</button></div>
-   {activeTab==='templates'&&<div className="template-grid">{templateStarters.map(t=>{const icon=t.id==='beamer-template'?<Columns2 size={20}/>:t.id==='article-template'||t.id==='report-template'||t.id==='cv-template'?<FileText size={20}/>:<BookOpen size={20}/>;return <button className="template-card" key={t.id} onClick={()=>{const id=crypto.randomUUID();const p={id,name:t.name+' project',modified:Date.now(),mainFile:'main.tex',files:[{name:'main.tex',content:t.source},...(t.files??[])]};setProjects(x=>[p,...x]);setProjectId(id);setFileName('main.tex');setActiveTab('editor')}}><div className="template-icon">{icon}</div><strong>{t.name}</strong><span>{t.description}</span><em>Use template <ChevronRight size={14}/></em></button>})}</div>}
+   {activeTab==='templates'&&<div className="template-grid">{templateStarters.map(t=>{const icon=t.id==='beamer-template'?<Columns2 size={20}/>:t.id==='article-template'||t.id==='report-template'||t.id==='cv-template'?<FileText size={20}/>:<BookOpen size={20}/>;return <button className="template-card" key={t.id} onClick={()=>{const id=crypto.randomUUID();const p={id,name:t.name+' project',modified:Date.now(),mainFile:'main.tex',files:[{name:'main.tex',content:t.source},...(t.files??[])]};history.pushState({screen:'project',id},'',projectPath(id));setProjects(x=>[p,...x]);setProjectId(id);setFileName('main.tex');setActiveTab('editor')}}><div className="template-icon">{icon}</div><strong>{t.name}</strong><span>{t.description}</span><em>Use template <ChevronRight size={14}/></em></button>})}</div>}
    <div className="section-bar"><div className="section-title"><h2>Recent projects</h2><span className="count-pill">{sortedProjects.length}</span></div><div className="dash-tools"><label className="search-box"><Search size={15}/><input ref={searchRef} value={query} onChange={e=>setQuery(e.target.value)} placeholder="Search projects…" aria-label="Search projects"/>{query?<button className="clear-search" aria-label="Clear search" onClick={()=>setQuery('')}><X size={13}/></button>:<kbd>{isMac?'⌘K':'Ctrl K'}</kbd>}</label><Dropdown id="sort" open={openMenu==='sort'} setOpen={setOpenMenu} align="right" trigger={<button className="btn btn-ghost btn-sm" onClick={()=>setOpenMenu(openMenu==='sort'?'':'sort')}>{sortBy==='name'?'Name':'Last modified'} <ChevronDown size={14}/></button>} items={[{label:'Last modified',checked:sortBy==='modified',run:()=>setSortBy('modified')},{label:'Name',checked:sortBy==='name',run:()=>setSortBy('name')}]}/></div></div>
    {sortedProjects.length?<div className="project-list" role="table"><div className="project-list-head" role="row"><span>Name</span><span>Last modified</span><span>Owner</span><span/></div>{sortedProjects.map((p,i)=><div className="project-row" role="row" key={p.id}><button className="project-open" onClick={()=>openProject(p)}><div className={`project-file-icon pfi-${i%4}`}><FileText size={18}/></div><div className="project-name-wrap"><strong>{p.name}</strong><small>{p.files.length} files{p.archived?' · Archived':''} · {p.files.map(f=>f.name).slice(0,2).join(', ')}</small></div></button><span className="muted date-text">{relative(p.modified)}</span><span className="owner">You</span><div className="row-actions"><button className="icon-btn" title="Open" aria-label={`Open ${p.name}`} onClick={()=>openProject(p)}><ChevronRight size={17}/></button><Dropdown id={p.id} open={openMenu===p.id} setOpen={setOpenMenu} align="right" trigger={<button className="icon-btn" title="Project actions" aria-label="Project actions" onClick={()=>setOpenMenu(openMenu===p.id?'':p.id)}><MoreHorizontal size={18}/></button>} items={[{label:'Rename',icon:<Pencil size={14}/>,run:()=>renameProject(p)},{label:'Duplicate',icon:<Copy size={14}/>,run:()=>duplicate(p)},{label:p.archived?'Unarchive':'Archive',icon:<FileArchive size={14}/>,run:()=>setProjects(xs=>xs.map(x=>x.id===p.id?{...x,archived:!x.archived}:x))},'sep',{label:'Delete',icon:<Trash2 size={14}/>,danger:true,run:()=>deleteProject(p)}]}/></div></div>)}</div>
    :<div className="empty-state"><div className="empty-icon"><FileText size={24}/></div><h3>No projects found</h3><p>{query?'Try a different search.':'Create your first project to get started.'}</p>{!query&&<button className="btn btn-primary" onClick={promptNewProject}><Plus size={15}/> New project</button>}</div>}
@@ -397,7 +435,7 @@ function App(){
   </main>
  </>:<div className="editor-shell">
   <header className="editor-header">
-   <button className="icon-btn chrome-btn" title="Back to projects" aria-label="Back to projects" onClick={()=>setActiveTab('dashboard')}><Home size={16}/></button>
+   <button className="icon-btn chrome-btn" title="Back to projects" aria-label="Back to projects" onClick={navigateDashboard}><Home size={16}/></button>
    <span className="chrome-divider"/>
    <nav className="editor-menus" aria-label="Editor menu">
     {compact?<Dropdown id="menu-all" open={openMenu==='menu-all'} setOpen={setOpenMenu} trigger={<button className="text-menu" onClick={()=>setOpenMenu(openMenu==='menu-all'?'':'menu-all')}><Menu size={15}/> Menu</button>} groups={menus}/>
@@ -428,11 +466,11 @@ function App(){
     </div>
     {prefs.outline&&editableFile&&/\.tex$/i.test(editableFile.name)&&<Outline content={editableFile.content} cursorLine={cursor.line} onJump={line=>jumpTo(editableFile.name,line)}/>}
     <div className="side-bottom"><button onClick={downloadProject}><FileArchive size={15}/> Download project</button><button onClick={()=>setModal('settings')}><Settings size={15}/> Project settings</button></div>
-    <input ref={fileInput} className="hidden" type="file" multiple accept=".tex,.bib,.bst,.sty,.cls,.png,.jpg,.jpeg,.pdf,.svg,.eps,.csv,.txt,.dat,.zip" onChange={e=>uploadFiles(e.target.files)}/><input ref={folderInput} className="hidden" type="file" multiple aria-label="Upload into folder" onChange={e=>uploadFiles(e.target.files,uploadFolder.current)}/><input ref={zipInput} className="hidden" type="file" accept=".zip" onChange={e=>uploadFiles(e.target.files)}/>
+    <input ref={fileInput} className="hidden" type="file" multiple accept=".tex,.bib,.bst,.sty,.cls,.png,.jpg,.jpeg,.pdf,.svg,.eps,.csv,.txt,.dat,.zip" onChange={e=>uploadFiles(e.target.files)}/><input ref={imageInput} className="hidden" data-testid="image-upload-input" type="file" accept="image/*" onChange={e=>uploadFiles(e.target.files,'',true)}/><input ref={folderInput} className="hidden" type="file" multiple aria-label="Upload into folder" onChange={e=>uploadFiles(e.target.files,uploadFolder.current)}/><input ref={zipInput} className="hidden" type="file" accept=".zip" onChange={e=>uploadFiles(e.target.files)}/>
    </aside>
    {sidebarOpen&&!narrow&&<Resizer label="Resize file tree" value={prefs.sidebarWidth} min={170} max={420} onChange={v=>setPref('sidebarWidth',v)} fromClientX={x=>x-(workRef.current?.getBoundingClientRect().left??0)} onReset={()=>setPref('sidebarWidth',232)}/>}
 
-   {showEditor&&<main className="editor-main">
+   {(showEditor||narrow)&&<main className={`editor-main ${showEditor?'':'hidden-pane'}`} aria-hidden={!showEditor}>
     <div className="pane-toolbar doc-bar">
      {!sidebarOpen&&<button className="icon-btn sm" title="Show file tree" aria-label="Show file tree" onClick={()=>setSidebar(true)}><PanelLeft size={15}/></button>}
      <div className="tabs" role="tablist">{tabFiles(project.files,currentFile?.name).map(f=><button role="tab" aria-selected={currentFile?.name===f.name} key={f.name} className={`doc-tab ${currentFile?.name===f.name?'active':''}`} onClick={()=>setFileName(f.name)} title={f.name}>{fileIcon(f)}<span>{f.name.split('/').pop()}</span></button>)}</div>
@@ -442,7 +480,7 @@ function App(){
      <button className="tool" title={`Undo (${mod}Z)`} aria-label="Undo" onClick={()=>editorRef.current?.trigger('keyboard','undo',null)}><Undo2 size={15}/></button><button className="tool" title="Redo" aria-label="Redo" onClick={()=>editorRef.current?.trigger('keyboard','redo',null)}><Redo2 size={15}/></button><span className="tool-divider"/>
      <select className="style-select" aria-label="Paragraph style" value="Normal text" onChange={e=>{const v=e.target.value;if(v==='Section')insert('\\section{}');if(v==='Subsection')insert('\\subsection{}');if(v==='Subsubsection')insert('\\subsubsection{}')}}><option>Normal text</option><option>Section</option><option>Subsection</option><option>Subsubsection</option></select><span className="tool-divider"/>
      <button className="tool" title="Bold" aria-label="Bold" onClick={()=>wrap('\\textbf{','}')}><Bold size={15}/></button><button className="tool" title="Italic" aria-label="Italic" onClick={()=>wrap('\\textit{','}')}><Italic size={15}/></button><button className="tool" title="Underline" aria-label="Underline" onClick={()=>wrap('\\underline{','}')}><Underline size={15}/></button><span className="tool-divider"/>
-     <button className="tool" title="Bulleted list" aria-label="Bulleted list" onClick={()=>insert('\\begin{itemize}\n  \\item Item\n\\end{itemize}')}><List size={15}/></button><button className="tool" title="Numbered list" aria-label="Numbered list" onClick={()=>insert('\\begin{enumerate}\n  \\item Item\n\\end{enumerate}')}><ListOrdered size={15}/></button><button className="tool" title="Table" aria-label="Table" onClick={()=>insert('\\begin{table}[ht]\n  \\centering\n  \\begin{tabular}{cc}\n    A & B \\\\\n    1 & 2 \\\\\n  \\end{tabular}\n  \\caption{Caption}\n\\end{table}')}><Table2 size={15}/></button><button className="tool" title="Equation" aria-label="Equation" onClick={()=>insert('\\[\n  \n\\]')}><Sigma size={15}/></button><button className="tool" title="Citation" aria-label="Citation" onClick={()=>wrap('\\cite{','}')}><Quote size={15}/></button><button className="tool" title="Reference" aria-label="Reference" onClick={()=>wrap('\\ref{','}')}><Link2 size={14}/></button><button className="tool" title="Figure" aria-label="Figure" onClick={()=>insert('\\includegraphics[width=0.8\\linewidth]{image.png}')}><ImageIcon size={15}/></button><span className="tool-divider"/><button className="tool" title="Sync source to PDF" aria-label="Sync source to PDF" onClick={syncSourceToPdf}><Link2 size={15}/></button>
+     <button className="tool" title="Bulleted list" aria-label="Bulleted list" onClick={()=>insert('\\begin{itemize}\n  \\item Item\n\\end{itemize}')}><List size={15}/></button><button className="tool" title="Numbered list" aria-label="Numbered list" onClick={()=>insert('\\begin{enumerate}\n  \\item Item\n\\end{enumerate}')}><ListOrdered size={15}/></button><button className="tool" title="Table" aria-label="Table" onClick={()=>insert('\\begin{table}[ht]\n  \\centering\n  \\begin{tabular}{cc}\n    A & B \\\\\n    1 & 2 \\\\\n  \\end{tabular}\n  \\caption{Caption}\n\\end{table}')}><Table2 size={15}/></button><button className="tool" title="Equation" aria-label="Equation" onClick={()=>insert('\\[\n  \n\\]')}><Sigma size={15}/></button><button className="tool" title="Citation" aria-label="Citation" onClick={()=>wrap('\\cite{','}')}><Quote size={15}/></button><button className="tool" title="Reference" aria-label="Reference" onClick={()=>wrap('\\ref{','}')}><Link2 size={14}/></button><button className="tool" title="Insert image" aria-label="Insert image" onClick={()=>imageInput.current?.click()}><ImageIcon size={15}/></button><span className="tool-divider"/><button className="tool" title="Sync source to PDF" aria-label="Sync source to PDF" onClick={syncSourceToPdf}><Crosshair size={15}/></button>
     </div>
     <div className="editor-canvas">
      {currentFile&&!isEditable(currentFile)&&!currentFile.name.endsWith('/')?<div className="binary-file">{isImage(currentFile.name)&&currentFile.content?<img src={`data:${mimeType(currentFile.name)};base64,${currentFile.content}`} alt={currentFile.name}/>:<ImageIcon size={26}/>}<strong>{currentFile.name}</strong><p>{currentFile.content?`${formatBytes(Math.floor(currentFile.content.length*3/4))} · ${isBinary(currentFile.name)?'binary files':'files that aren’t UTF-8 text'} can’t be edited here; they’re included when the project compiles.`:'This file’s contents aren’t available in this browser. Re-upload it to include it in compiles.'}</p></div>
@@ -458,22 +496,22 @@ function App(){
     <div className="pane-toolbar pdf-toolbar">
      <div className="split-btn" data-menu-root>
       <button className="btn btn-primary btn-sm compile-main" onClick={()=>void compile()} title={compiling?'Restart the compile with your latest changes':`Recompile (${mod}↵ or ${mod}S)`}>{compiling?<Spinner light/>:<RefreshCw size={14}/>}{compiling?'Compiling…':'Recompile'}</button>
-      <Dropdown id="engine" open={openMenu==='engine'} setOpen={setOpenMenu} trigger={<button className="btn btn-primary btn-sm compile-caret" aria-label="Compiler options" onClick={()=>setOpenMenu(openMenu==='engine'?'':'engine')}><ChevronDown size={14}/></button>} items={[...[['pdflatex','pdfLaTeX'],['xelatex','XeLaTeX'],['lualatex','LuaLaTeX']].map(([v,l])=>({label:l,checked:engine===v,run:()=>setEngine(v)})),'sep',{label:'Auto compile',checked:compilePrefs.autoCompile,run:()=>setCompilePrefs({...compilePrefs,autoCompile:!compilePrefs.autoCompile})},{label:'Stop compilation',icon:<Square size={13}/>,disabled:!compiling,run:stopCompile}]} heading="Compiler"/>
+      <Dropdown id="engine" open={openMenu==='engine'} setOpen={setOpenMenu} trigger={<button className="btn btn-primary btn-sm compile-caret" aria-label="Compiler options" onClick={()=>setOpenMenu(openMenu==='engine'?'':'engine')}><ChevronDown size={14}/></button>} items={[...[['pdflatex','pdfLaTeX'],['xelatex','XeLaTeX'],['lualatex','LuaLaTeX']].map(([v,l])=>({label:l,checked:engine===v,run:()=>setEngine(v)})),'sep',{label:`Auto compile: ${compilePrefs.autoCompile?'On':'Off'}`,checked:compilePrefs.autoCompile,run:()=>setCompilePrefs({...compilePrefs,autoCompile:!compilePrefs.autoCompile})},{label:'Stop compilation',icon:<Square size={13}/>,disabled:!compiling,run:stopCompile}]} heading="Compiler"/>
      </div>
      <button className={`btn btn-ghost btn-sm logs-btn ${compile_.status==='error'?'has-error':''}`} onClick={openLogs} title="View compile log"><ScrollText size={14}/><span className="hide-xs">Logs</span>{compile_.status==='error'&&<span className="err-badge" aria-label="Compile error">!</span>}</button>
-     <span className="pdf-state"><span className={`status-dot ${pdfUrl?'ok':'idle'}`}/>{pdfUrl?'Up to date':'Not compiled'}</span>
+     <span className={`pdf-state ${compile_.stale||compile_.status==='outdated'?'stale':''}`}><span className={`status-dot ${compile_.status==='running'?'busy':compile_.stale||compile_.status==='outdated'?'warn':pdfUrl?'ok':'idle'}`}/>{compile_.status==='running'?'Compiling…':compile_.stale||compile_.status==='outdated'?'PDF is out of date':pdfUrl?'Up to date':'Not compiled'}</span>
      <div className="toolbar-spacer"/>
      <button className="icon-btn sm" title="Download PDF" aria-label="Download PDF" disabled={!pdfUrl} onClick={downloadPdf}><Download size={15}/></button>
      {showEditor&&<button className="icon-btn sm" title="Hide PDF preview" aria-label="Hide PDF preview" onClick={()=>setPref('layout','editor')}><X size={15}/></button>}
     </div>
     {compile_.status!=='idle'&&<div className={`compile-banner ${compile_.status}`} role={compile_.status==='error'?'alert':'status'}>
      {compile_.status==='running'?<Spinner/>:compile_.status==='success'?<CircleCheck size={15}/>:<AlertCircle size={15}/>}
-     <span className="banner-text">{compile_.message}</span>
+     <span className="banner-text">{compile_.message}</span>{compile_.status==='outdated'&&compile_.stale&&<strong className="outdated-label">Last successful PDF is still shown.</strong>}
      {compile_.status==='running'&&<button className="banner-link" onClick={stopCompile}>Stop</button>}
-     {compile_.status==='error'&&<>{compile_.entry&&inProject(compile_.entry.file)&&<button className="banner-link" onClick={()=>jumpTo(compile_.entry!.file,compile_.entry!.line)}>Go to error</button>}<button className="banner-link" onClick={openLogs}>View log</button><button className="banner-close" aria-label="Dismiss" onClick={()=>setCompileState({status:'idle',message:''})}><X size={14}/></button></>}
+     {compile_.status==='error'&&<>{compile_.stale&&<strong className="outdated-label">PDF is out of date · showing the last successful PDF</strong>}{compile_.entry&&inProject(compile_.entry.file)&&<button className="banner-link" onClick={()=>jumpTo(compile_.entry!.file,compile_.entry!.line)}>Go to error</button>}<button className="banner-link" onClick={openLogs}>View log</button><button className="banner-close" aria-label="Dismiss" onClick={()=>setCompileState({status:compile_.stale?'outdated':'idle',message:compile_.stale?'PDF is out of date':'',stale:compile_.stale})}><X size={14}/></button></>}
     </div>}
     <div className="pdf-workspace">
-     {pdfUrl?<PdfViewer url={pdfUrl} data={pdfData} zoom={zoom} nav={nav} syncPoint={syncPoint} onSourceJump={syncPdfToSource} onLoaded={setPageTotal} onPageChange={setPage} onScale={s=>{scaleRef.current=s}}/>
+     {pdfUrl?<PdfViewer url={pdfUrl} data={pdfData} zoom={zoom} nav={nav} syncPoint={syncPoint} onSourceJump={syncPdfToSource} onLoaded={setPageTotal} onPageChange={setPage} onScale={s=>{scaleRef.current=s}} onRenderTime={setPdfRenderMs}/>
      :<div className="pdf-empty"><div className="paper-placeholder"><FileText size={24}/><span>PDF</span></div><strong>Your document will appear here</strong><p>{apiOnline===false?<>The PaperDesk API isn’t running. Start everything with <code>npm run dev:all</code>.</>:health?.compilerMode==='native'&&health.compilerReady===false?'The server LaTeX compiler is unavailable. Try again in a moment.':health?.compilerMode!=='native'&&health&&!health.docker?<>Docker isn’t running. Start Docker Desktop, then recompile.</>:health?.compilerMode!=='native'&&health&&!health.image?<>The LaTeX compiler image isn’t built yet. Run <code>npm run compiler:build</code> once.</>:'Recompile to render a preview of your PDF.'}</p><button className="btn btn-primary" onClick={()=>void compile()}>{compiling?<Spinner light/>:<Play size={13} fill="currentColor"/>} {compiling?'Compiling…':'Compile document'}</button></div>}
      {pdfUrl&&<div className="pdf-controls" role="toolbar" aria-label="PDF controls">
       <button title="Previous page" aria-label="Previous page" disabled={page<=1} onClick={()=>goToPage(page-1)}><ChevronLeft size={15}/></button>
@@ -522,7 +560,7 @@ modal==='history'?<div className="logs-body">{(project.versions??[]).length===0?
    {logState.loading?<div className="pane-loading inline"><Spinner/> Loading log…</div>:logState.error?<div className="inline-alert error"><AlertCircle size={15}/><span>{logState.error}</span></div>:!result?<p className="muted">No compilation has been run yet. Press Recompile ({mod}↵).</p>:<>
     <div className={`log-summary ${result.success?'ok':'failed'}`}>{result.success?<CircleCheck size={15}/>:<AlertCircle size={15}/>}<span>{result.success?'Compiled successfully':'Compilation failed'} · {result.errors.length} error{result.errors.length===1?'':'s'} · {result.warnings.length} warning{result.warnings.length===1?'':'s'} · {(result.durationMs/1000).toFixed(1)}s</span></div>
     {!rawLogs&&[['error',result.errors],['warning',result.warnings]].map(([kind,list])=>(list as LogEntry[]).length>0&&<ul className="log-entries" key={kind as string} aria-label={`${kind}s`}>{(list as LogEntry[]).map((e,i)=>{const linkable=inProject(e.file);return <li key={i} className="log-item"><button className={`log-entry ${kind}`} disabled={!linkable} onClick={()=>jumpTo(e.file,e.line)} title={linkable?`Go to ${e.file}${e.line?` line ${e.line}`:''}`:undefined}>{kind==='error'?<AlertCircle size={14}/>:<TriangleAlert size={14}/>}<span className="log-msg">{e.message}</span>{e.file&&<span className="log-loc">{e.file.split('/').slice(-2).join('/')}{e.line?`:${e.line}`:''}</span>}</button>{kind==='error'&&<ExplainButton entry={e} onExplain={explainError}/>}</li>})}</ul>)}
-    <div className="log-view-toggle"><button className={!rawLogs?'on':''} onClick={()=>setRawLogs(false)}>Grouped</button><button className={rawLogs?'on':''} onClick={()=>setRawLogs(true)}>Raw log</button></div>{rawLogs?<pre className="raw-log">{result.log||'(empty)'}</pre>:<><div className="log-heading">Errors</div>{result.errors.length?null:<p className="muted">No errors.</p>}<div className="log-heading">Warnings</div>{result.warnings.length?null:<p className="muted">No warnings.</p>}<div className="log-heading">Typesetting info</div><p className="muted">Compile time: {(result.durationMs/1000).toFixed(1)}s</p><pre className="typeset-info">{result.log.split(/\r?\n/).filter(line=>/Overfull|Underfull|LaTeX Font|Package .* Info|Warning/.test(line)).join('\n')||'No additional typesetting information.'}</pre></>}
+    <div className="log-view-toggle"><button className={!rawLogs?'on':''} onClick={()=>setRawLogs(false)}>Grouped</button><button className={rawLogs?'on':''} onClick={()=>setRawLogs(true)}>Raw log</button></div>{rawLogs?<pre className="raw-log">{result.log||'(empty)'}</pre>:<><div className="log-heading">Errors</div>{result.errors.length?null:<p className="muted">No errors.</p>}<div className="log-heading">Warnings</div>{result.warnings.length?null:<p className="muted">No warnings.</p>}<div className="log-heading">Typesetting info</div><p className="muted">Compile time: {(result.durationMs/1000).toFixed(1)}s</p><p className="muted compile-timings">Queue {result.timings?.queue??'—'} ms · file sync {result.timings?.sync??'—'} ms · TeX + engine startup {result.timings?.tex??'—'} ms · PDF/log read {result.timings?.read??'—'} ms · browser PDF page render {pdfRenderMs??'—'} ms</p><pre className="typeset-info">{result.log.split(/\r?\n/).filter(line=>/Overfull|Underfull|LaTeX Font|Package .* Info|Warning/.test(line)).join('\n')||'No additional typesetting information.'}</pre></>}
    </>}
    <div className="modal-foot"><button className="btn btn-secondary" disabled={compiling} onClick={()=>{setModal('');compile()}}><RefreshCw size={14}/> Recompile</button><button className="btn btn-primary" onClick={()=>setModal('')}>Close</button></div>
   </div>
@@ -600,7 +638,7 @@ function Resizer({label,value,min,max,onChange,fromClientX,onReset,invert}:{labe
 
 type TreeActions={mainFile:string,dropTarget:string|null,dropProps:(folder:string)=>Record<string,unknown>,onToggle:(p:string)=>void,onOpen:(f:ProjectFile)=>void,onRename:(f:ProjectFile)=>void,onDelete:(f:ProjectFile)=>void,onUpload:(folder:string)=>void,onSetMain:(f:ProjectFile)=>void};
 function TreeLevel({nodes,depth,selected,collapsed,act}:{nodes:TreeNode[],depth:number,selected:string,collapsed:Set<string>,act:TreeActions}){
- return <>{nodes.map(n=>{const open=!collapsed.has(n.path);const folder=n.folder?n.path+'/':'';const isMain=!n.folder&&n.path===act.mainFile;const canBeMain=!n.folder&&n.path.endsWith('.tex')&&!n.path.includes('/')&&!isMain;return <div key={n.path} role="treeitem" aria-expanded={n.folder?open:undefined} aria-selected={selected===n.path} {...(n.folder?act.dropProps(folder):{})}>
+ return <>{nodes.map(n=>{const open=!collapsed.has(n.path);const folder=n.folder?`${n.path.replace(/\/+$/,'')}/`:'';const isMain=!n.folder&&n.path===act.mainFile;const canBeMain=!n.folder&&n.path.endsWith('.tex')&&!n.path.includes('/')&&!isMain;return <div key={n.path} role="treeitem" aria-expanded={n.folder?open:undefined} aria-selected={selected===n.path} {...(n.folder?act.dropProps(folder):{})}>
   <div className={`file-row ${selected===n.path?'selected':''} ${n.folder&&act.dropTarget===folder?'drop-target':''}`} style={{paddingLeft:8+depth*14}} tabIndex={0} onClick={()=>n.folder?act.onToggle(n.path):act.onOpen(n.file)} onKeyDown={e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();if(n.folder)act.onToggle(n.path);else act.onOpen(n.file)}}}>
    <span className="tree-caret">{n.folder?(open?<ChevronDown size={13}/>:<ChevronRight size={13}/>):null}</span>
    {n.folder?(open?<FolderOpen size={15}/>:<Folder size={15}/>):fileIcon(n.file)}

@@ -758,6 +758,8 @@ app.post('/api/projects/:id/synctex', async (req, res) => {
     } else return void send(res, 400, 'SyncTeX mode must be forward or inverse');
 
     // The last compile's warm folder already holds the sources, the PDF and its SyncTeX data.
+    // A compile still running for this project is rewriting the SyncTeX file; wait for it rather than read half of it.
+    await RUNNING.get(syncLockKey)?.done.catch(() => undefined);
     // Prefer the folder of the last answered compile, then any other warm folder of this project that has
     // SyncTeX data (a compile whose answer the browser abandoned still leaves a usable folder behind).
     const hasSyncData = (dir: string) => fs.access(path.join(dir, pdfFile.replace(/\.pdf$/i, '.synctex.gz'))).then(() => true, () => false);
@@ -814,7 +816,9 @@ app.post('/api/projects/:id/synctex', async (req, res) => {
     let output = '';
     try {
       if (COMPILE_MODE === 'native') {
-        const result = await exec('synctex', args, { cwd: syncRoot, timeout: 8_000, maxBuffer: 1024 * 1024 });
+        // One retry: a compile that started after the wait above may have replaced the file mid-read.
+        const result = await exec('synctex', args, { cwd: syncRoot, timeout: 8_000, maxBuffer: 1024 * 1024 })
+          .catch(async () => { await new Promise(r => setTimeout(r, 400)); await RUNNING.get(syncLockKey)?.done.catch(() => undefined); return exec('synctex', args, { cwd: syncRoot, timeout: 8_000, maxBuffer: 1024 * 1024 }); });
         output = result.stdout;
       } else {
         const containerArgs = ['run', '--rm', '--network=none', '--memory=256m', '--cpus=1', '--pids-limit=64',

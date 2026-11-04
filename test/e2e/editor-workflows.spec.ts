@@ -113,7 +113,9 @@ for (const template of templates) {
     await page.mouse.move(bounds.x + Math.max(3, bounds.width - 2), bounds.y + bounds.height / 2, { steps: 4 });
     await page.mouse.up();
     await expect.poll(() => syncModesByPage.get(page)?.filter(mode => mode === 'inverse').length ?? 0).toBeGreaterThan(previousInverseJumps);
-    await expect(page.locator('.status-bar')).toContainText('Ln 3');
+    // Locally the SyncTeX answer is mocked (line 3); on a live site it is the real line of the selected text.
+    if (!process.env.E2E_BASE_URL) await expect(page.locator('.status-bar')).toContainText('Ln 3');
+    else await expect(page.locator('.status-bar')).toContainText(/Ln \d+/);
     if (!process.env.E2E_BASE_URL) expect(syncModesByPage.get(page)?.[0]).toBe('forward');
   });
 }

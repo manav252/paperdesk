@@ -158,6 +158,8 @@ function App(){
  // Like the file tree, the assistant is a temporary overlay on narrow screens.
  const assistantOpen=narrow?narrowAssistant:prefs.assistant;
  const setAssistantOpen=(v:boolean)=>{if(narrow){setNarrowAssistant(v);if(v)setDrawer(false)}else setPref('assistant',v)};
+ // The startup health check may not have answered yet (a waking server); ask again when the assistant opens.
+ useEffect(()=>{if(assistantOpen&&!health?.assistant)fetch(apiUrl('/api/health')).then(r=>r.ok?r.json():null).then(h=>{if(h)setHealth(h)}).catch(()=>undefined)},[assistantOpen]);
 
  useEffect(()=>{try{localStorage.setItem('paperdesk-projects',JSON.stringify(projects))}catch{if(!storageWarned.current){storageWarned.current=true;notify(apiOnline?'Browser storage is full. Your work is saved on the server, but not offline in this browser.':'Browser storage is full and the API is offline: recent changes may not be saved. Start the API with “npm run dev:all”.','error')}}},[projects]);
  useEffect(()=>{

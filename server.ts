@@ -46,6 +46,8 @@ const BINARY = /\.(png|jpe?g|gif|bmp|tiff?|pdf|eps|ps|zip|gz|ttf|otf|woff2?)$/i;
 
 type CompileResult = { success: boolean; log: string; errors: LogEntry[]; warnings: LogEntry[]; durationMs: number };
 const RESULTS = new Map<string, CompileResult>();
+/** Parsing a large .synctex.gz (e.g. the Springer template) can take several seconds on Render's small CPU share. */
+const SYNCTEX_TIMEOUT_MS = 25_000;
 /** SyncTeX lookups per project run one after another; a second lookup waits instead of being refused. */
 const SYNCING = new Map<string, Promise<void>>();
 let nativeCompilerReady = COMPILE_MODE !== 'native';
@@ -821,8 +823,8 @@ app.post('/api/projects/:id/synctex', async (req, res) => {
     try {
       if (COMPILE_MODE === 'native') {
         // One retry: a compile that started after the wait above may have replaced the file mid-read.
-        const result = await exec('synctex', args, { cwd: syncRoot, timeout: 8_000, maxBuffer: 1024 * 1024 })
-          .catch(async () => { await new Promise(r => setTimeout(r, 400)); await RUNNING.get(syncLockKey)?.done.catch(() => undefined); return exec('synctex', args, { cwd: syncRoot, timeout: 8_000, maxBuffer: 1024 * 1024 }); });
+        const result = await exec('synctex', args, { cwd: syncRoot, timeout: SYNCTEX_TIMEOUT_MS, maxBuffer: 1024 * 1024 })
+          .catch(async () => { await new Promise(r => setTimeout(r, 400)); await RUNNING.get(syncLockKey)?.done.catch(() => undefined); return exec('synctex', args, { cwd: syncRoot, timeout: SYNCTEX_TIMEOUT_MS, maxBuffer: 1024 * 1024 }); });
         output = result.stdout;
       } else {
         const containerArgs = ['run', '--rm', '--network=none', '--memory=256m', '--cpus=1', '--pids-limit=64',

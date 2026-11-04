@@ -158,6 +158,8 @@ test('editor header, menus, panels and dialogs', async ({ page }) => {
   // The share link opens a copy of the project in another browser profile.
   const other = await page.context().browser()!.newContext();
   const visitor = await other.newPage();
+  // A new visitor has no projects yet (the first-visit path that once dropped the ?copy= link).
+  await visitor.route('**/api/projects', route => route.request().method() === 'GET' ? route.fulfill({ json: [] }) : route.continue());
   await visitor.addInitScript(() => localStorage.setItem('paperdesk-tour-done', '1'));
   await visitor.route(/^https:\/\/fonts\.(googleapis|gstatic)\.com\//, route => route.fulfill({ status: 200, contentType: 'text/css', body: '' }));
   await visitor.goto(link.replace(/^https?:\/\/[^/]+/, ''));

@@ -80,7 +80,7 @@ async function compileAndViewPdf(page: Page) {
     await page.getByRole('menuitem', { name: 'Compile' }).click();
   } else await page.getByRole('button', { name: /^Recompile/ }).first().click();
   await expect(page.getByRole('region', { name: 'PDF preview' }).getByRole('status')).toContainText('Compiled in', { timeout: 120_000 });
-  await expect(page.locator('.pdf-scroll canvas:not(.is-loading)')).toBeVisible({ timeout: 60_000 });
+  await expect(page.locator('.pdf-scroll canvas:not(.is-loading)').first()).toBeVisible({ timeout: 60_000 });
   await expect(page.getByRole('toolbar', { name: 'PDF controls' })).toBeVisible();
 }
 

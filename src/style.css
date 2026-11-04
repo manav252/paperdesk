@@ -315,9 +315,7 @@ body.is-resizing .editor-canvas, body.is-resizing .pdf-workspace { pointer-event
 .style-select { height: 28px; flex: none; border: 1px solid transparent; border-radius: var(--radius-sm); background: transparent; color: var(--text-2); font-size: 12.5px; padding: 0 4px; }
 .style-select:hover { background: var(--hover); }
 .style-select option { background: var(--surface); color: var(--text); }
-.editor-canvas { flex: 1; min-height: 0; min-width: 0; position: relative; overflow: hidden; background: var(--surface); }
-.synctex-line-highlight { background: color-mix(in srgb, #f0b429 34%, transparent); animation: synctex-fade 1.8s ease-out forwards; }
-@keyframes synctex-fade { to { background: transparent; } }
+.editor-canvas { flex: 1; min-height: 0; position: relative; background: var(--surface); }
 .binary-file { height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; color: var(--text-3); text-align: center; padding: 20px; }
 .binary-file strong { color: var(--text); font-size: 14px; }
 .binary-file p { margin: 0; font-size: 13px; max-width: 320px; }
@@ -325,7 +323,7 @@ body.is-resizing .editor-canvas, body.is-resizing .pdf-workspace { pointer-event
 .pane-loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; gap: 10px; color: var(--text-3); font-size: 13px; background: var(--surface); }
 .pane-loading.inline { position: static; padding: 28px 0; background: none; }
 .pane-loading.overlay { background: transparent; pointer-events: none; }
-.status-bar { position: relative; z-index: 1; height: 26px; flex: 0 0 26px; background: var(--surface-2); border-top: 1px solid var(--border); display: flex; align-items: center; justify-content: flex-end; gap: 16px; padding: 0 10px; color: var(--text-3); font-size: 11.5px; white-space: nowrap; overflow: hidden; }
+.status-bar { height: 26px; flex: 0 0 26px; background: var(--surface-2); border-top: 1px solid var(--border); display: flex; align-items: center; justify-content: flex-end; gap: 16px; padding: 0 10px; color: var(--text-3); font-size: 11.5px; white-space: nowrap; overflow: hidden; }
 .status-save { margin-right: auto; display: flex; align-items: center; gap: 6px; }
 .status-bar button { border: 0; background: none; color: var(--text-3); display: flex; gap: 5px; align-items: center; font-size: 11.5px; padding: 2px 4px; border-radius: 3px; }
 .status-bar button:hover { color: var(--text); background: var(--hover); }
@@ -345,24 +343,20 @@ body.is-resizing .editor-canvas, body.is-resizing .pdf-workspace { pointer-event
 .compile-banner { display: flex; align-items: center; gap: 8px; padding: 8px 12px; font-size: 12.5px; border-bottom: 1px solid var(--border); animation: fade .15s; }
 .compile-banner.running { background: var(--info-soft); color: var(--info-text); }
 .compile-banner.success { background: var(--accent-soft); color: var(--accent-text); }
-.compile-banner.error { background: var(--danger-soft); color: var(--danger-text); align-items: flex-start; flex-wrap: wrap; }
+.compile-banner.error { background: var(--danger-soft); color: var(--danger-text); align-items: flex-start; }
 .compile-banner.error > svg { margin-top: 1px; }
 .banner-text { flex: 1; min-width: 0; line-height: 1.45; word-break: break-word; }
-.banner-stale { color: var(--danger-text); font-weight: 600; flex: 0 0 100%; margin-left: 23px; }
 .banner-link { border: 0; background: none; color: inherit; font-weight: 600; text-decoration: underline; text-underline-offset: 2px; padding: 0; font-size: 12.5px; white-space: nowrap; }
 .banner-close { border: 0; background: none; color: inherit; opacity: .7; padding: 1px; display: grid; place-items: center; border-radius: 3px; }
 .banner-close:hover { opacity: 1; background: rgba(0, 0, 0, .06); }
-.pdf-workspace { min-height: 0; flex: 1; overflow: auto; display: flex; flex-direction: column; position: relative; }
-.pdf-scroll { flex: 1; display: flex; justify-content: center; align-items: flex-start; padding: 20px 20px 72px; position: relative; min-width: min-content; }
+.pdf-workspace { min-height: 0; flex: 1; overflow: hidden; display: flex; flex-direction: column; position: relative; }
+.pdf-scroll { flex: 1; min-height: 0; overflow: auto; padding: 20px 20px 72px; position: relative; overflow-anchor: none; }
+.pdf-pages { display: flex; flex-direction: column; align-items: center; min-width: min-content; }
 .pdf-page { position: relative; flex: none; background: #fff; box-shadow: 0 2px 14px rgba(0, 0, 0, .18); }
-.pdf-page canvas { display: block; }
-.pdf-page .textLayer { position: absolute; inset: 0; overflow: hidden; line-height: 1; transform-origin: 0 0; z-index: 1; }
-.pdf-page .textLayer span, .pdf-page .textLayer br { position: absolute; color: transparent; white-space: pre; transform-origin: 0 0; cursor: text; }
-.pdf-page .textLayer ::selection { background: rgba(55, 125, 245, .32); }
-.synctex-pdf-highlight { position: absolute; z-index: 2; width: 15px; height: 15px; border: 2px solid #f0a500; border-radius: 50%; background: rgba(255, 210, 70, .35); transform: translate(-50%, -50%); pointer-events: none; animation: synctex-pulse 1.8s ease-out forwards; }
-@keyframes synctex-pulse { 65% { box-shadow: 0 0 0 9px rgba(240, 165, 0, .18); } to { opacity: 0; } }
-.pdf-scroll canvas { box-shadow: 0 2px 14px rgba(0, 0, 0, .18); background: #fff; transition: opacity .15s; }
-.pdf-scroll canvas.is-loading { opacity: .55; }
+.pdf-page canvas { display: block; width: 100%; height: 100%; transition: opacity .15s; }
+.pdf-page canvas.is-loading { opacity: 0; }
+.sync-marker { position: absolute; width: 12px; height: 12px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 30%, transparent); pointer-events: none; animation: sync-pulse 1.6s ease-out 2; }
+@keyframes sync-pulse { 0% { transform: scale(.6); opacity: 1; } 100% { transform: scale(1.6); opacity: .2; } }
 .pdf-error { margin: 40px auto; max-width: 340px; color: var(--danger-text); background: var(--danger-soft); border-radius: var(--radius); padding: 12px 14px; display: flex; align-items: flex-start; gap: 9px; font-size: 13px; line-height: 1.45; }
 .pdf-error svg { flex: none; margin-top: 1px; }
 .pdf-empty { display: flex; flex-direction: column; align-items: center; text-align: center; margin: auto; padding: 24px; color: var(--text-3); max-width: 320px; animation: fade-up .25s var(--ease); }
@@ -371,7 +365,7 @@ body.is-resizing .editor-canvas, body.is-resizing .pdf-workspace { pointer-event
 .pdf-empty strong { font: 500 19px var(--serif); color: var(--text); }
 .pdf-empty p { font-size: 13px; line-height: 1.6; margin: 8px 0 18px; }
 .pdf-empty code { background: var(--surface-3); padding: 1px 5px; border-radius: 3px; color: var(--text-2); }
-.pdf-controls { position: relative; align-self: center; margin-top: 12px; margin-bottom: 14px; flex: 0 0 auto; display: flex; align-items: center; gap: 2px; padding: 4px 6px; background: var(--surface); border: 1px solid var(--border); border-radius: 999px; box-shadow: var(--shadow-md); color: var(--text-3); font-size: 12.5px; z-index: 3; }
+.pdf-controls { position: absolute; bottom: 14px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 2px; padding: 4px 6px; background: var(--surface); border: 1px solid var(--border); border-radius: 999px; box-shadow: var(--shadow-md); color: var(--text-3); font-size: 12.5px; z-index: 3; }
 .pdf-controls button { height: 28px; width: 28px; border: 0; background: none; color: var(--text-2); display: grid; place-items: center; border-radius: 50%; transition: background-color .12s; }
 .pdf-controls button:hover:not(:disabled), .pdf-controls button.on { background: var(--hover); color: var(--text); }
 .pdf-controls strong { font-weight: 600; color: var(--text); }
@@ -574,3 +568,21 @@ body.is-resizing .editor-canvas, body.is-resizing .pdf-workspace { pointer-event
 @media (max-width: 480px) {
   .editor-header .segmented button span { display: none; }
 }
+
+/* ── File tree: drop targets and main document ── */
+.file-tree { position: relative; }
+.file-tree.drop-target, .file-row.drop-target { background: var(--accent-soft); outline: 2px dashed var(--accent); outline-offset: -2px; }
+.drop-hint { margin: 10px 12px; padding: 10px; border: 1px dashed var(--border-strong); border-radius: var(--radius); font-size: 12px; color: var(--text-4); text-align: center; }
+.file-tree.drop-target .drop-hint { border-color: var(--accent); color: var(--accent-text); }
+.main-badge { flex: none; font: 600 9.5px/1.6 var(--font); letter-spacing: .4px; text-transform: uppercase; color: var(--accent-text); background: var(--accent-soft); border-radius: 3px; padding: 0 5px; margin-left: 2px; }
+.share-link { display: flex; gap: 8px; align-items: center; margin-top: 4px; }
+.share-link .text-input { flex: 1; min-width: 0; font: 12.5px var(--mono); }
+
+/* ── File outline ── */
+.outline { border-top: 1px solid var(--border); max-height: 38%; display: flex; flex-direction: column; min-height: 0; }
+.outline-head { display: flex; align-items: center; gap: 4px; border: 0; background: none; padding: 8px 10px; color: var(--text-3); text-align: left; }
+.outline ul { list-style: none; margin: 0; padding: 0 6px 6px; overflow: auto; }
+.outline li button { width: 100%; border: 0; background: none; text-align: left; padding: 4px 8px; font-size: 12.5px; color: var(--text-2); border-radius: var(--radius-sm); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.outline li button:hover { background: var(--hover); color: var(--text); }
+.outline li button.current { color: var(--accent-text); font-weight: 600; }
+.outline-empty { margin: 0 12px 10px; font-size: 12px; color: var(--text-4); }

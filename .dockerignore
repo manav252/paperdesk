@@ -1,6 +1,4 @@
 .git
-.claude
-.codex
 node_modules
 dist
 test-results
@@ -8,6 +6,4 @@ playwright-report
 backend/storage
 .env
 .env.*
-AGENTS.md
-CLAUDE.md
 PROGRESS.md

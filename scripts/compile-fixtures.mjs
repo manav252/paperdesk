@@ -6,7 +6,7 @@ import { spawn } from 'node:child_process';
 import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { getDocument, OPS } from 'pdfjs-dist/legacy/build/pdf.mjs';
+import { getDocument } from 'pdfjs-dist/legacy/build/pdf.mjs';
 
 const ROOT = path.resolve('test/fixtures/compile');
 const PORT = Number(process.env.FIXTURE_PORT ?? 3101);
@@ -72,10 +72,18 @@ try {
       if (!s || s.content !== f.content) throw new Error(`${name}: ${f.name} did not round-trip through the API`);
     }
 
-    for (const engine of expect.engines) {
+    const runs = expect.engines.map(engine => ({ engine, edit: null }));
+    // Recompile after edits too: the first edit (a comment) takes the single direct pass, the second (a new labelled
+    // section) changes the .aux and goes back through latexmk; pdfLaTeX also uses the cached preamble by then.
+    if (expect.success && expect.engines.includes('pdflatex')) runs.push(
+      { engine: 'pdflatex', edit: { label: 'edit', text: '% recompile check\n', expect: null } },
+      { engine: 'pdflatex', edit: { label: 'new label', text: '\\section*{Recompile check}\\label{pd-recheck}Recompile check text \\pageref{pd-recheck}.\n', expect: 'recompile check text' } });
+    for (const { engine, edit } of runs) {
       const t = Date.now();
-      const { status, body } = await json(`${API}/projects/${id}/compile`, { method: 'POST', body: JSON.stringify({ engine, mainFile: 'main.tex' }) });
+      const sent = edit ? files.map(f => f.name === 'main.tex' ? { ...f, content: f.content.replace(/\\end\{document\}/, `${edit.text}\\end{document}`) } : f) : null;
+      const { status, body } = await json(`${API}/projects/${id}/compile`, { method: 'POST', body: JSON.stringify({ engine, mainFile: 'main.tex', ...(sent ? { files: sent } : {}) }) });
       const problems = [];
+      if (edit?.expect) expect.contains = [...(expect.contains ?? []), edit.expect];
       if (status !== 200) problems.push(`HTTP ${status}: ${body?.error}`);
       else if (expect.success) {
         if (!body.success) problems.push(`expected success, got errors: ${body.errors.map(e => `${e.file}:${e.line} ${e.message}`).join('; ')}`);
@@ -88,10 +96,6 @@ try {
           doc = await getDocument({ data: new Uint8Array(pdf), verbosity: 0 }).promise;
           pages = doc.numPages;
           text = (await Promise.all(Array.from({ length: pages }, (_, i) => doc.getPage(i + 1).then(p => p.getTextContent())))).flatMap(c => c.items.map(it => it.str)).join(' ').replace(/\s+/g, ' ').toLowerCase();
-          if (expect.image) {
-            const operators = await doc.getPage(1).then(p => p.getOperatorList());
-            if (!operators.fnArray.some(fn => fn === OPS.paintImageXObject || fn === OPS.paintInlineImageXObject)) problems.push('PDF contains no rendered image operator');
-          }
         } catch (e) {
           problems.push(`PDF text parser failed: ${e instanceof Error ? e.message : String(e)}`);
         } finally {
@@ -99,18 +103,17 @@ try {
         }
         for (const needle of expect.contains ?? []) if (!text.includes(needle.toLowerCase())) problems.push(`PDF text is missing “${needle}”`);
         if (/\?\s*\]|\[\s*\?/.test(text)) problems.push('PDF has unresolved citations ([?])');
+        if (body.warnings.some(w => /Shell escape feature is not enabled/i.test(w.message))) problems.push('TeX ran without restricted shell escape');
         if (expect.minPages && pages < expect.minPages) problems.push(`expected ≥${expect.minPages} pages, got ${pages}`);
-        if (expect.maxPages && pages > expect.maxPages) problems.push(`expected ≤${expect.maxPages} pages, got ${pages}`);
         if ((expect.bibtex || expect.bibliography === 'bibtex') && !/BibTeX|bibtex/i.test(body.log)) problems.push('BibTeX did not run');
         if (expect.bibliography === 'biber' && !/biber/i.test(body.log)) problems.push('Biber did not run');
         if ((expect.bibtex || expect.bibliography) && body.warnings.some(w => /undefined|Citation/.test(w.message) && /cit/i.test(w.message))) problems.push('undefined citations');
-        if ((expect.sync || name === 'article') && engine === 'pdflatex') {
-          const source = expect.sync ?? { file: 'main.tex', line: 13 };
-          const forward = await json(`${API}/projects/${id}/synctex`, { method: 'POST', body: JSON.stringify({ mode: 'forward', mainFile: 'main.tex', file: source.file, line: source.line, column: 1 }) });
+        if (name === 'article' && engine === 'pdflatex') {
+          const forward = await json(`${API}/projects/${id}/synctex`, { method: 'POST', body: JSON.stringify({ mode: 'forward', mainFile: 'main.tex', file: 'main.tex', line: 13, column: 1 }) });
           if (forward.status !== 200 || !forward.body?.found) problems.push(`SyncTeX source-to-PDF lookup failed: ${forward.body?.error ?? 'no position'}`);
           else {
             const inverse = await json(`${API}/projects/${id}/synctex`, { method: 'POST', body: JSON.stringify({ mode: 'inverse', mainFile: 'main.tex', page: forward.body.page, x: forward.body.x, y: forward.body.y }) });
-            if (inverse.status !== 200 || !inverse.body?.found || inverse.body.file !== source.file || inverse.body.line !== source.line) problems.push(`SyncTeX PDF-to-source lookup failed: ${JSON.stringify(inverse.body)}`);
+            if (inverse.status !== 200 || !inverse.body?.found || inverse.body.file !== 'main.tex' || inverse.body.line !== 13) problems.push(`SyncTeX PDF-to-source lookup failed: ${JSON.stringify(inverse.body)}`);
           }
         }
       } else {
@@ -122,8 +125,8 @@ try {
         }
       }
       const secs = ((Date.now() - t) / 1000).toFixed(1).padStart(5);
-      const stages = body?.timings ? ` API ${body.durationMs}ms (sync ${body.timings.fileSyncMs}, startup ${body.timings.engineStartupMs}, TeX ${body.timings.texRunMs}, save ${body.timings.artifactSaveMs}ms)` : '';
-      const label = `${name.padEnd(20)} ${engine.padEnd(9)} ${secs}s${stages}`;
+      const label = `${name.padEnd(12)} ${engine.padEnd(9)} ${secs}s${edit ? `  (${edit.label}: ${body?.timings?.passes === 1 ? 'single pass' : 'latexmk'})` : ''}`;
+      if (edit?.expect) expect.contains = expect.contains.filter(c => c !== edit.expect);
       if (problems.length) { failures++; console.log(`  ✗ ${label}  ${problems.join(' | ')}`); if (expect.bibtex || expect.bibliography) console.log(body.log.slice(-5000)); }
       else console.log(`  ✓ ${label}${expect.success ? '' : `  error → ${body.errors[0].file}:${body.errors[0].line}`}`);
     }

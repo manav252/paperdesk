@@ -76,7 +76,7 @@ export function parseLatexLog(texLog: string, bibtexLog = '', mainFile = 'main.t
   }
 
   const bib = parseBibtexLog(bibtexLog);
-  return { errors: dedupe([...errors, ...bib.errors]), warnings: dedupe([...warnings, ...bib.warnings]) };
+  return { errors: dedupe([...errors, ...bib.errors]).map(withHint), warnings: dedupe([...warnings, ...bib.warnings]).map(withHint) };
 }
 
 function tokenize(line: string) {
@@ -134,4 +134,16 @@ function dedupe(list: LogEntry[]) {
     seen.add(key);
     return true;
   });
+}
+
+/** Plain-language advice for the image problems newcomers hit most. */
+const HINTS: [RegExp, string][] = [
+  [/Unknown graphics extension: \.svg/i, 'LaTeX can’t include SVG files. Upload the SVG again and PaperDesk adds a PNG copy, or export it as PDF.'],
+  [/Unknown graphics extension/i, 'This image type isn’t supported. Use PNG, JPG or PDF.'],
+  [/File [`'‘]([^'’]+\.(?:png|jpe?g|pdf|eps))['’] not found/i, 'Check the file name, folder and capitalisation, and upload the image if it’s missing.'],
+  [/Cannot determine size of graphic/i, 'Use PNG, JPG or PDF images with pdfLaTeX.'],
+];
+export function withHint(entry: LogEntry): LogEntry {
+  const hint = HINTS.find(([pattern]) => pattern.test(entry.message))?.[1];
+  return hint && !entry.message.includes(hint) ? { ...entry, message: `${entry.message} ${hint}` } : entry;
 }

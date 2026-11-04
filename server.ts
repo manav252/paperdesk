@@ -15,6 +15,7 @@ import { parseLatexLog, type LogEntry } from './src/lib/latexLog';
 import { parseForwardSync, parseInverseSync } from './src/lib/synctex';
 import { assistantConfigured, assistantModel, assistantRouter } from './server/assistant';
 import { ProjectPersistence, type ProjectData, type StoredFile } from './server/persistence';
+import { syncWorkspace, Workspaces, type SourceFile, type Workspace } from './server/workspace';
 
 // Local settings and secrets come from an untracked .env (see .env.example); real environment variables win.
 try { process.loadEnvFile(); } catch { /* no .env file */ }
@@ -43,11 +44,8 @@ const ENGINES: Record<string, string> = { pdflatex: '-pdf', xelatex: '-xelatex',
 /** Files returned to the client as base64; everything else is UTF-8 text. */
 const BINARY = /\.(png|jpe?g|gif|bmp|tiff?|pdf|eps|ps|zip|gz|ttf|otf|woff2?)$/i;
 
-type CompileResult = { success: boolean; log: string; errors: LogEntry[]; warnings: LogEntry[]; durationMs: number; timings?: { fileSyncMs: number; engineStartupMs: number; texRunMs: number; artifactSaveMs: number; totalMs: number } };
+type CompileResult = { success: boolean; log: string; errors: LogEntry[]; warnings: LogEntry[]; durationMs: number };
 const RESULTS = new Map<string, CompileResult>();
-const COMPILING = new Set<string>();
-const COMPILE_CANCELLERS = new Map<string, () => void>();
-const COMPILE_CANCELLED = new Set<string>();
 const SYNCING = new Set<string>();
 let nativeCompilerReady = COMPILE_MODE !== 'native';
 const resultKey = (id: string, owner: string) => persistence.mode === 'neon-r2' ? `${owner}/${id}` : id;
@@ -87,12 +85,6 @@ const projectPath = (id: string) => {
   if (!/^[\w-]+$/.test(id)) throw new Error('Invalid project ID');
   return path.join(PROJECTS, id);
 };
-
-function nativeCompilePath(id: string, owner: string) {
-  const scope = persistence.mode === 'neon-r2' ? `${owner}/${id}` : id;
-  const suffix = crypto.createHash('sha256').update(scope).digest('hex').slice(0, 24);
-  return path.join(os.tmpdir(), `paperdesk-compile-${suffix}`);
-}
 
 const utf8 = new TextDecoder('utf-8', { fatal: true });
 const decodeUtf8 = (buf: Buffer) => { try { return utf8.decode(buf); } catch { return null; } };
@@ -148,10 +140,8 @@ function writeProject(id: string, p: ProjectUpdate, options: { replace?: boolean
 async function writeProjectNow(id: string, p: ProjectUpdate, { replace = false } = {}, owner = '') {
   projectPath(id);
   if (persistence.mode === 'neon-r2') {
-    const current = await persistence.read(id, owner).catch(() => null);
-    const files = p.files ?? current?.files ?? [];
-    validateFiles(files);
-    return persistence.write(id, owner, { ...p, files });
+    if (p.files) validateFiles(p.files);
+    return persistence.write(id, owner, p);
   }
   const dir = projectPath(id);
   const root = path.join(dir, 'files');
@@ -228,23 +218,35 @@ async function dockerStatus() {
   }
 }
 
-function latexmkArgs(engine: string, mainFile: string, stopOnFirstError: boolean, draft: boolean) {
-  const command = engine === 'pdflatex' ? '$pdflatex = "pdflatex -no-shell-escape %O %S";'
-    : engine === 'xelatex' ? '$xelatex = "xelatex -no-shell-escape %O %S";'
-      : '$lualatex = "lualatex -no-shell-escape %O %S";';
+// Restricted shell escape (TeX Live's default) lets TeX run only a fixed list of helpers such as repstopdf and
+// kpsewhich. It converts EPS figures and avoids the "epstopdf: Shell escape feature is not enabled" warning that
+// every graphicx document otherwise logs. Arbitrary commands (\write18 with anything else) stay disabled.
+function latexmkArgs(engine: string, mainFile: string, stopOnFirstError: boolean, draft: boolean, format?: string) {
+  const fmt = format ? ` -fmt=${format}` : '';
+  const command = engine === 'pdflatex' ? `$pdflatex = "pdflatex -shell-restricted${fmt} %O %S";`
+    : engine === 'xelatex' ? '$xelatex = "xelatex -shell-restricted %O %S";'
+      : '$lualatex = "lualatex -shell-restricted %O %S";';
   return [ENGINES[engine]!, '-e', command, '-synctex=1', '-interaction=nonstopmode', '-file-line-error', ...(stopOnFirstError ? ['-halt-on-error'] : []), ...(draft ? ['-draftmode'] : []), '-norc', mainFile];
 }
 
-function compilerArgs(engine: string, mainFile: string, stopOnFirstError: boolean, draft: boolean, files: StoredFile[]) {
-  const source = files.filter(file => file.name.endsWith('.tex')).map(file => typeof file.content === 'string' ? file.content : '').join('\n');
-  const needsLatexmk = /\\(?:ref|eqref|pageref|autoref|cref|Cref|cite\w*|bibliography|addbibresource|printbibliography|input|include|tableofcontents|makeindex|glossary)\b/.test(source);
-  if (needsLatexmk) return ['latexmk', ...latexmkArgs(engine, mainFile, stopOnFirstError, draft)];
-  return [engine, '-no-shell-escape', '-synctex=1', '-interaction=nonstopmode', '-file-line-error', ...(stopOnFirstError ? ['-halt-on-error'] : []), ...(draft ? ['-draftmode'] : []), mainFile];
+/** One engine pass without latexmk, whose startup alone costs most of a second on a small instance. */
+function directArgs(engine: string, mainFile: string, stopOnFirstError: boolean, format?: string) {
+  return ['-shell-restricted', ...(format ? [`-fmt=${format}`] : []), '-synctex=1', '-interaction=nonstopmode', '-file-line-error', ...(stopOnFirstError ? ['-halt-on-error'] : []), mainFile];
+}
+
+/** Name of the cached preamble format (pdfLaTeX only; see buildPreambleFormat). */
+const PREAMBLE_FORMAT = 'pd-preamble';
+/** Identifies the preamble: its text plus local style files and files it \\inputs. A change means rebuilding the format. */
+function preambleKey(ws: Workspace, source: string) {
+  const preamble = source.split(/\\begin\s*\{document\}/)[0] ?? source;
+  const inputs = [...preamble.matchAll(/\\(?:input|include|usepackage|documentclass|RequirePackage)(?:\[[^\]]*\])?\{([^}]+)\}/g)].flatMap(m => m[1].split(',').map(n => n.trim()));
+  const deps = [...ws.hashes].filter(([name]) => /\.(sty|cls|cfg|def|clo|ldf|fd)$/i.test(name) || inputs.some(i => name === i || name === `${i}.tex`)).sort().map(([n, h]) => `${n}:${h}`);
+  return crypto.createHash('sha256').update(preamble).update(deps.join('|')).digest('hex').slice(0, 24);
 }
 
 /** Starts a process group so timeout cleanup also kills TeX and bibliography children. */
-function runNativeCompiler(cwd: string, args: string[], timeoutMs: number, registerCancel: (cancel: () => void) => void) {
-  return new Promise<{ stdout: string; stderr: string; killed: boolean; reason?: 'timeout' | 'output_limit' | 'cancelled'; code: number | null; engineStartupMs: number; texRunMs: number }>((resolve, reject) => {
+function runNativeCompiler(cwd: string, argv: string[], timeoutMs: number, onStart?: (kill: () => void) => void) {
+  return new Promise<{ stdout: string; stderr: string; killed: boolean; reason?: 'timeout' | 'output_limit'; code: number | null }>((resolve, reject) => {
     const memoryBytes = Math.max(192, COMPILE_MEMORY_MB) * 1024 * 1024;
     const safeEnv = {
       PATH: process.env.PATH ?? '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
@@ -252,23 +254,17 @@ function runNativeCompiler(cwd: string, args: string[], timeoutMs: number, regis
       TEXMFVAR: path.join(cwd, 'texmf-var'), TEXMFCONFIG: path.join(cwd, 'texmf-config'),
       FONTCONFIG_CACHE: path.join(cwd, 'font-cache'),
     };
-    const child = spawn('setpriv', ['--reuid=65534', '--regid=65534', '--clear-groups', '--bounding-set=-all', '--', 'prlimit', `--as=${memoryBytes}`, '--cpu=120', '--nproc=64', '--fsize=52428800', '--nofile=128', '--', 'latexmk', ...args], {
+    const child = spawn('setpriv', ['--reuid=65534', '--regid=65534', '--clear-groups', '--bounding-set=-all', '--', 'prlimit', `--as=${memoryBytes}`, '--cpu=120', '--nproc=64', '--fsize=52428800', '--nofile=128', '--', ...argv], {
       cwd, env: safeEnv,
       detached: true, stdio: ['ignore', 'pipe', 'pipe'],
     });
-    const processStartedAt = performance.now();
-    let spawnedAt = processStartedAt, stdout = '', stderr = '', killed = false, reason: 'timeout' | 'output_limit' | 'cancelled' | undefined, settled = false;
-    const kill = (why: 'cancelled' | 'timeout' | 'output_limit') => {
-      if (settled) return;
-      killed = true; reason = why;
-      if (child.pid) { try { process.kill(-child.pid, 'SIGKILL'); } catch { child.kill('SIGKILL'); } }
-    };
-    child.once('spawn', () => { spawnedAt = performance.now(); if (reason) kill(reason); });
-    registerCancel(() => kill('cancelled'));
+    onStart?.(() => { killed = true; if (child.pid) { try { process.kill(-child.pid, 'SIGKILL'); } catch { child.kill('SIGKILL'); } } });
+    let stdout = '', stderr = '', killed = false, reason: 'timeout' | 'output_limit' | undefined, settled = false;
     const limitOutput = 4 * 1024 * 1024;
     const collect = (target: 'stdout' | 'stderr') => (chunk: Buffer) => {
       if (stdout.length + stderr.length + chunk.length > limitOutput) {
-        kill('output_limit');
+        killed = true; reason = 'output_limit';
+        if (child.pid) { try { process.kill(-child.pid, 'SIGKILL'); } catch { child.kill('SIGKILL'); } }
         return;
       }
       if (target === 'stdout') stdout += chunk.toString(); else stderr += chunk.toString();
@@ -276,15 +272,15 @@ function runNativeCompiler(cwd: string, args: string[], timeoutMs: number, regis
     child.stdout.on('data', collect('stdout'));
     child.stderr.on('data', collect('stderr'));
     const timer = setTimeout(() => {
-      kill('timeout');
+      killed = true; reason = 'timeout';
+      if (child.pid) { try { process.kill(-child.pid, 'SIGKILL'); } catch { child.kill('SIGKILL'); } }
     }, timeoutMs);
     child.once('error', error => { if (settled) return; settled = true; clearTimeout(timer); reject(error); });
     child.once('close', code => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      const engineStartupMs = Math.max(0, Math.round(spawnedAt - processStartedAt));
-      resolve({ stdout, stderr, killed, reason, code, engineStartupMs, texRunMs: Math.max(0, Math.round(performance.now() - spawnedAt)) });
+      resolve({ stdout, stderr, killed, reason, code });
     });
   });
 }
@@ -315,9 +311,11 @@ app.get('/api/projects/:id', async (req, res) => {
 /** Saves a project; creates it if it doesn't exist yet. A `files` list replaces the stored files. */
 app.put('/api/projects/:id', async (req, res) => {
   try {
-    const current = await readProject(req.params.id, projectOwner(res)).catch(() => null);
-    const files = Array.isArray(req.body.files) ? req.body.files : current?.files ?? [];
-    res.json(await writeProject(req.params.id, { name: req.body.name ?? current?.name, files, mainFile: req.body.mainFile ?? current?.mainFile, archived: req.body.archived ?? current?.archived, settings: req.body.settings ?? current?.settings, versions: req.body.versions ?? current?.versions, comments: req.body.comments ?? current?.comments, changes: req.body.changes ?? current?.changes }, { replace: Array.isArray(req.body.files) }, projectOwner(res)));
+    // Fields left out of the body keep their stored values (the storage layer merges them).
+    const files = Array.isArray(req.body.files) ? req.body.files : undefined;
+    const saved = await writeProject(req.params.id, { name: req.body.name, files, mainFile: req.body.mainFile, archived: req.body.archived, settings: req.body.settings, versions: req.body.versions, comments: req.body.comments, changes: req.body.changes }, { replace: !!files }, projectOwner(res));
+    // The browser already has the files it just sent; echoing them back would double the transfer.
+    res.json({ ...saved, files: files ? undefined : saved.files });
   } catch (e) { send(res, 400, e); }
 });
 
@@ -326,7 +324,8 @@ app.delete('/api/projects/:id', async (req, res) => {
     projectPath(req.params.id);
     if (persistence.mode === 'neon-r2') await persistence.delete(req.params.id, projectOwner(res));
     else await fs.rm(projectPath(req.params.id), { recursive: true, force: true });
-    RESULTS.delete(resultKey(req.params.id, projectOwner(res)));
+    const key = resultKey(req.params.id, projectOwner(res));
+    RESULTS.delete(key); ARTIFACTS.delete(key); await workspaces.dropProject(`${key}:`);
     res.status(204).end();
   } catch (e) { send(res, 400, e); }
 });
@@ -399,6 +398,32 @@ app.post('/api/projects/:id/upload', upload.single('file'), async (req, res) => 
   } catch (e) { send(res, 400, `Unable to import ZIP: ${e instanceof Error ? e.message : String(e)}`); }
 });
 
+/**
+ * Read-only copy link. Stores a snapshot of the project as sent by its owner; anyone with the link can open the
+ * snapshot as a new project in their own browser. The owner's project is never exposed or changed.
+ */
+app.post('/api/projects/:id/share', async (req, res) => {
+  try {
+    projectPath(String(req.params.id));
+    const files = Array.isArray(req.body.files) ? req.body.files as StoredFile[] : (await readProject(String(req.params.id), projectOwner(res))).files;
+    validateFiles(files);
+    const snapshot = { name: String(req.body.name ?? 'Shared project').slice(0, 200), mainFile: typeof req.body.mainFile === 'string' ? safeName(req.body.mainFile) : 'main.tex', files, created: Date.now() };
+    const shareId = crypto.randomUUID();
+    if (persistence.mode === 'neon-r2') await persistence.putShare(shareId, snapshot);
+    else { await fs.mkdir(path.join(DATA, 'shares'), { recursive: true }); await fs.writeFile(path.join(DATA, 'shares', `${shareId}.json`), JSON.stringify(snapshot)); }
+    res.status(201).json({ id: shareId });
+  } catch (e) { send(res, 400, e); }
+});
+
+app.get('/api/shares/:shareId', async (req, res) => {
+  try {
+    const shareId = String(req.params.shareId);
+    if (!/^[0-9a-f-]{36}$/i.test(shareId)) return void send(res, 404, 'This link is invalid.');
+    const snapshot = persistence.mode === 'neon-r2' ? await persistence.getShare(shareId) : JSON.parse(await fs.readFile(path.join(DATA, 'shares', `${shareId}.json`), 'utf8'));
+    res.json(snapshot);
+  } catch { send(res, 404, 'This shared project no longer exists.'); }
+});
+
 app.get('/api/projects/:id/download', async (req, res) => {
   try {
     const p = await readProject(req.params.id, projectOwner(res));
@@ -416,48 +441,67 @@ app.get('/api/projects/:id/download', async (req, res) => {
   } catch (e) { send(res, 404, e); }
 });
 
-/**
- * Compiles in a throwaway container: no network, read-only root, resource limits.
- * LaTeX errors are a normal result (200 with success:false); 503 means the compiler itself is unavailable.
- */
-app.post('/api/projects/:id/compile/cancel', async (req, res) => {
-  const key = resultKey(String(req.params.id), projectOwner(res));
-  const cancel = COMPILE_CANCELLERS.get(key);
-  if (!cancel) return void res.json({ cancelled: false });
-  COMPILE_CANCELLED.add(key);
-  cancel();
-  res.json({ cancelled: true });
-});
+/** One compile at a time on the server (Render's free instance has 512 MB); others wait their turn. */
+const compileQueue: (() => void)[] = [];
+let compileBusy = false;
+function compileSlot(signal: AbortSignal, waitMs = 90_000) {
+  return new Promise<() => void>((resolve, reject) => {
+    const release = () => { compileBusy = false; compileQueue.shift()?.(); };
+    if (!compileBusy) { compileBusy = true; return resolve(release); }
+    const timer = setTimeout(() => { remove(); reject(new Error('The compile server is busy. Try again in a moment.')); }, waitMs);
+    const start = () => { clearTimeout(timer); signal.removeEventListener('abort', cancel); compileBusy = true; resolve(release); };
+    const remove = () => { const i = compileQueue.indexOf(start); if (i >= 0) compileQueue.splice(i, 1); };
+    const cancel = () => { clearTimeout(timer); remove(); reject(new Error('cancelled')); };
+    signal.addEventListener('abort', cancel, { once: true });
+    compileQueue.push(start);
+  });
+}
 
+/** Running compiles by project, so a newer compile (or the browser going away) stops a stale one. */
+const RUNNING = new Map<string, { cancel: () => void; done: Promise<unknown> }>();
+const BOOT_ID = crypto.randomUUID();
+const workspaces = new Workspaces(os.tmpdir(), Number(process.env.COMPILE_WORKSPACES ?? 8));
+/** The last PDF and SyncTeX data per project, so the preview and SyncTeX don't wait for object storage. */
+const ARTIFACTS = new Map<string, { pdf: Buffer; synctex: Buffer | null; workspace: string; at: number }>();
+const ARTIFACT_LIMIT = 6;
+function rememberArtifacts(key: string, value: { pdf: Buffer; synctex: Buffer | null; workspace: string }) {
+  ARTIFACTS.delete(key);
+  ARTIFACTS.set(key, { ...value, at: Date.now() });
+  while (ARTIFACTS.size > ARTIFACT_LIMIT) ARTIFACTS.delete(ARTIFACTS.keys().next().value!);
+}
+
+/** Gives files written by the API (as root) to the sandbox user that runs TeX. */
+async function chownForSandbox(root: string, names: string[]) {
+  const seen = new Set<string>();
+  for (const name of names) {
+    let rel = name.replace(/\/$/, '');
+    while (rel && rel !== '.' && !seen.has(rel)) { seen.add(rel); await fs.chown(path.join(root, rel), 65534, 65534).catch(() => undefined); rel = path.posix.dirname(rel); }
+  }
+}
+
+/**
+ * Compiles in a warm per-project folder. Native mode runs TeX as an unprivileged user with resource limits;
+ * Docker mode uses a throwaway container with no network and a read-only root.
+ * LaTeX errors are a normal result (200 with success:false); 503 means the compiler itself is unavailable.
+ * The browser may send only changed files (with hashes for the rest); 409 lists files the server lacks.
+ */
 app.post('/api/projects/:id/compile', async (req, res) => {
-  let tmp = '';
-  const container = `paperdesk-compile-${crypto.randomUUID()}`;
   const started = Date.now();
-  let compileId = '';
-  let cancelKey = '';
-  let engineStartupMs = 0;
-  let texRunMs = 0;
-  let fileSyncMs = 0;
-  let artifactSaveMs = 0;
-  let activeCancel: () => void = () => {};
+  const timings: Record<string, number> = {};
+  const mark = (name: string, since: number) => { timings[name] = Date.now() - since; };
+  const closed = new AbortController();
+  res.on('close', () => { if (!res.writableFinished) closed.abort(); });
+  let release: (() => void) | null = null;
+  let key = '';
+  let finished: () => void = () => undefined;
+  let entry: { cancel: () => void; done: Promise<unknown> } | null = null;
   try {
     const id = String(req.params.id);
     const owner = projectOwner(res);
-    cancelKey = resultKey(id, owner);
-    COMPILE_CANCELLED.delete(cancelKey);
     projectPath(id);
-    compileId = id;
-    if (COMPILING.has(id) || COMPILING.size >= 1) return void send(res, 429, 'A compile is already running. Try again when it finishes.');
-    COMPILING.add(id);
-    COMPILE_CANCELLERS.set(cancelKey, () => { COMPILE_CANCELLED.add(cancelKey); activeCancel(); });
-    // A new browser-only project can reach Compile before its debounced save.
-    // Prefer the submitted source; only require a stored project when no files
-    // were included. In Neon/R2 mode, register the project so its source and
-    // artifacts remain available after the compile request completes.
-    const submittedFiles: StoredFile[] | null = Array.isArray(req.body.files) ? req.body.files : null;
-    let currentProject = persistence.mode === 'neon-r2' && !submittedFiles ? await readProject(id, owner) : null;
-    const files: StoredFile[] = submittedFiles ?? (currentProject ?? await readProject(id, owner)).files;
-    validateFiles(files);
+    key = resultKey(id, owner);
+    const files: SourceFile[] = Array.isArray(req.body.files) ? req.body.files : (await readProject(id, owner)).files;
+    validateFiles(files.filter(f => f.content !== undefined) as StoredFile[]);
     const engine = String(req.body.engine ?? 'pdflatex');
     if (!ENGINES[engine]) return void send(res, 400, 'Unsupported compiler');
     const mainFile = safeName(String(req.body.mainFile ?? 'main.tex'));
@@ -466,76 +510,72 @@ app.post('/api/projects/:id/compile', async (req, res) => {
     const stopOnFirstError = req.body.stopOnFirstError !== false;
     if (!mainFile.endsWith('.tex')) return void send(res, 400, 'Main file must be a .tex file');
     if (!files.some(f => f.name === mainFile)) return void send(res, 400, `Main file “${mainFile}” not found in the project`);
-    if (persistence.mode === 'neon-r2' && submittedFiles) {
-      currentProject = await writeProject(id, {
-        name: String(req.body.name ?? currentProject?.name ?? 'Untitled Project'),
-        files,
-        mainFile,
-        settings: req.body.settings,
-        versions: req.body.versions,
-        comments: req.body.comments,
-        changes: req.body.changes,
-      }, { replace: true }, owner);
-    }
 
-    const fileSyncStarted = Date.now();
+    // A newer compile of the same project replaces a stale one that is still running or waiting.
+    const previous = RUNNING.get(key);
+    if (previous) { previous.cancel(); await previous.done.catch(() => undefined); }
+    let cancelRun: () => void = () => undefined;
+    const done = new Promise<void>(resolve => { finished = resolve; });
+    entry = { cancel: () => { closed.abort(); cancelRun(); }, done };
+    RUNNING.set(key, entry);
+
+    let t = Date.now();
+    release = await compileSlot(closed.signal);
+    mark('queue', t);
+
+    t = Date.now();
+    const ws = await workspaces.acquire(`${key}:${engine}`);
+    const sync = await syncWorkspace(ws, files, safeName);
+    if (sync.missing.length) return void res.status(409).json({ error: 'Some files need to be sent again.', missing: sync.missing, session: BOOT_ID });
+    for (const dir of ['tmp', 'texmf-var', 'texmf-config', 'font-cache']) await fs.mkdir(path.join(ws.dir, dir), { recursive: true });
     if (COMPILE_MODE === 'native') {
-      tmp = nativeCompilePath(id, owner);
-      await fs.rm(tmp, { recursive: true, force: true });
-      await fs.mkdir(tmp, { recursive: true, mode: 0o755 });
-    } else tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'paperdesk-'));
-    await fs.chmod(tmp, 0o755);
-    await fs.mkdir(path.join(tmp, 'tmp'), { recursive: true });
-    await fs.mkdir(path.join(tmp, 'texmf-var'), { recursive: true });
-    await fs.mkdir(path.join(tmp, 'texmf-config'), { recursive: true });
-    await fs.mkdir(path.join(tmp, 'font-cache'), { recursive: true });
-    for (const f of files) {
-      const name = safeName(String(f.name));
-      if (f.name.endsWith('/')) { await fs.mkdir(path.join(tmp, name), { recursive: true }); continue; }
-      const target = path.join(tmp, name);
-      await fs.mkdir(path.dirname(target), { recursive: true });
-      await fs.writeFile(target, toBuffer(f));
+      if (ws.fresh) await giveCompileFilesToSandboxUser(ws.dir);
+      else await chownForSandbox(ws.dir, sync.written);
     }
-    fileSyncMs = Date.now() - fileSyncStarted;
+    mark('sync', t);
 
-    const compileCommand = compilerArgs(engine, mainFile, stopOnFirstError, draft, files);
-
+    const base = mainFile.replace(/\.tex$/i, '');
+    const runTex = (argv: string[]) => runTool(ws.dir, argv, timeoutMs, kill => { cancelRun = kill; });
+    const mainSource = await fs.readFile(path.join(ws.dir, mainFile), 'utf8').catch(() => '');
+    const fmtKey = engine === 'pdflatex' && !draft ? preambleKey(ws, mainSource) : '';
+    let format = fmtKey && ws.format?.key === fmtKey && ws.format.ok ? PREAMBLE_FORMAT : undefined;
+    // Fast path: in a warm folder whose last compile succeeded, one direct engine pass is usually enough. Fall back
+    // to latexmk when references, the table of contents or the bibliography may need more passes.
+    const bibChanged = [...sync.written, ...sync.removed].some(n => /\.(bib|bst|bbx|cbx|bcf)$/i.test(n));
+    const fast = !ws.fresh && !draft && !bibChanged && ws.last?.ok === true && ws.last.mainFile === mainFile;
+    const auxState = async () => (await Promise.all(['aux', 'toc', 'lof', 'lot', 'out', 'nav', 'snm'].map(ext => fs.readFile(path.join(ws.dir, `${base}.${ext}`)).then(b => crypto.createHash('sha1').update(b).digest('hex'), () => '-')))).join(',');
     let output = '';
     let exitError: any = null;
-    if (COMPILE_CANCELLED.has(cancelKey)) {
-      exitError = { reason: 'cancelled', killed: true };
-    } else if (COMPILE_MODE === 'native') {
-      try {
-        await giveCompileFilesToSandboxUser(tmp);
-        const r = await runNativeCompiler(tmp, compileCommand, timeoutMs, cancel => { activeCancel = cancel; if (COMPILE_CANCELLED.has(cancelKey)) cancel(); });
-        engineStartupMs = r.engineStartupMs;
-        texRunMs = r.texRunMs;
-        output = r.stdout + '\n' + r.stderr;
-        if (r.code !== 0 || r.killed) exitError = { code: r.code, killed: r.killed, reason: r.reason, stdout: r.stdout, stderr: r.stderr };
-      } catch (e: any) {
-        if (e?.code === 'ENOENT') return void send(res, 503, 'The LaTeX tools are not installed in this service.');
-        throw e;
+    let passes = '';
+    t = Date.now();
+    try {
+      let r: TexRun;
+      if (fast) {
+        const before = await auxState();
+        r = await runTex([engine, ...directArgs(engine, mainFile, stopOnFirstError, format)]);
+        passes = 'direct';
+        const log = await fs.readFile(path.join(ws.dir, base + '.log'), 'utf8').catch(() => '');
+        const more = r.code === 0 && !r.killed && (before !== await auxState() || /Rerun to get|Label\(s\) may have changed|Please \(re\)run|run BibTeX|run Biber|Rerun LaTeX/i.test(log));
+        if (more && !closed.signal.aborted) { r = await runTex(['latexmk', ...latexmkArgs(engine, mainFile, stopOnFirstError, draft, format)]); passes += '+latexmk'; }
+      } else { r = await runTex(['latexmk', ...latexmkArgs(engine, mainFile, stopOnFirstError, draft, format)]); passes = 'latexmk'; }
+      // A cached preamble that the document disagrees with must never cost a working compile: retry without it.
+      if (format && (r.code !== 0 || r.killed) && !r.killed && !closed.signal.aborted) {
+        ws.format = { key: fmtKey, ok: false };
+        format = undefined;
+        r = await runTex(['latexmk', ...latexmkArgs(engine, mainFile, stopOnFirstError, draft)]);
+        passes += '+retry';
       }
-    } else {
-      const args = ['run', '--rm', '--name', container, '--network=none', '--memory=1g', '--cpus=2', '--pids-limit=256',
-        '--security-opt=no-new-privileges', '--read-only', '--tmpfs', '/tmp:rw,nosuid,exec,size=256m',
-        // Run as the host user so output files in the bind mount aren't owned by root on Linux hosts.
-        ...(process.getuid && process.getgid ? ['--user', `${process.getuid()}:${process.getgid()}`] : []),
-        '-e', 'HOME=/tmp', '-e', 'TEXMFVAR=/tmp/texmf-var', '-e', 'TEXMFCONFIG=/tmp/texmf-config',
-        '-v', `${tmp}:/work:rw`, '-w', '/work', IMAGE, ...compileCommand];
-      const dockerStarted = Date.now();
-      activeCancel = () => { void exec('docker', ['rm', '-f', container]).catch(() => undefined); };
-      if (COMPILE_CANCELLED.has(cancelKey)) activeCancel();
-      try {
-        const r = await exec('docker', args, { timeout: timeoutMs, maxBuffer: 8 * 1024 * 1024 });
-        output = r.stdout + '\n' + r.stderr;
-      } catch (e: any) {
-        exitError = e;
-        if (COMPILE_CANCELLED.has(cancelKey)) exitError.reason = 'cancelled';
-        output = [e.stdout, e.stderr].filter(Boolean).join('\n');
-      }
-      texRunMs = Date.now() - dockerStarted;
+      output = r.stdout + '\n' + r.stderr;
+      if (r.code !== 0 || r.killed) exitError = { code: r.code, killed: r.killed, reason: r.reason, stdout: r.stdout, stderr: r.stderr };
+    } catch (e: any) {
+      if (e?.code === 'ENOENT') return void send(res, COMPILE_MODE === 'docker' ? 503 : 503, COMPILE_MODE === 'docker' ? 'Docker isn’t running. Start Docker Desktop, then recompile.' : 'The LaTeX tools are not installed in this service.');
+      throw e;
     }
+    ws.last = { ok: !exitError, mainFile };
+    mark('tex', t);
+    timings.passes = passes === 'direct' ? 1 : passes.includes('latexmk') ? 2 : 0;
+    timings.preamble = format ? 1 : 0;
+    if (closed.signal.aborted) return; // superseded or the browser left; nothing to send
 
     const stderr = String(exitError?.stderr ?? '');
     if (COMPILE_MODE === 'docker' && exitError && (/Cannot connect to the Docker daemon|failed to connect to the docker API|docker.sock/i.test(stderr) || exitError.code === 'ENOENT')) {
@@ -544,72 +584,105 @@ app.post('/api/projects/:id/compile', async (req, res) => {
     if (exitError && /Unable to find image|No such image|pull access denied/i.test(stderr)) {
       return void send(res, 503, `The LaTeX compiler image (${IMAGE}) isn’t built. Run “npm run compiler:build” once, then recompile.`);
     }
-    if (exitError?.reason === 'cancelled') {
-      output += '\nCompilation cancelled by user.';
-    } else if (exitError?.killed) {
-      if (COMPILE_MODE === 'docker') await exec('docker', ['rm', '-f', container]).catch(() => undefined);
+    if (exitError?.killed) {
       output += exitError.reason === 'output_limit'
         ? '\nCompilation stopped because the output exceeded the 4 MB limit.'
         : `\nCompilation timed out after ${Math.round(timeoutMs / 1000)} seconds.`;
+      // A run killed half way can leave broken auxiliary files; start clean next time.
+      await workspaces.drop(ws.key);
     }
 
-    const base = mainFile.replace(/\.tex$/i, '');
-    const texLog = await fs.readFile(path.join(tmp, base + '.log'), 'utf8').catch(() => '');
-    const blg = await fs.readFile(path.join(tmp, base + '.blg'), 'utf8').catch(() => '');
+    t = Date.now();
+    const texLog = await fs.readFile(path.join(ws.dir, base + '.log'), 'utf8').catch(() => '');
+    const blg = await fs.readFile(path.join(ws.dir, base + '.blg'), 'utf8').catch(() => '');
     const parsed = parseLatexLog(texLog, blg, mainFile);
-    const pdf = await fs.readFile(path.join(tmp, base + '.pdf')).catch(() => null);
+    const pdf = exitError?.killed ? null : await fs.readFile(path.join(ws.dir, base + '.pdf')).catch(() => null);
     const success = !exitError && !!pdf;
     if (!success && !parsed.errors.length) {
-      parsed.errors.push({ file: mainFile, line: null, message: exitError?.reason === 'cancelled' ? 'Compilation cancelled by user.' : exitError?.reason === 'output_limit' ? 'Compiler output exceeded the 4 MB limit.' : exitError?.killed ? `Compilation timed out after ${Math.round(timeoutMs / 1000)} seconds.` : 'Compilation failed. See the full log for details.' });
+      parsed.errors.push({ file: mainFile, line: null, message: exitError?.reason === 'output_limit' ? 'Compiler output exceeded the 4 MB limit.' : exitError?.killed ? 'Compilation timed out.' : 'Compilation failed. See the full log for details.' });
     }
     const log = [texLog || output, blg && `\n──── BibTeX (${base}.blg) ────\n${blg}`, texLog && `\n──── latexmk ────\n${output}`].filter(Boolean).join('\n');
-    const result: CompileResult = { success, log, errors: parsed.errors, warnings: parsed.warnings, durationMs: 0 };
-    const artifactStarted = Date.now();
-    if (pdf && success && !draft) {
-      const syncFile = path.join(tmp, base + '.synctex.gz');
-      if (persistence.mode === 'neon-r2') {
-        await persistence.putArtifact(id, owner, 'compiled.pdf', pdf);
-        if (await fs.access(syncFile).then(() => true, () => false)) await persistence.putArtifact(id, owner, 'synctex.gz', await fs.readFile(syncFile));
-      } else {
-        const stored = path.join(projectPath(id), 'compiled.pdf');
-        await fs.mkdir(path.dirname(stored), { recursive: true });
-        await fs.writeFile(stored, pdf);
-      }
-      if (persistence.mode === 'local' && await fs.access(syncFile).then(() => true, () => false)) {
-        const syncRoot = path.join(projectPath(id), 'synctex');
-        await fs.rm(syncRoot, { recursive: true, force: true });
-        await fs.mkdir(syncRoot, { recursive: true });
-        for (const f of files) {
-          const name = safeName(String(f.name));
-          const target = path.join(syncRoot, name);
-          if (f.name.endsWith('/')) await fs.mkdir(target, { recursive: true });
-          else { await fs.mkdir(path.dirname(target), { recursive: true }); await fs.writeFile(target, toBuffer(f)); }
-        }
-        await fs.copyFile(path.join(tmp, base + '.pdf'), path.join(syncRoot, base + '.pdf'));
-        await fs.copyFile(syncFile, path.join(syncRoot, base + '.synctex.gz'));
-      }
-    }
-    artifactSaveMs = Date.now() - artifactStarted;
-    const totalMs = Date.now() - started;
-    result.durationMs = totalMs;
-    result.timings = { fileSyncMs, engineStartupMs, texRunMs, artifactSaveMs, totalMs };
-    RESULTS.set(resultKey(id, owner), result);
+    const result: CompileResult = { success, log, errors: parsed.errors, warnings: parsed.warnings, durationMs: Date.now() - started };
+    RESULTS.set(key, result);
+    const synctex = success && !draft ? await fs.readFile(path.join(ws.dir, base + '.synctex.gz')).catch(() => null) : null;
+    if (pdf && success && !draft) rememberArtifacts(key, { pdf, synctex, workspace: ws.key });
+    mark('read', t);
+    timings.total = Date.now() - started;
+    res.setHeader('Server-Timing', Object.entries(timings).map(([name, ms]) => `${name};dur=${ms}`).join(', '));
+    // The PDF travels with the result so the preview needs no second request.
+    res.json({ ...result, session: BOOT_ID, timings, ...(pdf && success && pdf.length <= 8 * 1024 * 1024 ? { pdf: pdf.toString('base64') } : {}) });
     io.to(id).emit('compile:complete', { success });
-    res.json(result);
+
+    // Keep a durable copy for downloads and other devices without making the browser wait for it.
+    if (pdf && success && !draft) void storeArtifacts(id, owner, pdf, synctex).catch(error => console.error('Saving compile artifacts failed:', error));
+    if (success && fmtKey && ws.format?.key !== fmtKey) void buildPreambleFormat(ws, mainFile, fmtKey).catch(error => console.error('Building the preamble format failed:', error));
   } catch (e) {
-    send(res, 400, e);
+    if (closed.signal.aborted || (e instanceof Error && e.message === 'cancelled')) return;
+    send(res, e instanceof Error && /busy/.test(e.message) ? 429 : 400, e);
   } finally {
-    if (cancelKey) COMPILE_CANCELLERS.delete(cancelKey);
-    if (cancelKey) COMPILE_CANCELLED.delete(cancelKey);
-    if (compileId) COMPILING.delete(compileId);
-    if (tmp) await fs.rm(tmp, { recursive: true, force: true }).catch(() => undefined);
+    release?.();
+    finished();
+    // Only clear our own entry; a newer compile may already have replaced it.
+    if (entry && RUNNING.get(key) === entry) RUNNING.delete(key);
   }
 });
+
+type TexRun = { stdout: string; stderr: string; killed: boolean; reason?: 'timeout' | 'output_limit'; code: number | null };
+
+/** Runs a TeX tool in the build folder: as the sandbox user natively, or in a throwaway container with Docker. */
+async function runTool(dir: string, argv: string[], timeoutMs: number, onStart?: (kill: () => void) => void): Promise<TexRun> {
+  if (COMPILE_MODE === 'native') return runNativeCompiler(dir, argv, timeoutMs, onStart);
+  const container = `paperdesk-compile-${crypto.randomUUID()}`;
+  const args = ['run', '--rm', '--name', container, '--network=none', '--memory=1g', '--cpus=2', '--pids-limit=256',
+    '--security-opt=no-new-privileges', '--read-only', '--tmpfs', '/tmp:rw,nosuid,exec,size=256m',
+    // Run as the host user so output files in the bind mount aren't owned by root on Linux hosts.
+    ...(process.getuid && process.getgid ? ['--user', `${process.getuid()}:${process.getgid()}`] : []),
+    '-e', 'HOME=/tmp', '-e', 'TEXMFVAR=/tmp/texmf-var', '-e', 'TEXMFCONFIG=/tmp/texmf-config',
+    '-v', `${dir}:/work:rw`, '-w', '/work', IMAGE, ...argv];
+  let killed = false;
+  onStart?.(() => { killed = true; void exec('docker', ['rm', '-f', container]).catch(() => undefined); });
+  try {
+    const r = await exec('docker', args, { timeout: timeoutMs, maxBuffer: 8 * 1024 * 1024 });
+    return { stdout: r.stdout, stderr: r.stderr, killed, code: 0 };
+  } catch (e: any) {
+    if (e?.killed || e?.signal) { killed = true; await exec('docker', ['rm', '-f', container]).catch(() => undefined); }
+    if (e?.code === 'ENOENT' || /Cannot connect to the Docker daemon|failed to connect to the docker API|docker.sock/i.test(String(e?.stderr))) throw Object.assign(new Error('docker'), { code: 'ENOENT' });
+    return { stdout: String(e?.stdout ?? ''), stderr: String(e?.stderr ?? ''), killed, reason: killed ? 'timeout' : undefined, code: typeof e?.code === 'number' ? e.code : 1 };
+  }
+}
+
+/**
+ * Precompiles the preamble (everything before \begin{document}) into a format with mylatexformat, so later pdfLaTeX
+ * passes skip loading the packages. Runs after the response, holding the compile slot; used only while the preamble
+ * and its local files are unchanged.
+ */
+async function buildPreambleFormat(ws: Workspace, mainFile: string, key: string) {
+  const release = await compileSlot(new AbortController().signal).catch(() => null);
+  if (!release) return;
+  try {
+    if (workspaces.peek(ws.key) !== ws || ws.format?.key === key) return;
+    const r = await runTool(ws.dir, ['pdftex', '-ini', '-interaction=nonstopmode', '-halt-on-error', `-jobname=${PREAMBLE_FORMAT}`, '&pdflatex', 'mylatexformat.ltx', mainFile], 60_000);
+    const built = await fs.access(path.join(ws.dir, `${PREAMBLE_FORMAT}.fmt`)).then(() => true, () => false);
+    ws.format = { key, ok: r.code === 0 && !r.killed && built };
+  } finally { release(); }
+}
+
+async function storeArtifacts(id: string, owner: string, pdf: Buffer, synctex: Buffer | null) {
+  if (persistence.mode === 'neon-r2') {
+    await persistence.putArtifact(id, owner, 'compiled.pdf', pdf);
+    if (synctex) await persistence.putArtifact(id, owner, 'synctex.gz', synctex);
+    return;
+  }
+  const stored = path.join(projectPath(id), 'compiled.pdf');
+  await fs.mkdir(path.dirname(stored), { recursive: true });
+  await fs.writeFile(stored, pdf);
+}
 
 app.get('/api/projects/:id/pdf', async (req, res) => {
   try {
     projectPath(req.params.id);
-    const pdf = persistence.mode === 'neon-r2' ? await persistence.getArtifact(req.params.id, projectOwner(res), 'compiled.pdf') : await fs.readFile(path.join(projectPath(req.params.id), 'compiled.pdf'));
+    const cached = ARTIFACTS.get(resultKey(req.params.id, projectOwner(res)));
+    const pdf = cached?.pdf ?? (persistence.mode === 'neon-r2' ? await persistence.getArtifact(req.params.id, projectOwner(res), 'compiled.pdf') : await fs.readFile(path.join(projectPath(req.params.id), 'compiled.pdf')));
     res.type('application/pdf').send(pdf);
   } catch { send(res, 404, 'No compiled PDF exists yet'); }
 });
@@ -621,7 +694,6 @@ app.post('/api/projects/:id/synctex', async (req, res) => {
     const id = String(req.params.id);
     const owner = projectOwner(res);
     projectPath(id);
-    if (COMPILING.has(id)) return void send(res, 429, 'SyncTeX is unavailable while the project is compiling.');
     syncLockKey = resultKey(id, owner);
     if (SYNCING.has(syncLockKey)) return void send(res, 429, 'A SyncTeX lookup is already running.');
     SYNCING.add(syncLockKey);
@@ -643,11 +715,14 @@ app.post('/api/projects/:id/synctex', async (req, res) => {
       syncCoordinates = `${page}:${x}:${y}`;
     } else return void send(res, 400, 'SyncTeX mode must be forward or inverse');
 
-    if (COMPILE_MODE === 'native') {
+    // The last compile's warm folder already holds the sources, the PDF and its SyncTeX data.
+    const cached = ARTIFACTS.get(syncLockKey);
+    const warm = cached ? workspaces.peek(cached.workspace) : undefined;
+    const warmReady = !!warm && await fs.access(path.join(warm.dir, pdfFile.replace(/\.pdf$/i, '.synctex.gz'))).then(() => true, () => false);
+    if (warm && warmReady) syncRoot = warm.dir;
+    else if (COMPILE_MODE === 'native') {
       const project = await readProject(id, owner);
-      temporaryRoot = nativeCompilePath(id, owner);
-      await fs.rm(temporaryRoot, { recursive: true, force: true });
-      await fs.mkdir(temporaryRoot, { recursive: true, mode: 0o755 });
+      temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'paperdesk-sync-'));
       syncRoot = temporaryRoot;
       for (const file of project.files) {
         const name = safeName(file.name), target = path.join(syncRoot, name);
@@ -719,7 +794,9 @@ app.delete('/api/projects/:id/cache', async (req, res) => {
     projectPath(req.params.id);
     if (persistence.mode === 'neon-r2') await persistence.deleteArtifacts(req.params.id, projectOwner(res));
     else { await fs.rm(path.join(projectPath(req.params.id), 'compiled.pdf'), { force: true }); await fs.rm(path.join(projectPath(req.params.id), 'synctex'), { recursive: true, force: true }); }
-    RESULTS.delete(resultKey(req.params.id, projectOwner(res))); res.status(204).end();
+    const key = resultKey(req.params.id, projectOwner(res));
+    RESULTS.delete(key); ARTIFACTS.delete(key); await workspaces.dropProject(`${key}:`);
+    res.status(204).end();
   } catch (e) { send(res, 400, e); }
 });
 

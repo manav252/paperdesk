@@ -1,0 +1,620 @@
+[
+ {
+  "name": "Greek",
+  "symbols": [
+   {
+    "char": "α",
+    "command": "\\alpha"
+   },
+   {
+    "char": "β",
+    "command": "\\beta"
+   },
+   {
+    "char": "γ",
+    "command": "\\gamma"
+   },
+   {
+    "char": "δ",
+    "command": "\\delta"
+   },
+   {
+    "char": "ε",
+    "command": "\\epsilon"
+   },
+   {
+    "char": "ϵ",
+    "command": "\\varepsilon"
+   },
+   {
+    "char": "ζ",
+    "command": "\\zeta"
+   },
+   {
+    "char": "η",
+    "command": "\\eta"
+   },
+   {
+    "char": "θ",
+    "command": "\\theta"
+   },
+   {
+    "char": "ϑ",
+    "command": "\\vartheta"
+   },
+   {
+    "char": "ι",
+    "command": "\\iota"
+   },
+   {
+    "char": "κ",
+    "command": "\\kappa"
+   },
+   {
+    "char": "λ",
+    "command": "\\lambda"
+   },
+   {
+    "char": "μ",
+    "command": "\\mu"
+   },
+   {
+    "char": "ν",
+    "command": "\\nu"
+   },
+   {
+    "char": "ξ",
+    "command": "\\xi"
+   },
+   {
+    "char": "π",
+    "command": "\\pi"
+   },
+   {
+    "char": "ϖ",
+    "command": "\\varpi"
+   },
+   {
+    "char": "ρ",
+    "command": "\\rho"
+   },
+   {
+    "char": "ϱ",
+    "command": "\\varrho"
+   },
+   {
+    "char": "σ",
+    "command": "\\sigma"
+   },
+   {
+    "char": "ς",
+    "command": "\\varsigma"
+   },
+   {
+    "char": "τ",
+    "command": "\\tau"
+   },
+   {
+    "char": "υ",
+    "command": "\\upsilon"
+   },
+   {
+    "char": "φ",
+    "command": "\\phi"
+   },
+   {
+    "char": "ϕ",
+    "command": "\\varphi"
+   },
+   {
+    "char": "χ",
+    "command": "\\chi"
+   },
+   {
+    "char": "ψ",
+    "command": "\\psi"
+   },
+   {
+    "char": "ω",
+    "command": "\\omega"
+   },
+   {
+    "char": "Γ",
+    "command": "\\Gamma"
+   },
+   {
+    "char": "Δ",
+    "command": "\\Delta"
+   },
+   {
+    "char": "Θ",
+    "command": "\\Theta"
+   },
+   {
+    "char": "Λ",
+    "command": "\\Lambda"
+   },
+   {
+    "char": "Ξ",
+    "command": "\\Xi"
+   },
+   {
+    "char": "Π",
+    "command": "\\Pi"
+   },
+   {
+    "char": "Σ",
+    "command": "\\Sigma"
+   },
+   {
+    "char": "Υ",
+    "command": "\\Upsilon"
+   },
+   {
+    "char": "Φ",
+    "command": "\\Phi"
+   },
+   {
+    "char": "Ψ",
+    "command": "\\Psi"
+   },
+   {
+    "char": "Ω",
+    "command": "\\Omega"
+   }
+  ]
+ },
+ {
+  "name": "Operators",
+  "symbols": [
+   {
+    "char": "±",
+    "command": "\\pm",
+    "keywords": "plus minus"
+   },
+   {
+    "char": "∓",
+    "command": "\\mp",
+    "keywords": "minus plus"
+   },
+   {
+    "char": "×",
+    "command": "\\times",
+    "keywords": "times multiply cross"
+   },
+   {
+    "char": "÷",
+    "command": "\\div",
+    "keywords": "divide"
+   },
+   {
+    "char": "·",
+    "command": "\\cdot",
+    "keywords": "dot multiply"
+   },
+   {
+    "char": "∗",
+    "command": "\\ast"
+   },
+   {
+    "char": "∘",
+    "command": "\\circ"
+   },
+   {
+    "char": "∙",
+    "command": "\\bullet"
+   },
+   {
+    "char": "⊕",
+    "command": "\\oplus"
+   },
+   {
+    "char": "⊗",
+    "command": "\\otimes"
+   },
+   {
+    "char": "∩",
+    "command": "\\cap"
+   },
+   {
+    "char": "∪",
+    "command": "\\cup"
+   },
+   {
+    "char": "∧",
+    "command": "\\wedge"
+   },
+   {
+    "char": "∨",
+    "command": "\\vee"
+   },
+   {
+    "char": "¬",
+    "command": "\\neg"
+   },
+   {
+    "char": "∑",
+    "command": "\\sum",
+    "keywords": "sum sigma"
+   },
+   {
+    "char": "∏",
+    "command": "\\prod",
+    "keywords": "product"
+   },
+   {
+    "char": "∐",
+    "command": "\\coprod"
+   },
+   {
+    "char": "∫",
+    "command": "\\int",
+    "keywords": "integral"
+   },
+   {
+    "char": "∬",
+    "command": "\\iint"
+   },
+   {
+    "char": "∮",
+    "command": "\\oint"
+   },
+   {
+    "char": "∂",
+    "command": "\\partial",
+    "keywords": "partial derivative"
+   },
+   {
+    "char": "∇",
+    "command": "\\nabla",
+    "keywords": "nabla gradient"
+   },
+   {
+    "char": "√",
+    "command": "\\sqrt{}",
+    "keywords": "square root"
+   },
+   {
+    "char": "∞",
+    "command": "\\infty",
+    "keywords": "infinity"
+   },
+   {
+    "char": "∀",
+    "command": "\\forall",
+    "keywords": "for all"
+   },
+   {
+    "char": "∃",
+    "command": "\\exists",
+    "keywords": "there exists"
+   },
+   {
+    "char": "∅",
+    "command": "\\emptyset",
+    "keywords": "empty set"
+   },
+   {
+    "char": "ℓ",
+    "command": "\\ell"
+   },
+   {
+    "char": "ℏ",
+    "command": "\\hbar"
+   },
+   {
+    "char": "ℜ",
+    "command": "\\Re"
+   },
+   {
+    "char": "ℑ",
+    "command": "\\Im"
+   },
+   {
+    "char": "ℵ",
+    "command": "\\aleph"
+   },
+   {
+    "char": "′",
+    "command": "\\prime"
+   },
+   {
+    "char": "…",
+    "command": "\\ldots"
+   },
+   {
+    "char": "⋯",
+    "command": "\\cdots"
+   },
+   {
+    "char": "⋮",
+    "command": "\\vdots"
+   },
+   {
+    "char": "⋱",
+    "command": "\\ddots"
+   },
+   {
+    "char": "°",
+    "command": "^\\circ",
+    "keywords": "degree"
+   },
+   {
+    "char": "ℝ",
+    "command": "\\mathbb{R}",
+    "keywords": "real numbers"
+   },
+   {
+    "char": "ℕ",
+    "command": "\\mathbb{N}",
+    "keywords": "natural numbers"
+   },
+   {
+    "char": "ℤ",
+    "command": "\\mathbb{Z}",
+    "keywords": "integers"
+   },
+   {
+    "char": "ℚ",
+    "command": "\\mathbb{Q}",
+    "keywords": "rationals"
+   },
+   {
+    "char": "ℂ",
+    "command": "\\mathbb{C}",
+    "keywords": "complex numbers"
+   }
+  ]
+ },
+ {
+  "name": "Arrows",
+  "symbols": [
+   {
+    "char": "→",
+    "command": "\\rightarrow",
+    "keywords": "right arrow to"
+   },
+   {
+    "char": "←",
+    "command": "\\leftarrow"
+   },
+   {
+    "char": "↔",
+    "command": "\\leftrightarrow"
+   },
+   {
+    "char": "⇒",
+    "command": "\\Rightarrow",
+    "keywords": "implies right double arrow"
+   },
+   {
+    "char": "⇐",
+    "command": "\\Leftarrow"
+   },
+   {
+    "char": "⇔",
+    "command": "\\Leftrightarrow"
+   },
+   {
+    "char": "↦",
+    "command": "\\mapsto",
+    "keywords": "maps to"
+   },
+   {
+    "char": "⟶",
+    "command": "\\longrightarrow"
+   },
+   {
+    "char": "⟵",
+    "command": "\\longleftarrow"
+   },
+   {
+    "char": "⟹",
+    "command": "\\Longrightarrow"
+   },
+   {
+    "char": "⟸",
+    "command": "\\Longleftarrow"
+   },
+   {
+    "char": "⟺",
+    "command": "\\iff",
+    "keywords": "if and only if"
+   },
+   {
+    "char": "↑",
+    "command": "\\uparrow"
+   },
+   {
+    "char": "↓",
+    "command": "\\downarrow"
+   },
+   {
+    "char": "↕",
+    "command": "\\updownarrow"
+   },
+   {
+    "char": "⇑",
+    "command": "\\Uparrow"
+   },
+   {
+    "char": "⇓",
+    "command": "\\Downarrow"
+   },
+   {
+    "char": "↗",
+    "command": "\\nearrow"
+   },
+   {
+    "char": "↘",
+    "command": "\\searrow"
+   },
+   {
+    "char": "↙",
+    "command": "\\swarrow"
+   },
+   {
+    "char": "↖",
+    "command": "\\nwarrow"
+   },
+   {
+    "char": "↪",
+    "command": "\\hookrightarrow"
+   },
+   {
+    "char": "↩",
+    "command": "\\hookleftarrow"
+   },
+   {
+    "char": "⇀",
+    "command": "\\rightharpoonup"
+   },
+   {
+    "char": "⇌",
+    "command": "\\rightleftharpoons"
+   },
+   {
+    "char": "⇝",
+    "command": "\\leadsto"
+   }
+  ]
+ },
+ {
+  "name": "Relations",
+  "symbols": [
+   {
+    "char": "=",
+    "command": "="
+   },
+   {
+    "char": "≠",
+    "command": "\\neq",
+    "keywords": "not equal"
+   },
+   {
+    "char": "<",
+    "command": "<"
+   },
+   {
+    "char": ">",
+    "command": ">"
+   },
+   {
+    "char": "≤",
+    "command": "\\leq",
+    "keywords": "less or equal"
+   },
+   {
+    "char": "≥",
+    "command": "\\geq",
+    "keywords": "greater or equal"
+   },
+   {
+    "char": "≪",
+    "command": "\\ll"
+   },
+   {
+    "char": "≫",
+    "command": "\\gg"
+   },
+   {
+    "char": "≈",
+    "command": "\\approx",
+    "keywords": "approximately"
+   },
+   {
+    "char": "≅",
+    "command": "\\cong"
+   },
+   {
+    "char": "≡",
+    "command": "\\equiv",
+    "keywords": "equivalent identical"
+   },
+   {
+    "char": "∼",
+    "command": "\\sim"
+   },
+   {
+    "char": "≃",
+    "command": "\\simeq"
+   },
+   {
+    "char": "∝",
+    "command": "\\propto",
+    "keywords": "proportional"
+   },
+   {
+    "char": "∈",
+    "command": "\\in",
+    "keywords": "element of in"
+   },
+   {
+    "char": "∉",
+    "command": "\\notin",
+    "keywords": "not element"
+   },
+   {
+    "char": "∋",
+    "command": "\\ni"
+   },
+   {
+    "char": "⊂",
+    "command": "\\subset",
+    "keywords": "subset"
+   },
+   {
+    "char": "⊃",
+    "command": "\\supset"
+   },
+   {
+    "char": "⊆",
+    "command": "\\subseteq"
+   },
+   {
+    "char": "⊇",
+    "command": "\\supseteq"
+   },
+   {
+    "char": "⊊",
+    "command": "\\subsetneq"
+   },
+   {
+    "char": "⊥",
+    "command": "\\perp"
+   },
+   {
+    "char": "∥",
+    "command": "\\parallel"
+   },
+   {
+    "char": "∣",
+    "command": "\\mid"
+   },
+   {
+    "char": "⊢",
+    "command": "\\vdash"
+   },
+   {
+    "char": "⊨",
+    "command": "\\models"
+   },
+   {
+    "char": "≺",
+    "command": "\\prec"
+   },
+   {
+    "char": "≻",
+    "command": "\\succ"
+   },
+   {
+    "char": "≐",
+    "command": "\\doteq"
+   },
+   {
+    "char": "≜",
+    "command": "\\triangleq"
+   }
+  ]
+ }
+]

@@ -598,3 +598,25 @@ body.is-resizing .editor-canvas, body.is-resizing .pdf-workspace { pointer-event
 .outline li button:hover { background: var(--hover); color: var(--text); }
 .outline li button.current { color: var(--accent-text); font-weight: 600; }
 .outline-empty { margin: 0 12px 10px; font-size: 12px; color: var(--text-4); }
+
+/* Word count */
+.wordcount-total { display: flex; align-items: baseline; gap: 10px; margin-bottom: 14px; }
+.wordcount-total strong { font: 500 30px var(--serif); color: var(--text); }
+.wordcount-total span { color: var(--text-3); font-size: 13px; }
+.wordcount-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 12px; }
+.wordcount-table th { text-align: left; font-weight: 400; color: var(--text-2); padding: 6px 0; border-bottom: 1px solid var(--border); }
+.wordcount-table td { text-align: right; font-variant-numeric: tabular-nums; color: var(--text); padding: 6px 0; border-bottom: 1px solid var(--border); }
+
+/* Symbol palette, docked under the editor */
+.tool.on { background: var(--hover); color: var(--text); }
+.symbol-palette { flex: 0 0 auto; max-height: 38%; display: flex; flex-direction: column; background: var(--surface); border-top: 1px solid var(--border); min-height: 0; }
+.symbol-head { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
+.symbol-tabs { display: flex; gap: 2px; flex-wrap: wrap; }
+.symbol-tabs button { border: 0; background: none; color: var(--text-3); font-size: 12.5px; padding: 4px 9px; border-radius: var(--radius-sm); }
+.symbol-tabs button:hover { background: var(--hover); color: var(--text); }
+.symbol-tabs button.on { background: var(--hover); color: var(--text); font-weight: 500; }
+.symbol-search { margin-left: auto; display: flex; align-items: center; gap: 6px; border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 0 8px; height: 28px; color: var(--text-3); background: var(--surface-2); }
+.symbol-search input { border: 0; outline: 0; background: none; color: var(--text); font-size: 12.5px; width: 140px; }
+.symbol-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(38px, 1fr)); gap: 4px; padding: 8px; overflow-y: auto; }
+.symbol { height: 36px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); border-radius: var(--radius-sm); font: 17px var(--serif); display: grid; place-items: center; }
+.symbol:hover { border-color: var(--accent); background: var(--hover); }

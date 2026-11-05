@@ -14,6 +14,8 @@ import { applyFix, clipSelection, fixStillApplies, logContext, numberedFile, typ
 import { AssistantPanel, ExplainButton, QUICK_PROMPTS, useAssistant, type AssistantStatus } from './Assistant';
 import { Tour, TOUR_KEY, type TourStep } from './Tour';
 import { apiUrl, fetchWithWake, ownerHeaders, projectOwnerId } from './lib/api';
+import { authReady, currentAccessToken } from './lib/auth';
+import { AccountButton } from './Account';
 import { base64ToBytes, compileFiles, type SyncState } from './lib/compileSync';
 import { PdfViewer, type Zoom } from './PdfViewer';
 import { SpellSuggestions, SymbolPalette, WordCountView } from './Tools';
@@ -110,7 +112,8 @@ const isMac=typeof navigator!=='undefined'&&/Mac|iP(hone|ad)/.test(navigator.pla
 const mod=isMac?'⌘':'Ctrl+';
 const NETWORK_HELP='The PaperDesk API isn’t reachable. Start everything with “npm run dev:all”.';
 const json={'Content-Type':'application/json'};
-const apiFetch=(input:RequestInfo|URL,init?:RequestInit)=>fetch(typeof input==='string'&&input.startsWith('/api/')?apiUrl(input):input,{...init,headers:{...ownerHeaders(),...(init?.headers??{})}});
+// Every API request waits for a saved sign-in to be restored, so none goes out as the anonymous browser by mistake.
+const apiFetch=async(input:RequestInfo|URL,init?:RequestInit)=>{await authReady();return fetch(typeof input==='string'&&input.startsWith('/api/')?apiUrl(input):input,{...init,headers:{...ownerHeaders(),...(init?.headers??{})}})};
 
 // Monaco is bundled (monacoLocal.ts) but split into its own chunk; start loading it straight away.
 const monacoLoad=import('./monacoLocal');
@@ -190,7 +193,7 @@ function App(){
    history.pushState({screen:'project',id:copy.id},'',projectPath(copy.id));setProjects(x=>[copy,...x]);setProjectId(copy.id);setFileName(defaultFile(copy.files));setActiveTab('editor');notify(`Opened a copy of “${d.name}”. Changes stay in your copy.`,'success')}
   catch(e){notify(e instanceof Error&&!(e instanceof TypeError)?e.message:NETWORK_HELP,'error')}
  };
- useEffect(()=>{const openSample=()=>{if(!firstVisit.current||routeProjectId()||projects.length||sharedCopyId)return;const sample=seed[0]!;firstVisit.current=false;setProjects(seed);setProjectId(sample.id);setFileName(defaultFile(sample.files));setActiveTab('editor');history.pushState({screen:'project',id:sample.id},'',projectPath(sample.id))};const sync=async()=>{try{const r=await apiFetch('/api/projects');if(!r.ok)throw new Error();const remote=await r.json();if(!Array.isArray(remote))throw new Error();setApiOnline(true);const {merged,upload}=mergeProjects(projectsRef.current,remote.map((p:Project)=>normalizeProject(p,'server')));setProjects(merged);if(routeProjectId()){if(merged.some(p=>p.id===routeProjectId())){setProjectId(routeProjectId()!);setActiveTab('editor')}else{history.replaceState({screen:'dashboard'},'', '/');setProjectId('');setActiveTab('dashboard')}}else if(firstVisit.current&&!merged.length)openSample();else if(merged.length)firstVisit.current=false;for(const p of upload)await apiFetch(`/api/projects/${p.id}`,{method:'PUT',headers:json,body:JSON.stringify({name:p.name,files:p.files,mainFile:p.mainFile,archived:p.archived,settings:p.settings,versions:p.versions,comments:p.comments,changes:p.changes})})}catch{setApiOnline(false);if(routeProjectId()&&!projectsRef.current.some(p=>p.id===routeProjectId())){history.replaceState({screen:'dashboard'},'', '/');setProjectId('');setActiveTab('dashboard')}else openSample()}};// A shared copy is added after the first sync, which would otherwise replace the project list without it.
+ useEffect(()=>{const openSample=()=>{if(!firstVisit.current||routeProjectId()||projects.length||sharedCopyId)return;const sample=seed[0]!;firstVisit.current=false;setProjects(seed);setProjectId(sample.id);setFileName(defaultFile(sample.files));setActiveTab('editor');history.pushState({screen:'project',id:sample.id},'',projectPath(sample.id))};const sync=async()=>{try{const signIn=await authReady();if(signIn.error)notify(signIn.error,'error');if(signIn.moved.length){const map=new Map(signIn.moved.map(m=>[m.from,m.to]));projectsRef.current=projectsRef.current.map(p=>map.has(p.id)?{...p,id:map.get(p.id)!}:p);setProjects(projectsRef.current);const open=routeProjectId();if(open&&map.has(open))history.replaceState({screen:'project',id:map.get(open)},'',projectPath(map.get(open)!))}const r=await apiFetch('/api/projects');if(!r.ok)throw new Error();const remote=await r.json();if(!Array.isArray(remote))throw new Error();setApiOnline(true);const {merged,upload}=mergeProjects(projectsRef.current,remote.map((p:Project)=>normalizeProject(p,'server')));setProjects(merged);if(routeProjectId()){if(merged.some(p=>p.id===routeProjectId())){setProjectId(routeProjectId()!);setActiveTab('editor')}else{history.replaceState({screen:'dashboard'},'', '/');setProjectId('');setActiveTab('dashboard')}}else if(firstVisit.current&&!merged.length)openSample();else if(merged.length)firstVisit.current=false;for(const p of upload)await apiFetch(`/api/projects/${p.id}`,{method:'PUT',headers:json,body:JSON.stringify({name:p.name,files:p.files,mainFile:p.mainFile,archived:p.archived,settings:p.settings,versions:p.versions,comments:p.comments,changes:p.changes})})}catch{setApiOnline(false);if(routeProjectId()&&!projectsRef.current.some(p=>p.id===routeProjectId())){history.replaceState({screen:'dashboard'},'', '/');setProjectId('');setActiveTab('dashboard')}else openSample()}};// A shared copy is added after the first sync, which would otherwise replace the project list without it.
   void sync().then(openSharedCopy);fetch(apiUrl('/api/health')).then(r=>r.ok?r.json():null).then(h=>setHealth(h)).catch(()=>setHealth(null))},[]);
  useEffect(()=>{if(!projectId||!project)return;const t=window.setTimeout(async()=>{try{const r=await apiFetch(`/api/projects/${projectId}`,{method:'PUT',headers:json,body:JSON.stringify({name:project.name,files:project.files,mainFile:project.mainFile,archived:project.archived,settings:project.settings,versions:project.versions,comments:project.comments,changes:project.changes})});setApiOnline(r.ok)}catch{setApiOnline(false)}},700);return()=>window.clearTimeout(t)},[projectId,project?.name,project?.files,project?.mainFile,project?.archived,project?.settings,project?.versions,project?.comments,project?.changes]);
  useEffect(()=>{if(project&&!project.files.some(f=>f.name===fileName))setFileName(defaultFile(project.files))},[projectId,project?.files.length]);
@@ -239,7 +242,7 @@ function App(){
   const started=performance.now();
   try{
    // Only changed files are uploaded; if the server restarted and lost its copy, it answers 409 and everything is sent once.
-   const send=async(full:boolean)=>{const payload=await compileFiles(target.id,target.files,full?null:syncState.current);const r=await fetchWithWake(apiUrl(`/api/projects/${target.id}/compile`),{method:'POST',signal:controller.signal,headers:{...json,...ownerHeaders()},body:JSON.stringify({name:target.name,files:payload.files,engine,mainFile,timeoutMs:compilePrefs.timeout*1000,draft:compilePrefs.draft,stopOnFirstError:compilePrefs.stopOnFirstError})},()=>setCompileState({status:'running',message:'Waking up the compile server…'}));return{r,payload}};
+   const send=async(full:boolean)=>{await authReady();const payload=await compileFiles(target.id,target.files,full?null:syncState.current);const r=await fetchWithWake(apiUrl(`/api/projects/${target.id}/compile`),{method:'POST',signal:controller.signal,headers:{...json,...ownerHeaders()},body:JSON.stringify({name:target.name,files:payload.files,engine,mainFile,timeoutMs:compilePrefs.timeout*1000,draft:compilePrefs.draft,stopOnFirstError:compilePrefs.stopOnFirstError})},()=>setCompileState({status:'running',message:'Waking up the compile server…'}));return{r,payload}};
    let {r,payload}=await send(false);
    if(r.status===409)({r,payload}=await send(true));
    let data:any=null;try{data=await r.json()}catch{/* non-JSON body: the API is unreachable */}
@@ -253,7 +256,7 @@ function App(){
    const res=data as CompileResult;setResult(res);
    if(res.success){
     setPdfData(typeof data.pdf==='string'?base64ToBytes(data.pdf):null);
-    setPdfUrl(`${apiUrl(`/api/projects/${target.id}/pdf?t=${Date.now()}`)}&owner=${encodeURIComponent(projectOwnerId())}`);
+    setPdfUrl(`${apiUrl(`/api/projects/${target.id}/pdf?t=${Date.now()}`)}${currentAccessToken()?'':`&owner=${encodeURIComponent(projectOwnerId())}`}`);
     const w=res.warnings.length;
     setCompileState({status:'success',message:`Compiled in ${((performance.now()-started)/1000).toFixed(1)}s${w?` · ${w} warning${w>1?'s':''}`:''}`});
    }else{
@@ -342,7 +345,7 @@ function App(){
  };
  const copyText=async(text:string,done:string)=>{try{await navigator.clipboard.writeText(text);notify(done,'success')}catch{notify('Select the link and copy it with Ctrl/⌘+C.')}};
  const downloadProject=async()=>{try{const res=await apiFetch(`/api/projects/${projectId}/download`);if(!res.ok)throw 0;const blob=await res.blob();downloadBlob(blob,`${project.name}.zip`)}catch{const data=new Blob([JSON.stringify(project,null,2)],{type:'application/json'});downloadBlob(data,`${project.name.replaceAll(' ','-')}-project.json`);notify('Project downloaded as JSON (start the backend for ZIP export)')}};
- const downloadPdf=async()=>{if(!pdfUrl){notify('Compile the project to create a PDF');return}if(pdfData){downloadBlob(new Blob([pdfData],{type:'application/pdf'}),`${project.name}.pdf`);return}try{const response=await fetch(pdfUrl);if(!response.ok)throw new Error();downloadBlob(await response.blob(),`${project.name}.pdf`)}catch{notify('Could not download the compiled PDF.','error')}};
+ const downloadPdf=async()=>{if(!pdfUrl){notify('Compile the project to create a PDF');return}if(pdfData){downloadBlob(new Blob([pdfData],{type:'application/pdf'}),`${project.name}.pdf`);return}try{const response=await fetch(pdfUrl,{headers:ownerHeaders()});if(!response.ok)throw new Error();downloadBlob(await response.blob(),`${project.name}.pdf`)}catch{notify('Could not download the compiled PDF.','error')}};
  const openLogs=async()=>{setModal('logs');if(result)return;setLogState({loading:true});try{const r=await apiFetch(`/api/projects/${projectId}/logs`);if(!r.ok)throw new Error();const d=await r.json();if(d.success!==null)setResult(d);setLogState({loading:false})}catch{setLogState({loading:false,error:NETWORK_HELP})}};
  const inProject=(file:string|null)=>!!file&&!!project?.files.some(f=>f.name===file);
  /** Opens a file at a line, switching file and layout as needed. Applied once the editor shows that file. */
@@ -452,7 +455,7 @@ function App(){
   <header className="dash-header">
    <Brand/>
    <nav className="dash-nav"><button className={activeTab!=='templates'?'nav-active':''} onClick={()=>setActiveTab('dashboard')}>Projects</button><button className={activeTab==='templates'?'nav-active':''} onClick={()=>setActiveTab('templates')}>Templates</button></nav>
-   <div className="dash-right">{themeMenu}<Dropdown id="dash-help" open={openMenu==='dash-help'} setOpen={setOpenMenu} align="right" trigger={<button className="icon-btn" title="Help" aria-label="Help" onClick={()=>setOpenMenu(openMenu==='dash-help'?'':'dash-help')}><HelpCircle size={17}/></button>} items={[{label:'Take the tour',icon:<Compass size={14}/>,disabled:!projects.length,run:()=>{const recent=sortedProjects[0]??projects[0];if(recent){openProject(recent);setTour(true)}}},{label:'Keyboard shortcuts',icon:<Keyboard size={14}/>,disabled:!projects.length,run:()=>setModal('shortcuts')},{label:'Start from a template',icon:<BookOpen size={14}/>,run:()=>setActiveTab('templates')}]}/></div>
+   <div className="dash-right"><AccountButton/>{themeMenu}<Dropdown id="dash-help" open={openMenu==='dash-help'} setOpen={setOpenMenu} align="right" trigger={<button className="icon-btn" title="Help" aria-label="Help" onClick={()=>setOpenMenu(openMenu==='dash-help'?'':'dash-help')}><HelpCircle size={17}/></button>} items={[{label:'Take the tour',icon:<Compass size={14}/>,disabled:!projects.length,run:()=>{const recent=sortedProjects[0]??projects[0];if(recent){openProject(recent);setTour(true)}}},{label:'Keyboard shortcuts',icon:<Keyboard size={14}/>,disabled:!projects.length,run:()=>setModal('shortcuts')},{label:'Start from a template',icon:<BookOpen size={14}/>,run:()=>setActiveTab('templates')}]}/></div>
   </header>
   <main className="dash-main">
    <div className="dash-heading"><div><div className="eyebrow">Workspace / My projects</div><h1>{activeTab==='templates'?'Start from a template':'Your projects'}</h1><p className="subhead">{activeTab==='templates'?'Choose a starting point for your next document.':'Pick up where you left off.'}</p></div><button className="btn btn-primary" onClick={promptNewProject}><Plus size={16}/> New project</button></div>
@@ -472,6 +475,7 @@ function App(){
    </nav>
    <button className="project-title" title="Rename project" onClick={()=>renameProject(project)}><span>{project.name}</span><Pencil size={12}/></button>
    <div className="header-right">
+    <AccountButton compact/>
     <span className={`save-indicator ${saveState==='Saved'?'':'busy'} ${apiOnline===false?'offline':''}`} aria-live="polite" title={apiOnline===false?'The API is offline: changes are saved in this browser only.':'Changes are saved to the PaperDesk server.'}>{apiOnline===false?<CloudOff size={14}/>:<Cloud size={14}/>}<span className="hide-sm">{saveState==='Saved'&&apiOnline===false?'Saved in browser':saveState}</span></span>
     <div className="segmented" role="radiogroup" aria-label="Layout">
      {!narrow&&<button role="radio" aria-checked={prefs.layout==='split'} className={prefs.layout==='split'?'on':''} title="Editor & PDF" onClick={()=>setPref('layout','split')}><Columns2 size={15}/></button>}

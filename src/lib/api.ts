@@ -1,3 +1,4 @@
+import { currentAccessToken } from './auth';
 const configuredApi = String(import.meta.env.VITE_API_URL ?? '').replace(/\/+$/, '');
 const OWNER_KEY = 'paperdesk-owner-id';
 let transientOwner: string | undefined;
@@ -19,7 +20,11 @@ export function projectOwnerId() {
   }
 }
 
-export const ownerHeaders = () => ({ 'X-PaperDesk-Owner': projectOwnerId() });
+/** Signed in: the Supabase access token; otherwise this browser's anonymous project key. */
+export const ownerHeaders = (): Record<string, string> => {
+  const token = currentAccessToken();
+  return token ? { Authorization: `Bearer ${token}` } : { 'X-PaperDesk-Owner': projectOwnerId() };
+};
 
 /** Uses same-origin `/api` during development and the configured backend origin in production. */
 export function apiUrl(path: string) {

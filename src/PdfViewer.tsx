@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { AlertCircle, ChevronDown, ChevronUp, Search, X } from 'lucide-react';
 import { toSyncTexPoint } from './lib/synctex';
+import { ownerHeaders } from './lib/api';
 import { findInPdf, type HitSegment, type PdfMatch, type PdfTextItem } from './lib/pdfSearch';
 
 export type Zoom = number | 'fit' | 'page';
@@ -56,7 +57,7 @@ export function PdfViewer({ url, data, zoom, nav, syncPoint, searchOpen = false,
     (async () => {
       try {
         const pdfjs = await loadPdfjs();
-        task = pdfjs.getDocument(data ? { data: data.slice() } : url); // slice: pdf.js takes ownership of the buffer
+        task = pdfjs.getDocument(data ? { data: data.slice() } : { url, httpHeaders: ownerHeaders() }); // slice: pdf.js takes ownership of the buffer
         const pdf = await task.promise;
         const sizes = await Promise.all(Array.from({ length: pdf.numPages }, (_, i) => pdf.getPage(i + 1).then((p: any) => { const v = p.getViewport({ scale: 1 }); return { w: v.width, h: v.height }; })));
         if (cancelled) { pdf.destroy(); return; }

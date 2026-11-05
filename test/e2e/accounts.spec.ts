@@ -59,6 +59,7 @@ test('email sign-in moves this browser’s projects to the account and sign-out 
   const token = await accessToken();
   await page.route(`${SUPABASE}/auth/v1/**`, async route => {
     const url = new URL(route.request().url());
+    if (url.pathname.endsWith('/settings')) return route.fulfill({ json: { external: { email: true, google: true } } });
     if (url.pathname.endsWith('/otp')) { otp.push(route.request()); return route.fulfill({ json: {} }); }
     if (url.pathname.endsWith('/token') && url.searchParams.get('grant_type') === 'pkce') {
       return route.fulfill({ json: {

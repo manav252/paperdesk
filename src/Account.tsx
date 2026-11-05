@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { LogIn, LogOut, Mail, X } from 'lucide-react';
-import { authConfigured, currentAccount, onAccountChange, sendSignInLink, signInWithGoogle, signOut, type Account } from './lib/auth';
+import { authConfigured, currentAccount, enabledProviders, onAccountChange, sendSignInLink, signInWithGoogle, signOut, type Account } from './lib/auth';
 
 export function useAccount() {
   const [account, setAccount] = useState<Account | null>(currentAccount);
@@ -42,7 +42,9 @@ export function AccountButton({ compact = false }: { compact?: boolean }) {
 export function SignInDialog({ close }: { close: () => void }) {
   const [email, setEmail] = useState('');
   const [state, setState] = useState<{ busy?: 'google' | 'email'; sent?: string; error?: string }>({});
-  const google = async () => {
+  const [google, setGoogle] = useState(false);
+  useEffect(() => { let live = true; void enabledProviders().then(p => { if (live) setGoogle(p.google); }); return () => { live = false; }; }, []);
+  const continueWithGoogle = async () => {
     setState({ busy: 'google' });
     try { await signInWithGoogle(); } catch (e) { setState({ error: e instanceof Error ? e.message : 'Google sign-in failed.' }); }
   };
@@ -60,10 +62,12 @@ export function SignInDialog({ close }: { close: () => void }) {
       {state.sent
         ? <div className="inline-alert success" role="status"><Mail size={15} /><span>Check <strong>{state.sent}</strong> for a sign-in link. Open it in this browser to finish.</span></div>
         : <>
-          <button className="btn btn-secondary sign-in-google" onClick={() => void google()} disabled={!!state.busy}>
-            <GoogleMark /> {state.busy === 'google' ? 'Opening Google…' : 'Continue with Google'}
-          </button>
-          <div className="sign-in-or"><span>or</span></div>
+          {google && <>
+            <button className="btn btn-secondary sign-in-google" onClick={() => void continueWithGoogle()} disabled={!!state.busy}>
+              <GoogleMark /> {state.busy === 'google' ? 'Opening Google…' : 'Continue with Google'}
+            </button>
+            <div className="sign-in-or"><span>or</span></div>
+          </>}
           <form onSubmit={e => void sendLink(e)} className="sign-in-email">
             <label htmlFor="sign-in-email">Email</label>
             <input id="sign-in-email" className="text-input" type="email" autoComplete="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="you@university.edu" />

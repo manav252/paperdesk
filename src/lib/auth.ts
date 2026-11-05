@@ -83,6 +83,16 @@ export function authReady(apiBase = String(import.meta.env.VITE_API_URL ?? '').r
   return readyPromise;
 }
 
+let providersPromise: Promise<{ google: boolean }> | null = null;
+/** Which sign-in methods the Supabase project has switched on (so a disabled one isn't offered). */
+export function enabledProviders() {
+  providersPromise ??= fetch(`${SUPABASE_URL}/auth/v1/settings`, { headers: { apikey: SUPABASE_KEY } })
+    .then(r => r.ok ? r.json() : null)
+    .then(settings => ({ google: settings?.external?.google === true }))
+    .catch(() => ({ google: false }));
+  return providersPromise;
+}
+
 const redirectTo = () => `${location.origin}${location.pathname}`;
 
 export async function signInWithGoogle() {

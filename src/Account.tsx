@@ -39,7 +39,7 @@ export function AccountButton({ compact = false }: { compact?: boolean }) {
   </div>;
 }
 
-export function SignInDialog({ close }: { close: () => void }) {
+export function SignInDialog({ close, note }: { close: () => void; note?: string }) {
   const [email, setEmail] = useState('');
   const [state, setState] = useState<{ busy?: 'google' | 'email'; sent?: string; error?: string }>({});
   const [google, setGoogle] = useState(false);
@@ -58,7 +58,7 @@ export function SignInDialog({ close }: { close: () => void }) {
   return <div className="modal-backdrop" onMouseDown={e => { if (e.target === e.currentTarget) close(); }}>
     <div className="modal sign-in" role="dialog" aria-modal="true" aria-label="Sign in to PaperDesk">
       <div className="modal-head"><h3>Sign in to PaperDesk</h3><button className="icon-btn" aria-label="Close" onClick={close}><X size={17} /></button></div>
-      <p className="muted">Keep your projects on any device. Projects already in this browser move to your account.</p>
+      <p className="muted">{note ?? 'Keep your projects on any device. Projects already in this browser move to your account.'}</p>
       {state.sent
         ? <div className="inline-alert success" role="status"><Mail size={15} /><span>Check <strong>{state.sent}</strong> for a sign-in link. Open it in this browser to finish.</span></div>
         : <>

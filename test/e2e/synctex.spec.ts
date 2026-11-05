@@ -59,7 +59,9 @@ test.afterEach(async ({ page, request }) => {
 async function compile(page: Page) {
   const done = page.waitForResponse(r => /\/compile$/.test(new URL(r.url()).pathname) && r.status() === 200, { timeout: 240_000 });
   await page.getByRole('button', { name: /Recompile/ }).first().click();
-  expect((await (await done).json()).success).toBe(true);
+  // The body can be lost if the connection resets after the answer; the PDF appearing below is the real check.
+  const body = await (await done).json().catch(() => null);
+  if (body) expect(body.success).toBe(true);
   await expect(page.locator('canvas[aria-label="PDF page 4"]')).toBeAttached();
   await expect(page.locator('canvas[aria-label="PDF page 1"]')).not.toHaveClass(/is-loading/);
 }

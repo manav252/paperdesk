@@ -88,7 +88,8 @@ test('Vim and Emacs key bindings switch on and off without reloading the editor'
   await page.keyboard.press('Escape');
   await settings('vim');
   const status = page.getByTestId('keymap-status');
-  await expect(status).toBeVisible();
+  // The keymap code downloads on first use; wait until it is active before typing.
+  await expect(status).toHaveAttribute('data-keymap', 'vim');
   // Normal mode: "x" deletes the character under the cursor instead of typing it.
   await page.locator('.view-line').filter({ hasText: 'Hello world' }).click();
   await page.keyboard.press('Escape');
@@ -101,6 +102,7 @@ test('Vim and Emacs key bindings switch on and off without reloading the editor'
   await expect.poll(() => editorText(page)).toContain('\nHello world\n');
 
   await settings('emacs');
+  await expect(status).toHaveAttribute('data-keymap', 'emacs');
   await page.locator('.view-line').filter({ hasText: 'Hello world' }).click();
   await page.keyboard.press('Control+x');
   await expect(status).toContainText('C-x');

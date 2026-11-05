@@ -153,7 +153,7 @@ function App(){
  },[projectId,project?.files]);
  const notify=(text:string,tone:Tone='info')=>setToast({text,tone});
  // Vim/Emacs bindings attach to the live editor and detach when the setting changes; no editor reload.
- useEffect(()=>{const ed=editorRef.current;if(!editorReady||!ed||prefs.keymap==='default')return;let off:(()=>void)|null=null,live=true;attachKeymap(ed,prefs.keymap,keymapStatus.current).then(d=>{if(live)off=d;else d()}).catch(()=>notify('The key bindings could not be loaded.','error'));return()=>{live=false;off?.()}},[prefs.keymap,editorReady]);
+ useEffect(()=>{const ed=editorRef.current;if(!editorReady||!ed||prefs.keymap==='default')return;let off:(()=>void)|null=null,live=true;const mode=prefs.keymap;attachKeymap(ed,mode,keymapStatus.current).then(d=>{if(!live){d();return}off=d;keymapStatus.current?.setAttribute('data-keymap',mode)}).catch(()=>notify('The key bindings could not be loaded.','error'));return()=>{live=false;off?.();keymapStatus.current?.removeAttribute('data-keymap')}},[prefs.keymap,editorReady]);
  useEffect(()=>{const ed=editorRef.current,monaco=monacoRef.current;if(!editorReady||!ed||!monaco||!prefs.spellcheck)return;const spell=attachSpellcheck(monaco,ed,setSpellMenu);spellRef.current=spell;return()=>{spell.dispose();spellRef.current=null;setSpellMenu(null)}},[prefs.spellcheck,editorReady]);
  const setPref=<K extends keyof LayoutPrefs>(k:K,v:LayoutPrefs[K])=>setPrefs(p=>({...p,[k]:v}));
  const compiling=compile_.status==='running';

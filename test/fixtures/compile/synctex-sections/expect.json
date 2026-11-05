@@ -1,0 +1,7 @@
+{
+  "engines": ["pdflatex"],
+  "success": true,
+  "minPages": 3,
+  "contains": ["Source and PDF sync check", "Closing marker sentence", "Results marker sentence"],
+  "sync": { "file": "chapters/results.tex", "line": 2 }
+}

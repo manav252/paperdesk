@@ -6,7 +6,7 @@ import path from 'node:path';
 import { brotliCompressSync, constants, gzipSync } from 'node:zlib';
 
 const root = path.resolve(process.argv[2] ?? 'dist');
-const TEXT = /\.(js|mjs|css|html|svg|json|txt|map|ttf)$/i;
+const TEXT = /\.(js|mjs|css|html|svg|json|txt|map|ttf|dic|aff)$/i;
 let before = 0, after = 0;
 const walk = dir => readdirSync(dir).flatMap(name => {
   const full = path.join(dir, name);

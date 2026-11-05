@@ -620,3 +620,21 @@ body.is-resizing .editor-canvas, body.is-resizing .pdf-workspace { pointer-event
 .symbol-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(38px, 1fr)); gap: 4px; padding: 8px; overflow-y: auto; }
 .symbol { height: 36px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text); border-radius: var(--radius-sm); font: 17px var(--serif); display: grid; place-items: center; }
 .symbol:hover { border-color: var(--accent); background: var(--hover); }
+.keymap-status { margin-right: auto; font-family: var(--mono); color: var(--text-2); min-width: 1ch; }
+.keymap-status input { font: inherit; background: none; border: 0; outline: 0; color: var(--text); }
+
+/* Spelling suggestions (right-click on an underlined word) */
+.spell-menu { position: fixed; z-index: 60; min-width: 190px; max-width: 260px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-md); padding: 4px; display: flex; flex-direction: column; }
+.spell-menu button { border: 0; background: none; text-align: left; color: var(--text); font-size: 13px; padding: 6px 10px; border-radius: var(--radius-sm); }
+.spell-menu button:hover, .spell-menu button:focus-visible { background: var(--hover); }
+.spell-menu .spell-suggestion { font-weight: 500; }
+.spell-menu-note { color: var(--text-3); font-size: 12.5px; padding: 6px 10px; }
+.spell-menu-sep { height: 1px; background: var(--border); margin: 4px 2px; }
+
+/* Search inside the PDF */
+.pdf-viewer { flex: 1; min-height: 0; display: flex; flex-direction: column; position: relative; }
+.pdf-search { position: absolute; top: 8px; right: 18px; z-index: 5; display: flex; align-items: center; gap: 4px; padding: 4px 4px 4px 10px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow-md); color: var(--text-3); }
+.pdf-search input { border: 0; outline: 0; background: none; color: var(--text); font-size: 13px; width: 180px; padding: 4px 2px; }
+.pdf-search-count { font-size: 12px; min-width: 64px; text-align: right; font-variant-numeric: tabular-nums; }
+.pdf-search-hit { position: absolute; transform-origin: left top; background: rgba(255, 196, 0, .38); border-radius: 2px; pointer-events: none; }
+.pdf-search-hit.current { background: rgba(255, 140, 0, .55); outline: 2px solid rgba(230, 110, 0, .8); }

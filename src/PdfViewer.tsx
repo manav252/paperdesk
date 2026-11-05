@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { AlertCircle } from 'lucide-react';
+import { AlertCircle, ChevronDown, ChevronUp, Search, X } from 'lucide-react';
 import { toSyncTexPoint } from './lib/synctex';
+import { findInPdf, type HitSegment, type PdfMatch, type PdfTextItem } from './lib/pdfSearch';
 
 export type Zoom = number | 'fit' | 'page';
 type Size = { w: number; h: number };
@@ -21,12 +22,13 @@ function loadPdfjs() {
  * and a recompile redraws pages in place so the scroll position and the old image stay until the new one is ready.
  * Click or select text on a page to jump to the matching source line (SyncTeX).
  */
-export function PdfViewer({ url, data, zoom, nav, syncPoint, onLoaded, onScale, onPageChange, onSourceJump, onRenderTime }: {
+export function PdfViewer({ url, data, zoom, nav, syncPoint, searchOpen = false, onSearchClose, onLoaded, onScale, onPageChange, onSourceJump, onRenderTime }: {
   url: string; data?: Uint8Array | null; zoom: Zoom; nav: { page: number; n: number };
   syncPoint: { page: number; x: number; y: number; width?: number; height?: number; n?: number } | null;
   onLoaded: (pages: number) => void; onScale: (pct: number) => void; onPageChange: (page: number) => void;
   onSourceJump: (page: number, x: number, y: number) => void;
   onRenderTime?: (ms: number) => void;
+  searchOpen?: boolean; onSearchClose?: () => void;
 }) {
   const boxRef = useRef<HTMLDivElement>(null);
   const pageRefs = useRef<(HTMLDivElement | null)[]>([]);
@@ -118,6 +120,42 @@ export function PdfViewer({ url, data, zoom, nav, syncPoint, onLoaded, onScale, 
     root.scrollTop = Math.max(0, el.offsetTop + (syncPoint.y - (syncPoint.height ?? 0) / 2) * scale - root.clientHeight / 2);
   }, [syncPoint, doc]);
 
+  // Search: match the text of every page; highlights are drawn in the text layers.
+  const [query, setQuery] = useState('');
+  const [matches, setMatches] = useState<PdfMatch[]>([]);
+  const [current, setCurrent] = useState(0);
+  const [searching, setSearching] = useState(false);
+  const searchInput = useRef<HTMLInputElement>(null);
+  useEffect(() => { if (searchOpen) searchInput.current?.select(); else { setQuery(''); setMatches([]); } }, [searchOpen]);
+  useEffect(() => {
+    if (!doc || !searchOpen || !query.trim()) { setMatches([]); return; }
+    let live = true;
+    setSearching(true);
+    const timer = window.setTimeout(() => void pageTexts(doc.pdf).then(pages => {
+      if (!live) return;
+      const found = findInPdf(pages, query);
+      setMatches(found);
+      setCurrent(c => Math.min(c, Math.max(0, found.length - 1)));
+      setSearching(false);
+    }, () => { if (live) setSearching(false); }), 150);
+    return () => { live = false; window.clearTimeout(timer); };
+  }, [doc, query, searchOpen]);
+  useEffect(() => { setCurrent(0); }, [query]);
+  // Keep the current match in view.
+  useEffect(() => {
+    const root = boxRef.current;
+    if (!root || !matches.length) return;
+    const raf = requestAnimationFrame(() => {
+      const hit = root.querySelector('.pdf-search-hit.current');
+      const page = pageRefs.current[(matches[current]?.page ?? 1) - 1];
+      if (hit) { const r = hit.getBoundingClientRect(), box = root.getBoundingClientRect(); if (r.top < box.top + 40 || r.bottom > box.bottom - 20) root.scrollTop += r.top - box.top - root.clientHeight / 2; }
+      else if (page) root.scrollTop = page.offsetTop - PAD;
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [matches, current, scale]);
+  const step = (by: number) => { if (matches.length) setCurrent(c => (c + by + matches.length) % matches.length); };
+  const hitsFor = (page: number) => matches.flatMap((m, i) => m.page === page ? m.segments.map(seg => ({ ...seg, current: i === current })) : []);
+
   const jump = async (index: number, event: React.MouseEvent<HTMLDivElement>) => {
     const current = docRef.current;
     if (!current) return;
@@ -142,23 +180,46 @@ export function PdfViewer({ url, data, zoom, nav, syncPoint, onLoaded, onScale, 
   };
 
   if (err && !doc) return <div className="pdf-scroll" ref={boxRef}><div className="pdf-error" role="alert"><AlertCircle size={18} /><span>{err}</span></div></div>;
-  return <div className="pdf-scroll" ref={boxRef}>
+  return <div className="pdf-viewer">
+    {searchOpen && <div className="pdf-search" role="search">
+      <Search size={14} aria-hidden />
+      <input ref={searchInput} value={query} onChange={e => setQuery(e.target.value)} placeholder="Search the PDF" aria-label="Search the PDF"
+        onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); step(e.shiftKey ? -1 : 1); } if (e.key === 'Escape') { e.preventDefault(); onSearchClose?.(); } }} />
+      <span className="pdf-search-count" aria-live="polite">{!query.trim() ? '' : searching && !matches.length ? '…' : matches.length ? `${current + 1} of ${matches.length}` : 'No results'}</span>
+      <button className="icon-btn sm" aria-label="Previous match" title="Previous match (Shift+Enter)" disabled={!matches.length} onClick={() => step(-1)}><ChevronUp size={14} /></button>
+      <button className="icon-btn sm" aria-label="Next match" title="Next match (Enter)" disabled={!matches.length} onClick={() => step(1)}><ChevronDown size={14} /></button>
+      <button className="icon-btn sm" aria-label="Close PDF search" title="Close (Esc)" onClick={onSearchClose}><X size={14} /></button>
+    </div>}
+  <div className="pdf-scroll" ref={boxRef}>
     {!doc && <div className="pane-loading overlay">Rendering PDF…</div>}
     {err && <div className="pdf-error" role="alert"><AlertCircle size={18} /><span>{err}</span></div>}
     <div className="pdf-pages" style={{ gap: GAP }}>
       {doc?.sizes.map((s, i) => <div key={i} data-index={i} ref={el => { pageRefs.current[i] = el; }} className="pdf-page" style={{ width: Math.floor(s.w * scale), height: Math.floor(s.h * scale) }}
         title="Click or select text to jump to the source" onClick={e => { if (!window.getSelection()?.toString()) void jump(i, e); }} onMouseUp={e => { if (window.getSelection()?.toString()) void jump(i, e); }}>
-        <PdfPage pdf={doc.pdf} index={i} scale={scale} active={visible.has(i)} onRenderTime={cb.current.onRenderTime} />
+        <PdfPage pdf={doc.pdf} index={i} scale={scale} active={visible.has(i)} onRenderTime={cb.current.onRenderTime} hits={hitsFor(i + 1)} />
         {syncPoint?.page === i + 1 && (syncPoint.width && syncPoint.height
           ? <span key={syncPoint.n} className="sync-highlight" data-testid="sync-highlight" style={{ left: syncPoint.x * scale - 2, top: (syncPoint.y - syncPoint.height) * scale - 2, width: syncPoint.width * scale + 4, height: syncPoint.height * scale + 4 }} aria-hidden />
           : <span className="sync-marker" data-testid="sync-highlight" style={{ left: syncPoint.x * scale - 6, top: syncPoint.y * scale - 6 }} aria-hidden />)}
       </div>)}
     </div>
+  </div>
   </div>;
 }
 
+/** Text items of every page, read once per document. */
+const textCache = new WeakMap<object, Promise<PdfTextItem[][]>>();
+function pageTexts(pdf: any) {
+  let pages = textCache.get(pdf);
+  if (!pages) {
+    pages = Promise.all(Array.from({ length: pdf.numPages }, (_, i) => pdf.getPage(i + 1).then((page: any) => page.getTextContent()).then((content: any) =>
+      content.items.filter((item: any) => typeof item.str === 'string' && item.str).map((item: any) => ({ text: item.str, eol: !!item.hasEOL })))));
+    textCache.set(pdf, pages);
+  }
+  return pages;
+}
+
 /** One page. Renders off screen and then copies the result in, so a recompile replaces the image without a blank frame. */
-function PdfPage({ pdf, index, scale, active, onRenderTime }: { pdf: any; index: number; scale: number; active: boolean; onRenderTime?: (ms: number) => void }) {
+function PdfPage({ pdf, index, scale, active, onRenderTime, hits }: { pdf: any; index: number; scale: number; active: boolean; onRenderTime?: (ms: number) => void; hits: (HitSegment & { current: boolean })[] }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const drawn = useRef<{ pdf: any; scale: number } | null>(null);
   const [ready, setReady] = useState(false);
@@ -187,10 +248,10 @@ function PdfPage({ pdf, index, scale, active, onRenderTime }: { pdf: any; index:
     })();
     return () => { cancelled = true; task?.cancel?.(); };
   }, [pdf, scale, active, index, onRenderTime]);
-  return <><canvas ref={canvasRef} aria-label={`PDF page ${index + 1}`} className={ready ? '' : 'is-loading'} /><PdfTextLayer pdf={pdf} index={index} scale={scale} /></>;
+  return <><canvas ref={canvasRef} aria-label={`PDF page ${index + 1}`} className={ready ? '' : 'is-loading'} /><PdfTextLayer pdf={pdf} index={index} scale={scale} hits={hits} /></>;
 }
 
-function PdfTextLayer({ pdf, index, scale }: { pdf: any; index: number; scale: number }) {
+function PdfTextLayer({ pdf, index, scale, hits }: { pdf: any; index: number; scale: number; hits: (HitSegment & { current: boolean })[] }) {
   const [items, setItems] = useState<{ text: string; left: number; top: number; width: number; height: number; angle: number }[]>([]);
   useEffect(() => {
     let live = true;
@@ -211,6 +272,13 @@ function PdfTextLayer({ pdf, index, scale }: { pdf: any; index: number; scale: n
   }, [pdf, index, scale]);
   return <div className="pdf-text-layer" aria-label={`Selectable text on PDF page ${index + 1}`}>
     {items.map((item, i) => <span key={i} style={{ left: item.left, top: item.top, width: item.width, height: item.height, fontSize: item.height, transform: `rotate(${item.angle}rad)` }}>{item.text}</span>)}
+    {hits.map((hit, i) => {
+      const item = items[hit.item];
+      if (!item) return null;
+      // Characters are spread evenly over the item's width, which is close enough for a highlight.
+      const per = item.width / Math.max(1, item.text.length);
+      return <mark key={`h${i}`} className={`pdf-search-hit${hit.current ? ' current' : ''}`} aria-hidden style={{ left: item.left + hit.start * per, top: item.top, width: Math.max(2, (hit.end - hit.start) * per), height: item.height, transform: `rotate(${item.angle}rad)` }} />;
+    })}
   </div>;
 }
 

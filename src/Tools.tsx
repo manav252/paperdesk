@@ -63,3 +63,22 @@ export function SymbolPalette({ onInsert, onClose }: { onInsert: (command: strin
     </div>
   </section>;
 }
+
+/** Right-click menu for a misspelled word: suggestions first, then “Add to dictionary”. */
+export function SpellSuggestions({ menu, replace, addWord, close }: { menu: { x: number; y: number; word: string; suggestions: string[] | null }; replace: (text: string) => void; addWord: () => void; close: () => void }) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') close(); };
+    const onDown = (e: MouseEvent) => { if (!(e.target as HTMLElement).closest?.('.spell-menu')) close(); };
+    window.addEventListener('keydown', onKey);
+    window.addEventListener('mousedown', onDown);
+    return () => { window.removeEventListener('keydown', onKey); window.removeEventListener('mousedown', onDown); };
+  }, [close]);
+  const left = Math.min(menu.x, window.innerWidth - 220), top = Math.min(menu.y, window.innerHeight - 260);
+  return <div className="spell-menu" role="menu" aria-label={`Spelling suggestions for ${menu.word}`} style={{ left, top }}>
+    {menu.suggestions === null && <div className="spell-menu-note">Finding suggestions…</div>}
+    {menu.suggestions?.length === 0 && <div className="spell-menu-note">No suggestions</div>}
+    {menu.suggestions?.map(s => <button key={s} role="menuitem" className="spell-suggestion" onClick={() => replace(s)}>{s}</button>)}
+    <div className="spell-menu-sep" />
+    <button role="menuitem" onClick={addWord}>Add “{menu.word}” to dictionary</button>
+  </div>;
+}

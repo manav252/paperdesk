@@ -1,0 +1,13 @@
+{
+ "keys": [
+  {
+   "kty": "EC",
+   "x": "9QYFueQuq6NMajh8Zhiclih7Y_uhR34tEWbvH7R1uqA",
+   "y": "vMZisgXcxVXJDrfBKanF6Ve8pv9w7KKdceqhBf_I4qM",
+   "crv": "P-256",
+   "kid": "paperdesk-test",
+   "alg": "ES256",
+   "use": "sig"
+  }
+ ]
+}

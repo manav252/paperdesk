@@ -1,4 +1,10 @@
+import { readFileSync } from 'node:fs';
 import { defineConfig, devices } from '@playwright/test';
+
+// Sign-in in local runs: a fake Supabase origin (tests answer its requests) and a test-only signing key that only
+// this local API trusts. See test/fixtures/auth/README.md.
+export const FAKE_SUPABASE_URL = 'http://127.0.0.1:54399';
+const testJwks = readFileSync('test/fixtures/auth/test-jwks.json', 'utf8');
 
 const externalBaseUrl = process.env.E2E_BASE_URL;
 if (externalBaseUrl && !process.env.E2E_API_URL) throw new Error('Set E2E_API_URL when testing an external frontend.');
@@ -26,7 +32,7 @@ export default defineConfig({
       reuseExistingServer: false,
       timeout: 180_000,
       // An empty key overrides any .env value, so the tests never call the external assistant service.
-      env: { ...process.env, TMPDIR: '/private/tmp', PAPERDESK_DATA: '/tmp/paperdesk-playwright-data', PORT: '3002', ANTHROPIC_API_KEY: '' },
+      env: { ...process.env, TMPDIR: '/private/tmp', PAPERDESK_DATA: '/tmp/paperdesk-playwright-data', PORT: '3002', ANTHROPIC_API_KEY: '', SUPABASE_URL: FAKE_SUPABASE_URL, SUPABASE_JWKS: testJwks, SUPABASE_JWT_SECRET: '' },
     },
     {
       // Test the production build: a few bundled files load reliably, unlike the hundreds of modules the dev server serves.
@@ -35,7 +41,7 @@ export default defineConfig({
       url: 'http://127.0.0.1:4173',
       reuseExistingServer: false,
       timeout: 180_000,
-      env: { ...process.env, PAPERDESK_API_PROXY: 'http://127.0.0.1:3002', PAPERDESK_VITE_CACHE: '/tmp/paperdesk-vite-e2e' },
+      env: { ...process.env, PAPERDESK_API_PROXY: 'http://127.0.0.1:3002', PAPERDESK_VITE_CACHE: '/tmp/paperdesk-vite-e2e', VITE_SUPABASE_URL: FAKE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY: 'test-publishable-key' },
     },
   ] }),
 });

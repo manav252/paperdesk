@@ -1,0 +1,9 @@
+{
+ "kty": "EC",
+ "x": "9QYFueQuq6NMajh8Zhiclih7Y_uhR34tEWbvH7R1uqA",
+ "y": "vMZisgXcxVXJDrfBKanF6Ve8pv9w7KKdceqhBf_I4qM",
+ "crv": "P-256",
+ "d": "Z3pHbBemmTQg0m1PrcBcYx6tzbWl5gl6JD77M7kiSP0",
+ "kid": "paperdesk-test",
+ "alg": "ES256"
+}

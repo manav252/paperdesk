@@ -13,7 +13,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       texlive-latex-base texlive-latex-recommended texlive-latex-extra \
       texlive-fonts-recommended texlive-pictures texlive-publishers \
       texlive-bibtex-extra texlive-xetex texlive-luatex \
-      texlive-font-utils ghostscript \
+      texlive-font-utils texlive-extra-utils ghostscript \
     && fc-cache -fs \
     && luaotfload-tool --update --force \
     && rm -rf /var/lib/apt/lists/* /tmp/*
@@ -24,7 +24,7 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts
 COPY server.ts ./server.ts
-COPY src/lib/latexLog.ts src/lib/synctex.ts ./src/lib/
+COPY src/lib/latexLog.ts src/lib/synctex.ts src/lib/wordcount.ts ./src/lib/
 COPY server/assistant.ts server/persistence.ts server/workspace.ts ./server/
 
 EXPOSE 10000

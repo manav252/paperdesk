@@ -13,6 +13,7 @@ import unzipper from 'unzipper';
 import archiver from 'archiver';
 import { parseLatexLog, type LogEntry } from './src/lib/latexLog';
 import { parseForwardSync, parseInverseSync } from './src/lib/synctex';
+import { parseTexcount } from './src/lib/wordcount';
 import { assistantConfigured, assistantModel, assistantRouter } from './server/assistant';
 import { ProjectPersistence, type ProjectData, type StoredFile } from './server/persistence';
 import { syncWorkspace, Workspaces, type SourceFile, type Workspace } from './server/workspace';
@@ -852,6 +853,37 @@ app.post('/api/projects/:id/synctex', async (req, res) => {
     if (temporaryRoot) await fs.rm(temporaryRoot, { recursive: true, force: true }).catch(() => undefined);
     endTurn();
     if (syncLockKey && SYNCING.get(syncLockKey) === queued) SYNCING.delete(syncLockKey);
+  }
+});
+
+/** Word count with texcount, from the text files the browser sends (so unsaved and uncompiled edits count). */
+app.post('/api/projects/:id/wordcount', async (req, res) => {
+  let dir = '';
+  try {
+    projectPath(String(req.params.id));
+    const mainFile = safeName(String(req.body.mainFile ?? 'main.tex'));
+    if (!mainFile.endsWith('.tex')) return void send(res, 400, 'Main document must be a .tex file');
+    const files = (Array.isArray(req.body.files) ? req.body.files : [])
+      .filter((f: StoredFile) => f && typeof f.name === 'string' && /\.(tex|bib|sty|cls)$/i.test(f.name) && f.encoding !== 'base64' && typeof f.content === 'string') as StoredFile[];
+    validateFiles(files);
+    if (!files.some(f => f.name === mainFile)) return void send(res, 400, `Main file “${mainFile}” not found in the project`);
+    dir = await fs.mkdtemp(path.join(os.tmpdir(), 'paperdesk-count-'));
+    for (const file of files) {
+      const target = path.join(dir, safeName(file.name));
+      await fs.mkdir(path.dirname(target), { recursive: true });
+      await fs.writeFile(target, toBuffer(file));
+    }
+    await fs.mkdir(path.join(dir, 'tmp'), { recursive: true });
+    if (COMPILE_MODE === 'native') await giveCompileFilesToSandboxUser(dir);
+    const run = await runTool(dir, ['texcount', '-inc', '-total', '-sum', '-utf8', mainFile], 20_000);
+    const count = parseTexcount(run.stdout);
+    if (!count) return void send(res, 422, run.killed ? 'Word count took too long.' : 'texcount could not read this document.');
+    res.json(count);
+  } catch (e) {
+    if (e instanceof Error && (e as NodeJS.ErrnoException).code === 'ENOENT') return void send(res, 503, 'Word count needs the LaTeX compiler, which is not available.');
+    send(res, 400, e);
+  } finally {
+    if (dir) await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
   }
 });
 

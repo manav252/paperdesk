@@ -14,6 +14,7 @@ import archiver from 'archiver';
 import { parseLatexLog, type LogEntry } from './src/lib/latexLog';
 import { parseForwardSync, parseInverseSync } from './src/lib/synctex';
 import { parseTexcount } from './src/lib/wordcount';
+import { createAuth, userOwnerId } from './server/auth';
 import { assistantConfigured, assistantModel, assistantRouter } from './server/assistant';
 import { ProjectPersistence, type ProjectData, type StoredFile } from './server/persistence';
 import { syncWorkspace, Workspaces, type SourceFile, type Workspace } from './server/workspace';
@@ -64,14 +65,26 @@ app.use('/api', (req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', origin);
   res.setHeader('Vary', 'Origin');
   res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,DELETE,OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-PaperDesk-Owner');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-PaperDesk-Owner');
   if (req.method === 'OPTIONS') return void res.status(204).end();
   next();
 });
-app.use('/api/projects', (req, res, next) => {
+const auth = createAuth({ url: process.env.SUPABASE_URL, jwks: process.env.SUPABASE_JWKS, jwtSecret: process.env.SUPABASE_JWT_SECRET });
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const bearerToken = (req: express.Request) => /^Bearer\s+(\S+)$/i.exec(req.header('Authorization') ?? '')?.[1];
+
+// A signed-in request (Supabase access token) uses the account's projects; otherwise the browser's anonymous key.
+app.use('/api/projects', async (req, res, next) => {
+  const token = bearerToken(req);
+  if (token) {
+    const user = await auth.verify(token);
+    if (!user) return void send(res, 401, 'Your sign-in has expired. Sign in again.');
+    res.locals.projectOwner = userOwnerId(user);
+    return next();
+  }
   if (persistence.mode !== 'neon-r2') return next();
   const owner = String(req.header('X-PaperDesk-Owner') ?? req.query.owner ?? '');
-  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(owner)) return void send(res, 401, 'This browser has no valid project workspace key.');
+  if (!UUID.test(owner)) return void send(res, 401, 'This browser has no valid project workspace key.');
   res.locals.projectOwner = owner;
   next();
 });
@@ -292,7 +305,22 @@ function runNativeCompiler(cwd: string, argv: string[], timeoutMs: number, onSta
 app.get('/api/health', async (_req, res) => {
   const status = COMPILE_MODE === 'native' ? { docker: false, image: false } : await dockerStatus();
   const compilerReady = COMPILE_MODE === 'native' ? nativeCompilerReady : status.docker && status.image;
-  res.status(compilerReady ? 200 : 503).json({ ok: compilerReady, ...status, compilerMode: COMPILE_MODE, compilerReady, maxCompileTimeoutMs: MAX_COMPILE_TIMEOUT_MS, storage: { mode: persistence.mode, ready: persistence.ready || persistence.mode === 'neon-r2' }, compilerImage: IMAGE, assistant: { configured: assistantConfigured(), model: assistantModel() } });
+  res.status(compilerReady ? 200 : 503).json({ ok: compilerReady, ...status, compilerMode: COMPILE_MODE, compilerReady, maxCompileTimeoutMs: MAX_COMPILE_TIMEOUT_MS, storage: { mode: persistence.mode, ready: persistence.ready || persistence.mode === 'neon-r2' }, compilerImage: IMAGE, assistant: { configured: assistantConfigured(), model: assistantModel() }, auth: { configured: auth.configured } });
+});
+
+/** On first sign-in, moves the projects of the browser's anonymous key to the account. */
+app.post('/api/account/claim', async (req, res) => {
+  try {
+    const token = bearerToken(req);
+    const user = token ? await auth.verify(token) : null;
+    if (!user) return void send(res, 401, 'Sign in to keep your projects.');
+    const anonymous = String(req.body?.anonymousId ?? '');
+    if (!UUID.test(anonymous)) return void send(res, 400, 'A valid anonymous project key is required.');
+    // Local development storage keeps one shared project folder, so there is nothing to move.
+    if (persistence.mode !== 'neon-r2') return void res.json({ moved: [] });
+    const moved = await persistence.claim(anonymous, userOwnerId(user), id => `${id.slice(0, 40)}-${crypto.randomUUID().slice(0, 6)}`);
+    res.json({ moved });
+  } catch (e) { send(res, 500, e); }
 });
 
 app.get('/api/projects', async (_req, res) => {

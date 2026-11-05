@@ -123,6 +123,34 @@ export class ProjectPersistence {
     await Promise.all(keys.map(Key => this.s3!.send(new DeleteObjectCommand({ Bucket: this.bucket, Key }))));
   }
 
+  /**
+   * Moves every project of `fromOwner` to `toOwner` in one transaction (used when an anonymous browser signs in).
+   * A project whose id the account already uses gets a new id. Each row keeps its stored source object, so files
+   * are not copied; compiled PDFs are not moved and are rebuilt on the next compile. Returns the id changes.
+   */
+  async claim(fromOwner: string, toOwner: string, newId: (id: string) => string): Promise<{ from: string; to: string }[]> {
+    const client = await this.pool!.connect();
+    try {
+      await client.query('BEGIN');
+      const { rows } = await client.query('SELECT id FROM paperdesk_projects WHERE owner_id = $1 FOR UPDATE', [fromOwner]);
+      const taken = new Set((await client.query('SELECT id FROM paperdesk_projects WHERE owner_id = $1', [toOwner])).rows.map(r => String(r.id)));
+      const moved: { from: string; to: string }[] = [];
+      for (const row of rows) {
+        const from = String(row.id);
+        let to = from;
+        while (taken.has(to)) to = newId(from);
+        taken.add(to);
+        await client.query('UPDATE paperdesk_projects SET owner_id = $1, id = $2 WHERE owner_id = $3 AND id = $4', [toOwner, to, fromOwner, from]);
+        moved.push({ from, to });
+      }
+      await client.query('COMMIT');
+      return moved;
+    } catch (error) {
+      await client.query('ROLLBACK').catch(() => undefined);
+      throw error;
+    } finally { client.release(); }
+  }
+
   async putArtifact(id: string, ownerId: string, name: 'compiled.pdf' | 'synctex.gz', body: Buffer) {
     await this.s3!.send(new PutObjectCommand({ Bucket: this.bucket, Key: `projects/${ownerId}/${id}/artifacts/${name}`, Body: body, ContentType: name.endsWith('.pdf') ? 'application/pdf' : 'application/gzip' }));
   }

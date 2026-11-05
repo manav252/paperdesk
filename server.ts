@@ -14,7 +14,8 @@ import archiver from 'archiver';
 import { parseLatexLog, type LogEntry } from './src/lib/latexLog';
 import { parseForwardSync, parseInverseSync } from './src/lib/synctex';
 import { parseTexcount } from './src/lib/wordcount';
-import { createAuth, userOwnerId } from './server/auth';
+import { createAuth, userOwnerId, type AuthUser } from './server/auth';
+import { ROLES, roleAllows, SharingStore } from './server/sharing';
 import { assistantConfigured, assistantModel, assistantRouter } from './server/assistant';
 import { ProjectPersistence, type ProjectData, type StoredFile } from './server/persistence';
 import { syncWorkspace, Workspaces, type SourceFile, type Workspace } from './server/workspace';
@@ -69,6 +70,7 @@ app.use('/api', (req, res, next) => {
   if (req.method === 'OPTIONS') return void res.status(204).end();
   next();
 });
+const sharing = persistence.database ? new SharingStore(persistence.database) : null;
 const auth = createAuth({ url: process.env.SUPABASE_URL, jwks: process.env.SUPABASE_JWKS, jwtSecret: process.env.SUPABASE_JWT_SECRET });
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const bearerToken = (req: express.Request) => /^Bearer\s+(\S+)$/i.exec(req.header('Authorization') ?? '')?.[1];
@@ -80,8 +82,28 @@ app.use('/api/projects', async (req, res, next) => {
     const user = await auth.verify(token);
     if (!user) return void send(res, 401, 'Your sign-in has expired. Sign in again.');
     res.locals.projectOwner = userOwnerId(user);
-    return next();
+    res.locals.user = user;
+    res.locals.author = user.email ?? null;
+    res.locals.role = 'owner';
+    // A shared project's id (s-…) maps to its real owner and id here, so the role check covers every route below.
+    const shared = /^\/(s-[\w-]+)(\/.*)?$/.exec(req.path);
+    if (!shared) return next();
+    try {
+      const [, alias = '', sub = ''] = shared;
+      const access = await sharing?.resolve(alias, user.id);
+      if (!access) return void send(res, 404, 'Project not found');
+      // Removing a shared project from your list means leaving it; the project itself stays.
+      if (req.method === 'DELETE' && !sub && access.role !== 'owner') { await sharing!.leave(alias, user.id); return void res.status(204).end(); }
+      if (!roleAllows(access.role, req.method, sub)) return void send(res, 403, access.role === 'viewer' ? 'You have view-only access to this project.' : 'Only the project owner can do that.');
+      res.locals.projectOwner = access.ownerId;
+      res.locals.role = access.role;
+      req.url = req.url.replace(`/${alias}`, `/${access.projectId}`);
+      const json = res.json.bind(res);
+      res.json = (body: any) => json(body && body.id === access.projectId ? { ...body, id: alias } : body);
+      return next();
+    } catch (e) { return void send(res, 500, e); }
   }
+  if (req.path.startsWith('/s-')) return void send(res, 401, 'Sign in to open this shared project.');
   if (persistence.mode !== 'neon-r2') return next();
   const owner = String(req.header('X-PaperDesk-Owner') ?? req.query.owner ?? '');
   if (!UUID.test(owner)) return void send(res, 401, 'This browser has no valid project workspace key.');
@@ -323,8 +345,29 @@ app.post('/api/account/claim', async (req, res) => {
   } catch (e) { send(res, 500, e); }
 });
 
+/** Joins a project from an invite or link token. */
+app.post('/api/invites/:token/accept', async (req, res) => {
+  try {
+    const token = bearerToken(req);
+    const user = token ? await auth.verify(token) : null;
+    if (!user) return void send(res, 401, 'Sign in to accept this invitation.');
+    if (!sharing) return void send(res, 501, 'Sharing needs the production database.');
+    const result = await sharing.accept(String(req.params.token), { id: user.id, ownerId: userOwnerId(user), email: user.email });
+    if ('error' in result) return void send(res, result.status!, result.error);
+    res.json(result);
+  } catch (e) { send(res, 500, e); }
+});
+
 app.get('/api/projects', async (_req, res) => {
-  try { res.json(await listProjects(projectOwner(res))); } catch (e) { send(res, 500, e); }
+  try {
+    const owner = projectOwner(res);
+    const own = await listProjects(owner);
+    const user = res.locals.user as AuthUser | undefined;
+    if (!sharing || !user) return void res.json(own);
+    const [mine, memberships] = await Promise.all([sharing.sharedIds(owner), sharing.memberships(user.id)]);
+    const joined = await Promise.all(memberships.map(m => persistence.read(m.projectId, m.ownerId).then(p => ({ ...p, id: m.alias, role: m.role }), () => null)));
+    res.json([...own.map(p => mine.has(p.id) ? { ...p, role: 'owner', shared: true } : p), ...joined.filter(Boolean)]);
+  } catch (e) { send(res, 500, e); }
 });
 
 app.post('/api/projects', async (req, res) => {
@@ -345,8 +388,15 @@ app.put('/api/projects/:id', async (req, res) => {
   try {
     // Fields left out of the body keep their stored values (the storage layer merges them).
     const files = Array.isArray(req.body.files) ? req.body.files : undefined;
+    // Shared projects: refuse a save based on an older version instead of overwriting someone's work.
+    const base = Number(req.body.baseModified);
+    if (base && persistence.mode === 'neon-r2') {
+      const stored = await persistence.read(req.params.id, projectOwner(res)).catch(() => null);
+      if (stored && stored.modified > base) return void res.status(409).json({ error: 'Someone else changed this project. Reload to get their version.', conflict: true });
+    }
     const saved = await writeProject(req.params.id, { name: req.body.name, files, mainFile: req.body.mainFile, archived: req.body.archived, settings: req.body.settings, versions: req.body.versions, comments: req.body.comments, changes: req.body.changes }, { replace: !!files }, projectOwner(res));
     // The browser already has the files it just sent; echoing them back would double the transfer.
+    if (files && sharing) await sharing.record(projectOwner(res), req.params.id, files, res.locals.author ?? null).catch(e => console.error('Saving file history failed:', e));
     res.json({ ...saved, files: files ? undefined : saved.files });
   } catch (e) { send(res, 400, e); }
 });
@@ -354,7 +404,7 @@ app.put('/api/projects/:id', async (req, res) => {
 app.delete('/api/projects/:id', async (req, res) => {
   try {
     projectPath(req.params.id);
-    if (persistence.mode === 'neon-r2') await persistence.delete(req.params.id, projectOwner(res));
+    if (persistence.mode === 'neon-r2') { await sharing?.dropProject(projectOwner(res), req.params.id); await persistence.delete(req.params.id, projectOwner(res)); }
     else await fs.rm(projectPath(req.params.id), { recursive: true, force: true });
     const key = resultKey(req.params.id, projectOwner(res));
     RESULTS.delete(key); ARTIFACTS.delete(key); await workspaces.dropProject(`${key}:`);
@@ -538,7 +588,8 @@ app.post('/api/projects/:id/compile', async (req, res) => {
     const owner = projectOwner(res);
     projectPath(id);
     key = resultKey(id, owner);
-    const files: SourceFile[] = Array.isArray(req.body.files) ? req.body.files : (await readProject(id, owner)).files;
+    // Viewers compile the saved project: files they send are ignored, so they can't change the shared PDF.
+    const files: SourceFile[] = Array.isArray(req.body.files) && res.locals.role !== 'viewer' ? req.body.files : (await readProject(id, owner)).files;
     validateFiles(files.filter(f => f.content !== undefined) as StoredFile[]);
     const engine = String(req.body.engine ?? 'pdflatex');
     if (!ENGINES[engine]) return void send(res, 400, 'Unsupported compiler');
@@ -915,6 +966,60 @@ app.post('/api/projects/:id/wordcount', async (req, res) => {
   }
 });
 
+// Who can open a project (owner only, through roleAllows).
+const sharingRoute = (handler: (store: SharingStore, req: express.Request, res: express.Response, owner: string, id: string) => Promise<unknown>) => async (req: express.Request, res: express.Response) => {
+  try {
+    if (!sharing) return void send(res, 501, 'Sharing needs the production database.');
+    const owner = projectOwner(res), id = String(req.params.id);
+    if (!owner.startsWith('user:')) return void send(res, 401, 'Sign in to share this project.');
+    await persistence.read(id, owner);
+    await handler(sharing, req, res, owner, id);
+  } catch (e) { send(res, e instanceof Error && /not found/i.test(e.message) ? 404 : 500, e); }
+};
+const validRole = (req: express.Request, res: express.Response) => { const ok = ROLES.includes(String(req.body?.role)); if (!ok) send(res, 400, 'Role must be editor or viewer.'); return ok; };
+app.get('/api/projects/:id/members', sharingRoute(async (store, _req, res, owner, id) => res.json(await store.access(owner, id))));
+app.post('/api/projects/:id/invites', sharingRoute(async (store, req, res, owner, id) => {
+  if (!validRole(req, res)) return;
+  const email = req.body.email === undefined ? undefined : String(req.body.email);
+  if (email !== undefined && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) return void send(res, 400, 'Enter a valid email address.');
+  res.status(201).json(await store.createInvite(owner, id, String(req.body.role), email));
+}));
+app.delete('/api/projects/:id/invites/:token', sharingRoute(async (store, req, res, owner, id) => { await store.revokeInvite(owner, id, String(req.params.token)); res.status(204).end(); }));
+app.put('/api/projects/:id/members/:userId', sharingRoute(async (store, req, res, owner, id) => { if (!validRole(req, res)) return; await store.setRole(owner, id, String(req.params.userId), String(req.body.role)); res.status(204).end(); }));
+app.delete('/api/projects/:id/members/:userId', sharingRoute(async (store, req, res, owner, id) => { await store.removeMember(owner, id, String(req.params.userId)); res.status(204).end(); }));
+
+// Per-file history. Local file storage has none: the browser then shows its own snapshots.
+app.get('/api/projects/:id/history', async (req, res) => {
+  try { res.json(sharing ? { available: true, versions: await sharing.versions(projectOwner(res), String(req.params.id)) } : { available: false, versions: [] }); } catch (e) { send(res, 500, e); }
+});
+app.get('/api/projects/:id/history/:version', async (req, res) => {
+  try {
+    const version = /^\d+$/.test(req.params.version) ? await sharing?.version(projectOwner(res), String(req.params.id), req.params.version) : null;
+    if (!version) return void send(res, 404, 'Version not found');
+    res.json(version);
+  } catch (e) { send(res, 500, e); }
+});
+app.put('/api/projects/:id/history/:version', async (req, res) => {
+  try {
+    if (!sharing || !/^\d+$/.test(req.params.version)) return void send(res, 404, 'Version not found');
+    await sharing.nameVersion(projectOwner(res), String(req.params.id), req.params.version, String(req.body?.name ?? '').trim().slice(0, 120) || null);
+    res.status(204).end();
+  } catch (e) { send(res, 500, e); }
+});
+/** Restoring writes the old text back as a new version, so nothing in the history is lost. */
+app.post('/api/projects/:id/history/:version/restore', async (req, res) => {
+  try {
+    const owner = projectOwner(res), id = String(req.params.id);
+    const version = sharing && /^\d+$/.test(req.params.version) ? await sharing.version(owner, id, req.params.version) : null;
+    if (!version) return void send(res, 404, 'Version not found');
+    const project = await readProject(id, owner);
+    const files = project.files.some(f => f.name === version.file) ? project.files.map(f => f.name === version.file ? { name: f.name, content: version.content } : f) : [...project.files, { name: version.file, content: version.content }];
+    const saved = await writeProject(id, { files }, { replace: true }, owner);
+    await sharing!.insertVersion(owner, id, version.file, version.content, res.locals.author ?? null, `Restored from ${new Date(version.created).toISOString().slice(0, 16).replace('T', ' ')} UTC`);
+    res.json({ file: version.file, content: version.content, modified: saved.modified });
+  } catch (e) { send(res, 500, e); }
+});
+
 app.delete('/api/projects/:id/cache', async (req, res) => {
   try {
     projectPath(req.params.id);
@@ -945,6 +1050,7 @@ app.use((err: any, _req: express.Request, res: express.Response, _next: express.
 });
 
 await persistence.initialize();
+await sharing?.initialize();
 if (COMPILE_MODE === 'native') {
   const required = ['latexmk', 'pdflatex', 'xelatex', 'lualatex', 'bibtex', 'biber', 'synctex', 'setpriv', 'prlimit'] as const;
   const checks = await Promise.all(required.map(command => exec(command, ['--version'], { timeout: 8_000 }).then(() => true, () => false)));

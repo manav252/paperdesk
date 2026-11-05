@@ -83,6 +83,9 @@ export class ProjectPersistence {
     await this.s3!.send(new HeadBucketCommand({ Bucket: this.bucket }));
   }
 
+  /** The Postgres pool, for the sharing tables (null with local file storage). */
+  get database() { return this.pool ?? null; }
+
   async list(ownerId: string): Promise<ProjectData[]> {
     const { rows } = await this.pool!.query('SELECT * FROM paperdesk_projects WHERE owner_id = $1 ORDER BY modified DESC', [ownerId]);
     return Promise.all(rows.map(row => this.readRow(row)));
@@ -141,6 +144,7 @@ export class ProjectPersistence {
         while (taken.has(to)) to = newId(from);
         taken.add(to);
         await client.query('UPDATE paperdesk_projects SET owner_id = $1, id = $2 WHERE owner_id = $3 AND id = $4', [toOwner, to, fromOwner, from]);
+        await client.query('UPDATE paperdesk_file_versions SET owner_id = $1, project_id = $2 WHERE owner_id = $3 AND project_id = $4', [toOwner, to, fromOwner, from]);
         moved.push({ from, to });
       }
       await client.query('COMMIT');

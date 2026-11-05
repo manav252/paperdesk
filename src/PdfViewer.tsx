@@ -1,5 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { AlertCircle } from 'lucide-react';
+import { toSyncTexPoint } from './lib/synctex';
 
 export type Zoom = number | 'fit' | 'page';
 type Size = { w: number; h: number };
@@ -22,7 +23,7 @@ function loadPdfjs() {
  */
 export function PdfViewer({ url, data, zoom, nav, syncPoint, onLoaded, onScale, onPageChange, onSourceJump, onRenderTime }: {
   url: string; data?: Uint8Array | null; zoom: Zoom; nav: { page: number; n: number };
-  syncPoint: { page: number; x: number; y: number } | null;
+  syncPoint: { page: number; x: number; y: number; width?: number; height?: number; n?: number } | null;
   onLoaded: (pages: number) => void; onScale: (pct: number) => void; onPageChange: (page: number) => void;
   onSourceJump: (page: number, x: number, y: number) => void;
   onRenderTime?: (ms: number) => void;
@@ -113,7 +114,8 @@ export function PdfViewer({ url, data, zoom, nav, syncPoint, onLoaded, onScale, 
     if (!syncPoint || !doc) return;
     const el = pageRefs.current[syncPoint.page - 1], root = boxRef.current, size = doc.sizes[syncPoint.page - 1];
     if (!el || !root || !size) return;
-    root.scrollTop = Math.max(0, el.offsetTop + (size.h - syncPoint.y) * scale - root.clientHeight / 2);
+    // SyncTeX measures y down from the top of the page, like the page box here.
+    root.scrollTop = Math.max(0, el.offsetTop + (syncPoint.y - (syncPoint.height ?? 0) / 2) * scale - root.clientHeight / 2);
   }, [syncPoint, doc]);
 
   const jump = async (index: number, event: React.MouseEvent<HTMLDivElement>) => {
@@ -130,8 +132,10 @@ export function PdfViewer({ url, data, zoom, nav, syncPoint, onLoaded, onScale, 
       if (!docNow) continue;
       try {
         const page = await docNow.pdf.getPage(index + 1);
-        const [x, y] = page.getViewport({ scale }).convertToPdfPoint(at.x, at.y);
-        cb.current.onSourceJump(index + 1, x, y);
+        // pdf.js gives PDF user space (origin bottom-left, y up); SyncTeX wants points from the top-left of the page.
+        const [px, py] = page.getViewport({ scale }).convertToPdfPoint(at.x, at.y);
+        const point = toSyncTexPoint(page.view, px, py);
+        cb.current.onSourceJump(index + 1, point.x, point.y);
         return;
       } catch { /* destroyed by a newer compile; try the current document */ }
     }
@@ -145,7 +149,9 @@ export function PdfViewer({ url, data, zoom, nav, syncPoint, onLoaded, onScale, 
       {doc?.sizes.map((s, i) => <div key={i} data-index={i} ref={el => { pageRefs.current[i] = el; }} className="pdf-page" style={{ width: Math.floor(s.w * scale), height: Math.floor(s.h * scale) }}
         title="Click or select text to jump to the source" onClick={e => { if (!window.getSelection()?.toString()) void jump(i, e); }} onMouseUp={e => { if (window.getSelection()?.toString()) void jump(i, e); }}>
         <PdfPage pdf={doc.pdf} index={i} scale={scale} active={visible.has(i)} onRenderTime={cb.current.onRenderTime} />
-        {syncPoint?.page === i + 1 && <span className="sync-marker" style={{ left: syncPoint.x * scale - 6, top: (s.h - syncPoint.y) * scale - 6 }} aria-hidden />}
+        {syncPoint?.page === i + 1 && (syncPoint.width && syncPoint.height
+          ? <span key={syncPoint.n} className="sync-highlight" data-testid="sync-highlight" style={{ left: syncPoint.x * scale - 2, top: (syncPoint.y - syncPoint.height) * scale - 2, width: syncPoint.width * scale + 4, height: syncPoint.height * scale + 4 }} aria-hidden />
+          : <span className="sync-marker" data-testid="sync-highlight" style={{ left: syncPoint.x * scale - 6, top: syncPoint.y * scale - 6 }} aria-hidden />)}
       </div>)}
     </div>
   </div>;

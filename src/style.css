@@ -366,6 +366,8 @@ body.is-resizing .editor-canvas, body.is-resizing .pdf-workspace { pointer-event
 .pdf-text-layer span { position: absolute; display: block; white-space: pre; transform-origin: left top; color: transparent; cursor: text; }
 .pdf-text-layer span::selection { background: rgba(57, 132, 255, .35); color: transparent; }
 .sync-marker { position: absolute; width: 12px; height: 12px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 30%, transparent); pointer-events: none; animation: sync-pulse 1.6s ease-out 2; }
+.sync-highlight { position: absolute; border-radius: 3px; background: color-mix(in srgb, var(--accent) 22%, transparent); outline: 2px solid color-mix(in srgb, var(--accent) 70%, transparent); pointer-events: none; animation: sync-fade 2.4s ease-out forwards; }
+@keyframes sync-fade { 0%, 60% { opacity: 1; } 100% { opacity: 0; } }
 @keyframes sync-pulse { 0% { transform: scale(.6); opacity: 1; } 100% { transform: scale(1.6); opacity: .2; } }
 .pdf-error { margin: 40px auto; max-width: 340px; color: var(--danger-text); background: var(--danger-soft); border-radius: var(--radius); padding: 12px 14px; display: flex; align-items: flex-start; gap: 9px; font-size: 13px; line-height: 1.45; }
 .pdf-error svg { flex: none; margin-top: 1px; }

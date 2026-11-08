@@ -14,11 +14,12 @@ import archiver from 'archiver';
 import { parseLatexLog, type LogEntry } from './src/lib/latexLog';
 import { parseForwardSync, parseInverseSync } from './src/lib/synctex';
 import { parseTexcount } from './src/lib/wordcount';
+import { applyFilePatch, type FilePatch } from './src/lib/filePatch';
 import { createAuth, userOwnerId, type AuthUser } from './server/auth';
 import { ROLES, roleAllows, SharingStore } from './server/sharing';
 import { assistantConfigured, assistantModel, assistantRouter } from './server/assistant';
 import { ProjectPersistence, type ProjectData, type StoredFile } from './server/persistence';
-import { syncWorkspace, Workspaces, type SourceFile, type Workspace } from './server/workspace';
+import { contentHash, syncWorkspace, Workspaces, type SourceFile, type Workspace } from './server/workspace';
 
 // Local settings and secrets come from an untracked .env (see .env.example); real environment variables win.
 try { process.loadEnvFile(); } catch { /* no .env file */ }
@@ -387,7 +388,17 @@ app.get('/api/projects/:id', async (req, res) => {
 app.put('/api/projects/:id', async (req, res) => {
   try {
     // Fields left out of the body keep their stored values (the storage layer merges them).
-    const files = Array.isArray(req.body.files) ? req.body.files : undefined;
+    let files = Array.isArray(req.body.files) ? req.body.files : undefined;
+    let changed = files;
+    // A save with only the changed files: merged into the stored project, refusing files someone else changed.
+    const patch = req.body.patch as FilePatch | undefined;
+    if (patch && Array.isArray(patch.files)) {
+      const stored = await readProject(req.params.id, projectOwner(res));
+      const result = applyFilePatch(stored.files.map(f => ({ name: f.name, content: String(f.content ?? ''), encoding: f.encoding })), { files: patch.files, deleted: Array.isArray(patch.deleted) ? patch.deleted : [] }, contentHash);
+      if (result.conflicts.length) return void res.status(409).json({ error: `Someone else changed ${result.conflicts.join(', ')}. Reload to get their version.`, conflict: true, files: result.conflicts });
+      files = result.files;
+      changed = patch.files;
+    }
     // Shared projects: refuse a save based on an older version instead of overwriting someone's work.
     const base = Number(req.body.baseModified);
     if (base && persistence.mode === 'neon-r2') {
@@ -396,9 +407,9 @@ app.put('/api/projects/:id', async (req, res) => {
     }
     const saved = await writeProject(req.params.id, { name: req.body.name, files, mainFile: req.body.mainFile, archived: req.body.archived, settings: req.body.settings, versions: req.body.versions, comments: req.body.comments, changes: req.body.changes }, { replace: !!files }, projectOwner(res));
     // The browser already has the files it just sent; echoing them back would double the transfer.
-    if (files && sharing) await sharing.record(projectOwner(res), req.params.id, files, res.locals.author ?? null).catch(e => console.error('Saving file history failed:', e));
+    if (changed && sharing) await sharing.record(projectOwner(res), req.params.id, changed, res.locals.author ?? null).catch(e => console.error('Saving file history failed:', e));
     res.json({ ...saved, files: files ? undefined : saved.files });
-  } catch (e) { send(res, 400, e); }
+  } catch (e) { send(res, e instanceof Error && /not found/i.test(e.message) ? 404 : 400, e); }
 });
 
 app.delete('/api/projects/:id', async (req, res) => {
@@ -705,7 +716,7 @@ app.post('/api/projects/:id/compile', async (req, res) => {
     res.setHeader('Server-Timing', Object.entries(timings).map(([name, ms]) => `${name};dur=${ms}`).join(', '));
     // The PDF travels with the result so the preview needs no second request.
     res.json({ ...result, session: BOOT_ID, timings, ...(pdf && success && pdf.length <= 8 * 1024 * 1024 ? { pdf: pdf.toString('base64') } : {}) });
-    io.to(id).emit('compile:complete', { success });
+    io.to(resultKey(id, owner)).emit('compile:complete', { success });
 
     // Save the source snapshot, PDF and SyncTeX data after answering: waiting for storage added 1.5–3 s to every
     // compile on Render. SyncTeX normally reads the warm folder; when it has to rebuild from storage (after a
@@ -1036,9 +1047,37 @@ app.get('/api/projects/:id/logs', (req, res) => {
   res.json(result ? { ...result } : { success: null, log: '', errors: [], warnings: [], durationMs: 0 });
 });
 
+// Live updates: a socket names who it is when it connects (sign-in token or anonymous key), and joining a
+// project's room passes the same ownership and role checks as the HTTP API. Rooms are per owner and project.
+io.use(async (socket, next) => {
+  const { token, owner } = (socket.handshake.auth ?? {}) as { token?: string; owner?: string };
+  if (token) {
+    const user = await auth.verify(String(token));
+    if (!user) return next(new Error('Your sign-in has expired. Sign in again.'));
+    socket.data.user = user;
+    socket.data.owner = userOwnerId(user);
+  } else if (persistence.mode === 'neon-r2') {
+    if (!UUID.test(String(owner ?? ''))) return next(new Error('This browser has no valid project workspace key.'));
+    socket.data.owner = String(owner);
+  } else socket.data.owner = '';
+  next();
+});
+async function socketRoom(socket: { data: { user?: AuthUser; owner: string } }, id: string) {
+  if (typeof id !== 'string' || !/^[\w-]+$/.test(id)) return null;
+  if (id.startsWith('s-')) {
+    const access = socket.data.user ? await sharing?.resolve(id, socket.data.user.id) : null;
+    return access ? resultKey(access.projectId, access.ownerId) : null;
+  }
+  const exists = await readProject(id, socket.data.owner).then(() => true, () => false);
+  return exists ? resultKey(id, socket.data.owner) : null;
+}
 io.on('connection', socket => {
-  socket.on('project:join', (id: string) => { if (typeof id === 'string' && /^[\w-]+$/.test(id)) socket.join(id); });
-  socket.on('project:leave', (id: string) => socket.leave(id));
+  socket.on('project:join', async (id: string, ack?: (result: { ok: boolean }) => void) => {
+    const room = await socketRoom(socket, id).catch(() => null);
+    if (room) await socket.join(room);
+    if (typeof ack === 'function') ack({ ok: !!room });
+  });
+  socket.on('project:leave', async (id: string) => { const room = await socketRoom(socket, id).catch(() => null); if (room) await socket.leave(room); });
 });
 
 app.use((_req, res) => send(res, 404, 'Not found'));
@@ -1049,6 +1088,8 @@ app.use((err: any, _req: express.Request, res: express.Response, _next: express.
   send(res, status, status === 413 ? 'The request is too large.' : status === 400 ? 'The request body isn’t valid JSON.' : 'Internal server error');
 });
 
+// A stray rejected promise must not take the whole API down (Node exits on one by default): log it instead.
+process.on('unhandledRejection', reason => console.error('Unhandled promise rejection:', reason));
 await persistence.initialize();
 await sharing?.initialize();
 if (COMPILE_MODE === 'native') {

@@ -42,7 +42,10 @@
     "socket.io": "^4.8.1",
     "socket.io-client": "^4.8.1",
     "tsx": "^4.19.2",
-    "unzipper": "^0.12.3"
+    "unzipper": "^0.12.3",
+    "y-monaco": "^0.1.6",
+    "y-protocols": "^1.0.7",
+    "yjs": "^13.6.33"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.5",

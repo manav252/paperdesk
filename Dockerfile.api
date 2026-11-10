@@ -24,8 +24,8 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts
 COPY server.ts ./server.ts
-COPY src/lib/latexLog.ts src/lib/synctex.ts src/lib/wordcount.ts src/lib/filePatch.ts ./src/lib/
-COPY server/assistant.ts server/auth.ts server/persistence.ts server/sharing.ts server/workspace.ts ./server/
+COPY src/lib/latexLog.ts src/lib/synctex.ts src/lib/wordcount.ts src/lib/filePatch.ts src/lib/textDiff.ts ./src/lib/
+COPY server/assistant.ts server/auth.ts server/collab.ts server/persistence.ts server/sharing.ts server/workspace.ts ./server/
 
 EXPOSE 10000
 CMD ["node", "--import", "tsx", "server.ts"]

@@ -16,7 +16,9 @@ import { parseForwardSync, parseInverseSync } from './src/lib/synctex';
 import { parseTexcount } from './src/lib/wordcount';
 import { applyFilePatch, type FilePatch } from './src/lib/filePatch';
 import { createAuth, userOwnerId, type AuthUser } from './server/auth';
-import { ROLES, roleAllows, SharingStore } from './server/sharing';
+import { ROLES, roleAllows, SharingStore, type Role } from './server/sharing';
+import * as Y from 'yjs';
+import { CollabRooms, type CollabRoom } from './server/collab';
 import { assistantConfigured, assistantModel, assistantRouter } from './server/assistant';
 import { ProjectPersistence, type ProjectData, type StoredFile } from './server/persistence';
 import { contentHash, syncWorkspace, Workspaces, type SourceFile, type Workspace } from './server/workspace';
@@ -407,6 +409,7 @@ app.put('/api/projects/:id', async (req, res) => {
     }
     const saved = await writeProject(req.params.id, { name: req.body.name, files, mainFile: req.body.mainFile, archived: req.body.archived, settings: req.body.settings, versions: req.body.versions, comments: req.body.comments, changes: req.body.changes }, { replace: !!files }, projectOwner(res));
     // The browser already has the files it just sent; echoing them back would double the transfer.
+    if (changed) mirrorToLiveRoom(resultKey(req.params.id, projectOwner(res)), changed, patch && Array.isArray(patch.deleted) ? patch.deleted : [], Array.isArray(req.body.files) ? files : undefined);
     if (changed && sharing) await sharing.record(projectOwner(res), req.params.id, changed, res.locals.author ?? null).catch(e => console.error('Saving file history failed:', e));
     res.json({ ...saved, files: files ? undefined : saved.files });
   } catch (e) { send(res, e instanceof Error && /not found/i.test(e.message) ? 404 : 400, e); }
@@ -717,6 +720,7 @@ app.post('/api/projects/:id/compile', async (req, res) => {
     // The PDF travels with the result so the preview needs no second request.
     res.json({ ...result, session: BOOT_ID, timings, ...(pdf && success && pdf.length <= 8 * 1024 * 1024 ? { pdf: pdf.toString('base64') } : {}) });
     io.to(resultKey(id, owner)).emit('compile:complete', { success });
+    io.to(collabChannel(resultKey(id, owner))).emit('collab:compiled', { success });
 
     // Save the source snapshot, PDF and SyncTeX data after answering: waiting for storage added 1.5–3 s to every
     // compile on Render. SyncTeX normally reads the warm folder; when it has to rebuild from storage (after a
@@ -1026,6 +1030,7 @@ app.post('/api/projects/:id/history/:version/restore', async (req, res) => {
     const project = await readProject(id, owner);
     const files = project.files.some(f => f.name === version.file) ? project.files.map(f => f.name === version.file ? { name: f.name, content: version.content } : f) : [...project.files, { name: version.file, content: version.content }];
     const saved = await writeProject(id, { files }, { replace: true }, owner);
+    mirrorToLiveRoom(resultKey(id, owner), [{ name: version.file, content: version.content }], []);
     await sharing!.insertVersion(owner, id, version.file, version.content, res.locals.author ?? null, `Restored from ${new Date(version.created).toISOString().slice(0, 16).replace('T', ' ')} UTC`);
     res.json({ file: version.file, content: version.content, modified: saved.modified });
   } catch (e) { send(res, 500, e); }
@@ -1062,22 +1067,91 @@ io.use(async (socket, next) => {
   } else socket.data.owner = '';
   next();
 });
-async function socketRoom(socket: { data: { user?: AuthUser; owner: string } }, id: string) {
+type SocketLike = { data: { user?: AuthUser; owner: string } };
+/** Who a socket is on a project: the room key, the real owner and id, and the role. Null when it has no access. */
+async function socketAccess(socket: SocketLike, id: string): Promise<{ key: string; owner: string; projectId: string; role: Role } | null> {
   if (typeof id !== 'string' || !/^[\w-]+$/.test(id)) return null;
   if (id.startsWith('s-')) {
     const access = socket.data.user ? await sharing?.resolve(id, socket.data.user.id) : null;
-    return access ? resultKey(access.projectId, access.ownerId) : null;
+    return access ? { key: resultKey(access.projectId, access.ownerId), owner: access.ownerId, projectId: access.projectId, role: access.role } : null;
   }
   const exists = await readProject(id, socket.data.owner).then(() => true, () => false);
-  return exists ? resultKey(id, socket.data.owner) : null;
+  return exists ? { key: resultKey(id, socket.data.owner), owner: socket.data.owner, projectId: id, role: 'owner' } : null;
 }
+
+// Real-time co-editing: one live document per open project, saved back to storage a few seconds after edits stop.
+const collab = new CollabRooms({
+  load: async (owner, projectId) => (await readProject(projectId, owner)).files,
+  save: async (owner, projectId, texts, author) => {
+    const stored = await readProject(projectId, owner);
+    const changed: StoredFile[] = [];
+    const files = stored.files.map(f => {
+      const live = f.encoding === 'base64' || f.name.endsWith('/') ? undefined : texts.get(f.name);
+      if (live === undefined || live === f.content) return f;
+      const next = { name: f.name, content: live };
+      changed.push(next);
+      return next;
+    });
+    if (!changed.length) return;
+    await writeProject(projectId, { files }, { replace: true }, owner);
+    await sharing?.record(owner, projectId, changed, author).catch(e => console.error('Saving file history failed:', e));
+  },
+});
+const collabChannel = (key: string) => `collab:${key}`;
+/** Files saved through the HTTP API reach people who are editing live, and everyone refreshes their file list. */
+function mirrorToLiveRoom(key: string, changed: StoredFile[], deleted: string[], allFiles?: StoredFile[]) {
+  const room = collab.get(key);
+  if (!room) return;
+  // A full save replaces the project: files it no longer lists are gone.
+  const gone = allFiles ? [...room.names.keys()].filter(name => !allFiles.some(f => f.name === name)) : deleted;
+  room.applyExternal(changed, gone);
+  io.to(collabChannel(key)).emit('collab:files');
+}
+for (const signal of ['SIGTERM', 'SIGINT'] as const) process.once(signal, () => { void collab.flushAll().finally(() => process.exit(0)); });
+
 io.on('connection', socket => {
   socket.on('project:join', async (id: string, ack?: (result: { ok: boolean }) => void) => {
-    const room = await socketRoom(socket, id).catch(() => null);
-    if (room) await socket.join(room);
-    if (typeof ack === 'function') ack({ ok: !!room });
+    const access = await socketAccess(socket, id).catch(() => null);
+    if (access) await socket.join(access.key);
+    if (typeof ack === 'function') ack({ ok: !!access });
   });
-  socket.on('project:leave', async (id: string) => { const room = await socketRoom(socket, id).catch(() => null); if (room) await socket.leave(room); });
+  socket.on('project:leave', async (id: string) => { const access = await socketAccess(socket, id).catch(() => null); if (access) await socket.leave(access.key); });
+
+  // One live project per socket. Roles are checked here on join and again on every edit.
+  let live: { room: CollabRoom; role: Role; clientId?: number } | null = null;
+  const leave = async () => {
+    const current = live;
+    if (!current) return;
+    live = null;
+    await socket.leave(collabChannel(current.room.key));
+    if (current.clientId !== undefined) socket.to(collabChannel(current.room.key)).emit('collab:left', current.clientId);
+    await collab.leave(current.room).catch(error => console.error('Closing a live document failed:', error));
+  };
+  socket.on('collab:join', async (id: string, ack?: (result: { ok: boolean; epoch?: string; state?: Buffer; role?: Role }) => void) => {
+    try {
+      await leave();
+      const access = await socketAccess(socket, id);
+      if (!access) return void ack?.({ ok: false });
+      const room = await collab.open(access.key, access.owner, access.projectId);
+      room.members++;
+      live = { room, role: access.role };
+      await socket.join(collabChannel(access.key));
+      ack?.({ ok: true, epoch: room.epoch, state: Buffer.from(Y.encodeStateAsUpdate(room.doc)), role: access.role });
+    } catch (error) { console.error('Joining a live document failed:', error); ack?.({ ok: false }); }
+  });
+  socket.on('collab:client', (clientId: number) => { if (live && Number.isSafeInteger(clientId)) live.clientId = clientId; });
+  socket.on('collab:update', (update: ArrayBuffer | Buffer) => {
+    if (!live || live.role === 'viewer') return;
+    try {
+      const bytes = new Uint8Array(update as ArrayBuffer);
+      if (socket.data.user?.email) live.room.authors.add(socket.data.user.email);
+      Y.applyUpdate(live.room.doc, bytes, socket.id);
+      socket.to(collabChannel(live.room.key)).emit('collab:update', bytes);
+    } catch (error) { console.error('A live edit could not be applied:', error); }
+  });
+  socket.on('collab:awareness', (update: ArrayBuffer | Buffer) => { if (live) socket.to(collabChannel(live.room.key)).emit('collab:awareness', update); });
+  socket.on('collab:leave', () => void leave());
+  socket.on('disconnect', () => void leave());
 });
 
 app.use((_req, res) => send(res, 404, 'Not found'));

@@ -4,6 +4,7 @@ import { defineConfig, devices } from '@playwright/test';
 // Sign-in in local runs: a fake Supabase origin (tests answer its requests) and a test-only signing key that only
 // this local API trusts. See test/fixtures/auth/README.md.
 export const FAKE_SUPABASE_URL = 'http://127.0.0.1:54399';
+const FAKES_URL = 'http://127.0.0.1:3997';
 const testJwks = readFileSync('test/fixtures/auth/test-jwks.json', 'utf8');
 
 const externalBaseUrl = process.env.E2E_BASE_URL;
@@ -26,13 +27,15 @@ export default defineConfig({
   use: { baseURL: externalBaseUrl ?? 'http://127.0.0.1:4173', trace: 'retain-on-failure', ...devices['Desktop Chrome'] },
   projects: matrix.map(profile => ({ name: profile.name, use: { ...devices['Desktop Chrome'], viewport: profile.viewport, colorScheme: profile.colorScheme } })),
   ...(externalBaseUrl ? {} : { webServer: [
+    // Crossref and arXiv stand-ins (test/fakes/services.mjs): tests never call the real services.
+    { command: 'node test/fakes/services.mjs', url: `${FAKES_URL}/health`, reuseExistingServer: false, timeout: 30_000 },
     {
       command: 'node --import tsx server.ts',
       url: 'http://127.0.0.1:3002/api/health',
       reuseExistingServer: false,
       timeout: 180_000,
       // An empty key overrides any .env value, so the tests never call the external assistant service.
-      env: { ...process.env, TMPDIR: '/private/tmp', PAPERDESK_DATA: '/tmp/paperdesk-playwright-data', PORT: '3002', ANTHROPIC_API_KEY: '', SUPABASE_URL: FAKE_SUPABASE_URL, SUPABASE_JWKS: testJwks, SUPABASE_JWT_SECRET: '' },
+      env: { ...process.env, TMPDIR: '/private/tmp', PAPERDESK_DATA: '/tmp/paperdesk-playwright-data', PORT: '3002', ANTHROPIC_API_KEY: '', SUPABASE_URL: FAKE_SUPABASE_URL, SUPABASE_JWKS: testJwks, SUPABASE_JWT_SECRET: '', CROSSREF_API_URL: `${FAKES_URL}/crossref`, ARXIV_API_URL: `${FAKES_URL}/arxiv`, CROSSREF_MAILTO: 'tests@example.com' },
     },
     {
       // Test the production build: a few bundled files load reliably, unlike the hundreds of modules the dev server serves.

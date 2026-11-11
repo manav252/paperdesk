@@ -680,3 +680,12 @@ body.is-resizing .editor-canvas, body.is-resizing .pdf-workspace { pointer-event
 .yRemoteSelectionHead::after { position: absolute; top: -1.15em; left: -2px; padding: 0 4px; border-radius: 3px 3px 3px 0; color: #fff; font: 600 10px/1.5 var(--sans, system-ui); white-space: nowrap; pointer-events: none; z-index: 5; }
 .live-badge { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; padding: 2px 8px; border-radius: 10px; background: var(--accent-soft); color: var(--accent); white-space: nowrap; }
 .live-dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+
+/* Add citation by DOI */
+.citations-label { display: block; font-size: 12.5px; color: var(--text-2); margin-bottom: 6px; }
+.citations-input, .citation-preview { width: 100%; font: 12.5px/1.5 var(--mono); resize: vertical; height: auto; padding: 8px 10px; }
+.citations-row { display: flex; gap: 8px; margin: 8px 0 12px; }
+.citation-entry { margin-bottom: 10px; }
+.citation-note { display: flex; gap: 6px; align-items: flex-start; font-size: 12.5px; color: var(--text-2); margin: 4px 0 0; line-height: 1.45; }
+.citation-note svg { flex: none; margin-top: 2px; color: #d9822b; }
+.citations-check { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 13px; margin: 10px 0; overflow-wrap: anywhere; }

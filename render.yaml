@@ -37,6 +37,8 @@ services:
         sync: false
       - key: SUPABASE_URL
         sync: false
+      - key: CROSSREF_MAILTO
+        sync: false
       - key: SUPABASE_JWT_SECRET
         sync: false
       - key: ASSISTANT_MODEL

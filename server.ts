@@ -19,6 +19,8 @@ import { createAuth, userOwnerId, type AuthUser } from './server/auth';
 import { ROLES, roleAllows, SharingStore, type Role } from './server/sharing';
 import * as Y from 'yjs';
 import { CollabRooms, type CollabRoom } from './server/collab';
+import { Kv } from './server/kv';
+import { createCitationLookup } from './server/citations';
 import { assistantConfigured, assistantModel, assistantRouter } from './server/assistant';
 import { ProjectPersistence, type ProjectData, type StoredFile } from './server/persistence';
 import { contentHash, syncWorkspace, Workspaces, type SourceFile, type Workspace } from './server/workspace';
@@ -74,6 +76,14 @@ app.use('/api', (req, res, next) => {
   next();
 });
 const sharing = persistence.database ? new SharingStore(persistence.database) : null;
+const kv = new Kv(persistence.database);
+/** Simple per-client request budget: `limit` calls per minute. */
+const budgets = new Map<string, { count: number; reset: number }>();
+function overBudget(key: string, limit: number) {
+  const now = Date.now(), entry = budgets.get(key);
+  if (!entry || entry.reset < now) { if (budgets.size > 5000) budgets.clear(); budgets.set(key, { count: 1, reset: now + 60_000 }); return false; }
+  return ++entry.count > limit;
+}
 const auth = createAuth({ url: process.env.SUPABASE_URL, jwks: process.env.SUPABASE_JWKS, jwtSecret: process.env.SUPABASE_JWT_SECRET });
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const bearerToken = (req: express.Request) => /^Bearer\s+(\S+)$/i.exec(req.header('Authorization') ?? '')?.[1];
@@ -345,6 +355,19 @@ app.post('/api/account/claim', async (req, res) => {
     if (persistence.mode !== 'neon-r2') return void res.json({ moved: [] });
     const moved = await persistence.claim(anonymous, userOwnerId(user), id => `${id.slice(0, 40)}-${crypto.randomUUID().slice(0, 6)}`);
     res.json({ moved });
+  } catch (e) { send(res, 500, e); }
+});
+
+/** Citation metadata for DOIs and arXiv ids, as BibTeX. Several ids may be sent at once. */
+const lookupCitation = createCitationLookup(kv);
+app.post('/api/citations/lookup', async (req, res) => {
+  try {
+    const ids = (Array.isArray(req.body?.ids) ? req.body.ids : []).map((x: unknown) => String(x).trim()).filter(Boolean).slice(0, 25) as string[];
+    if (!ids.length) return void send(res, 400, 'Enter a DOI, a doi.org link or an arXiv ID.');
+    if (overBudget(`cite:${req.ip}`, 40)) return void send(res, 429, 'Too many lookups. Wait a minute and try again.');
+    const results = [];
+    for (const id of ids) results.push(await lookupCitation(id));
+    res.json({ results });
   } catch (e) { send(res, 500, e); }
 });
 
@@ -1166,6 +1189,7 @@ app.use((err: any, _req: express.Request, res: express.Response, _next: express.
 process.on('unhandledRejection', reason => console.error('Unhandled promise rejection:', reason));
 await persistence.initialize();
 await sharing?.initialize();
+await kv.initialize();
 if (COMPILE_MODE === 'native') {
   const required = ['latexmk', 'pdflatex', 'xelatex', 'lualatex', 'bibtex', 'biber', 'synctex', 'setpriv', 'prlimit'] as const;
   const checks = await Promise.all(required.map(command => exec(command, ['--version'], { timeout: 8_000 }).then(() => true, () => false)));

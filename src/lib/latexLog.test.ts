@@ -113,3 +113,14 @@ describe('image hints', () => {
     expect(missing.message).toContain('capitalisation');
   });
 });
+
+describe('bibliography hints', () => {
+  it('explains an empty reference list, but not a list missing an \\item in the document', () => {
+    const log = "(./main.tex (./main.bbl\n./main.bbl:24: LaTeX Error: Something's wrong--perhaps a missing \\item.\n\nSee the LaTeX manual or LaTeX Companion for explanation.\nl.24 \\end{thebibliography}\n)\n./main.tex:30: LaTeX Error: Something's wrong--perhaps a missing \\item.\n\nl.30 \\end{itemize}\n";
+    const [bibliography, list] = parseLatexLog(log).errors;
+    expect(bibliography).toMatchObject({ file: 'main.bbl', line: 24 });
+    expect(bibliography!.message).toContain('The reference list is empty: none of the keys you \\cite are in your .bib file.');
+    expect(list).toMatchObject({ file: 'main.tex', line: 30 });
+    expect(list!.message).not.toContain('reference list');
+  });
+});

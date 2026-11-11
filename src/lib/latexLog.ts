@@ -136,14 +136,17 @@ function dedupe(list: LogEntry[]) {
   });
 }
 
-/** Plain-language advice for the image problems newcomers hit most. */
+/** Plain-language advice for the problems newcomers hit most. */
 const HINTS: [RegExp, string][] = [
   [/Unknown graphics extension: \.svg/i, 'LaTeX can’t include SVG files. Upload the SVG again and PaperDesk adds a PNG copy, or export it as PDF.'],
   [/Unknown graphics extension/i, 'This image type isn’t supported. Use PNG, JPG or PDF.'],
   [/File [`'‘]([^'’]+\.(?:png|jpe?g|pdf|eps))['’] not found/i, 'Check the file name, folder and capitalisation, and upload the image if it’s missing.'],
   [/Cannot determine size of graphic/i, 'Use PNG, JPG or PDF images with pdfLaTeX.'],
 ];
+/** An empty reference list: nothing that is cited was found in the .bib file. */
+const EMPTY_BIBLIOGRAPHY = 'The reference list is empty: none of the keys you \\cite are in your .bib file. Add the missing entry (or correct the key), then recompile.';
 export function withHint(entry: LogEntry): LogEntry {
-  const hint = HINTS.find(([pattern]) => pattern.test(entry.message))?.[1];
+  const emptyBibliography = /perhaps a missing \\item/i.test(entry.message) && (/\.bbl$/i.test(entry.file ?? '') || /thebibliography/.test(entry.message));
+  const hint = emptyBibliography ? EMPTY_BIBLIOGRAPHY : HINTS.find(([pattern]) => pattern.test(entry.message))?.[1];
   return hint && !entry.message.includes(hint) ? { ...entry, message: `${entry.message} ${hint}` } : entry;
 }

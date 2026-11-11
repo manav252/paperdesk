@@ -76,6 +76,20 @@ test('dashboard controls', async ({ page }) => {
   await page.getByRole('button', { name: 'Skip tour', exact: true }).click();
 });
 
+test('auto compile is off until someone turns it on', async ({ page }) => {
+  // A browser with no saved compile settings: typing must not start a compile.
+  await page.goto('/');
+  await page.evaluate(() => localStorage.removeItem('paperdesk-compile-prefs'));
+  await openControls(page);
+  const before = compiles;
+  await page.locator('.view-line').filter({ hasText: 'Hello world' }).click();
+  await page.keyboard.type(' typed without compiling');
+  await page.getByRole('button', { name: 'Compiler options' }).click();
+  await expect(page.getByRole('menuitemcheckbox', { name: 'Auto compile: Off' })).toBeVisible();
+  await page.waitForTimeout(3500);
+  expect(compiles).toBe(before);
+});
+
 test('auto compile waits until a paste has been idle', async ({ page }) => {
   await openControls(page);
   await page.getByRole('button', { name: 'Compiler options' }).click();

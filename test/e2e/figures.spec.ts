@@ -68,6 +68,8 @@ test('a pasted image becomes a figure at the cursor, graphicx is offered, and un
   const [name] = await figureNames(page);
   expect(name).toMatch(/^figures\/pasted-\d{8}-\d{6}\.png$/);
   // The cursor is inside the caption.
+  await expect.poll(() => mainTex(page)).toContain('\\caption{}');
+  await expect.poll(() => page.evaluate(() => !!document.activeElement?.closest('.editor-canvas'))).toBe(true);
   await page.keyboard.type('My caption');
   await expect.poll(() => mainTex(page)).toContain(`Intro text.\n\\begin{figure}[ht]\n  \\centering\n  \\includegraphics[width=\\linewidth]{${name}}\n  \\caption{My caption}\n  \\label{fig:${name!.slice(8, -4)}}\n\\end{figure}\n`);
   expect(await mainTex(page)).toContain('\\documentclass{article}\n\\usepackage{graphicx}\n');

@@ -15,6 +15,7 @@ import { parseLatexLog, type LogEntry } from './src/lib/latexLog';
 import { parseForwardSync, parseInverseSync } from './src/lib/synctex';
 import { parseTexcount } from './src/lib/wordcount';
 import { applyFilePatch, type FilePatch } from './src/lib/filePatch';
+import { BUILD_FILE, exportFiles, parseFls, type ExportKind } from './src/lib/submission';
 import { createAuth, userOwnerId, type AuthUser } from './server/auth';
 import { ROLES, roleAllows, SharingStore, type Role } from './server/sharing';
 import * as Y from 'yjs';
@@ -1015,6 +1016,97 @@ app.post('/api/projects/:id/wordcount', async (req, res) => {
     send(res, 400, e);
   } finally {
     if (dir) await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
+  }
+});
+
+/** Writes project files into a new temporary folder the compiler can use. */
+async function compileFolder(files: StoredFile[]) {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'paperdesk-export-'));
+  for (const file of files) {
+    if (file.name.endsWith('/')) continue;
+    const target = path.join(dir, safeName(file.name));
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    await fs.writeFile(target, toBuffer(file));
+  }
+  await fs.mkdir(path.join(dir, 'tmp'), { recursive: true });
+  if (COMPILE_MODE === 'native') await giveCompileFilesToSandboxUser(dir);
+  return dir;
+}
+
+/**
+ * A submission ZIP for arXiv or a journal: only the files the document needs, with the generated .bbl and no build
+ * files. Before it is sent, the ZIP's contents are compiled on their own in a second empty folder (without running
+ * BibTeX, as arXiv does), so a ZIP that wouldn't build is never offered.
+ */
+app.post('/api/projects/:id/export', async (req, res) => {
+  const dirs: string[] = [];
+  const closed = new AbortController();
+  res.on('close', () => { if (!res.writableFinished) closed.abort(); });
+  let release: (() => void) | null = null;
+  try {
+    const id = String(req.params.id), owner = projectOwner(res);
+    projectPath(id);
+    if (overBudget(`export:${owner || req.ip}`, 10)) return void send(res, 429, 'Too many exports. Wait a minute and try again.');
+    const kind: ExportKind = req.body.kind === 'journal' ? 'journal' : 'arxiv';
+    const stored = Array.isArray(req.body.files) && res.locals.role !== 'viewer' ? null : await readProject(id, owner);
+    const files = ((stored ? stored.files : req.body.files) as StoredFile[]).filter(f => f && typeof f.name === 'string' && typeof f.content === 'string');
+    validateFiles(files);
+    const engine = String(req.body.engine ?? 'pdflatex');
+    if (!ENGINES[engine]) return void send(res, 400, 'Unsupported compiler');
+    const mainFile = safeName(String(req.body.mainFile ?? stored?.mainFile ?? 'main.tex'));
+    if (!mainFile.endsWith('.tex')) return void send(res, 400, 'Main file must be a .tex file');
+    if (!files.some(f => f.name === mainFile)) return void send(res, 400, `Main file “${mainFile}” not found in the project`);
+    const stem = mainFile.replace(/\.tex$/i, '');
+    const args = (extra: string[]) => { const base = latexmkArgs(engine, mainFile, false, false); return ['latexmk', ...base.slice(0, -1), ...extra, mainFile]; };
+    const logOf = async (dir: string) => parseLatexLog(await fs.readFile(path.join(dir, `${stem}.log`), 'utf8').catch(() => ''), await fs.readFile(path.join(dir, `${stem}.blg`), 'utf8').catch(() => ''), mainFile);
+    const failure = async (dir: string, message: string, entries?: LogEntry[]) => { res.status(422).json({ error: message, errors: (entries ?? (await logOf(dir)).errors).slice(0, 8) }); };
+    /** A build counts only if latexmk finished without errors and left a PDF. */
+    const build = async (dir: string, extra: string[]) => {
+      const run = await runTool(dir, args(extra), COMPILE_TIMEOUT_MS);
+      const pdf = await fs.readFile(path.join(dir, `${stem}.pdf`)).catch(() => null);
+      return { pdf: run.code === 0 && !run.killed ? pdf : null, timedOut: run.killed };
+    };
+
+    release = await compileSlot(closed.signal);
+    // 1. Compile the whole project, recording which files the document reads.
+    // Build files left in the project (a stale .aux, say) would only confuse this fresh compile.
+    const first = await compileFolder(files.filter(f => !BUILD_FILE.test(f.name)));
+    dirs.push(first);
+    const { pdf, timedOut } = await build(first, ['-recorder']);
+    if (!pdf) return void await failure(first, timedOut ? 'The project took too long to compile, so nothing was exported.' : 'The project doesn’t compile without errors, so nothing was exported. Fix the errors and try again.');
+    const read = parseFls(await fs.readFile(path.join(first, `${stem}.fls`), 'utf8').catch(() => ''));
+    const names = new Set(exportFiles(files, mainFile, read, kind));
+    const chosen: StoredFile[] = files.filter(f => names.has(f.name));
+    const bbl = await fs.readFile(path.join(first, `${stem}.bbl`), 'utf8').catch(() => null);
+    if (bbl !== null) chosen.push({ name: `${stem}.bbl`, content: bbl });
+
+    // 2. Compile exactly those files in an empty folder, the way the receiving site will.
+    const second = await compileFolder(chosen);
+    dirs.push(second);
+    const rebuilt = await build(second, ['-bibtex-']);
+    if (!rebuilt.pdf) return void await failure(second, 'The exported files didn’t compile on their own, so the ZIP wasn’t created. A file the document needs may be loaded in a way the export can’t see.');
+    const unresolved = (await logOf(second)).warnings.filter(w => /(Citation|Reference) .*undefined/i.test(w.message));
+    if (unresolved.length) return void await failure(second, 'The exported files compile, but with undefined citations or references, so the ZIP wasn’t created. Fix them and try again.', unresolved);
+    release();
+    release = null;
+
+    if (kind === 'journal') chosen.push({ name: `${stem}.pdf`, content: pdf.toString('base64'), encoding: 'base64' });
+    const archive = archiver('zip', { zlib: { level: 9 } }), chunks: Buffer[] = [];
+    archive.on('data', (chunk: Buffer) => chunks.push(chunk));
+    const done = new Promise<void>((resolve, reject) => { archive.on('end', resolve); archive.on('error', reject); });
+    for (const file of chosen) archive.append(toBuffer(file), { name: safeName(file.name) });
+    await archive.finalize();
+    await done;
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="${kind}-submission.zip"`);
+    res.send(Buffer.concat(chunks));
+  } catch (e) {
+    if (e instanceof Error && e.message === 'cancelled') return;
+    if (e instanceof Error && (e as NodeJS.ErrnoException).code === 'ENOENT') return void send(res, 503, 'Exporting needs the LaTeX compiler, which is not available.');
+    send(res, e instanceof Error && /busy/.test(e.message) ? 503 : 400, e);
+  } finally {
+    release?.();
+    for (const dir of dirs) await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
   }
 });
 

@@ -10,7 +10,7 @@ type Loaded = { pdf: any; sizes: Size[] };
 const GAP = 16, PAD = 20;
 
 let pdfjsLoad: Promise<any> | null = null;
-function loadPdfjs() {
+export function loadPdfjs() {
   pdfjsLoad ??= import('pdfjs-dist').then(pdfjs => {
     pdfjs.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/build/pdf.worker.min.mjs', import.meta.url).toString();
     return pdfjs;

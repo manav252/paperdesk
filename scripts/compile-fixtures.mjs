@@ -7,6 +7,7 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:f
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { getDocument, OPS } from 'pdfjs-dist/legacy/build/pdf.mjs';
+import unzipper from 'unzipper';
 
 const ROOT = path.resolve('test/fixtures/compile');
 const PORT = Number(process.env.FIXTURE_PORT ?? 3101);
@@ -152,6 +153,43 @@ try {
     if (!ok) failures++;
     console.log(`  ${ok ? '✓' : '✗'} ${target.padEnd(20)} replaced compile: first ${a.status}, newer ${b.status} ${b.body?.success ? 'ok' : JSON.stringify(b.body?.errors?.slice(0, 1))}, next ${after.body?.success ? 'ok' : 'failed'}`);
     await fetch(`${API}/projects/${id}`, { method: 'DELETE', headers: ownerHeaders }).catch(() => undefined);
+  }
+
+  // Submission export: only needed files, the generated .bbl, no build files; the API compiles the ZIP on its own
+  // in an empty folder before sending it, so a 200 here means the ZIP builds.
+  const exportOf = async (id, files, kind, engine) => {
+    const r = await fetch(`${API}/projects/${id}/export`, { method: 'POST', headers: { 'Content-Type': 'application/json', ...ownerHeaders }, body: JSON.stringify({ kind, engine, mainFile: 'main.tex', files }) });
+    if (r.status !== 200) return { status: r.status, names: [], error: (await r.json().catch(() => null))?.error };
+    const zip = await unzipper.Open.buffer(Buffer.from(await r.arrayBuffer()));
+    return { status: 200, names: zip.files.map(f => f.path).sort() };
+  };
+  for (const name of ['article-template', 'biber', 'subfolders'].filter(n => fixtures.includes(n))) {
+    const expect = JSON.parse(readFileSync(path.join(ROOT, name, 'expect.json'), 'utf8'));
+    const engine = (expect.engines ?? ['pdflatex'])[0];
+    const base = readTree(path.join(ROOT, name)).filter(f => !f.name.endsWith('/'));
+    const extras = [{ name: 'main.aux', content: 'stale' }, { name: 'main.log', content: 'stale' }, { name: 'never-used.tex', content: 'Not part of the document.' }];
+    const hasBib = base.some(f => f.name.endsWith('.bib'));
+    for (const kind of ['arxiv', 'journal']) {
+      const out = await exportOf(`fixture-export-${name}`, [...base, ...extras], kind, engine);
+      const has = n => out.names.includes(n), any = pattern => out.names.some(n => pattern.test(n));
+      const problems = [
+        out.status !== 200 && `status ${out.status}: ${out.error}`,
+        out.status === 200 && !has('main.tex') && 'main.tex missing',
+        out.status === 200 && hasBib && !has('main.bbl') && 'main.bbl missing',
+        any(/\.(aux|log|fls|fdb_latexmk|synctex\.gz|blg)$/) && 'build files included',
+        has('never-used.tex') && 'unused file included',
+        kind === 'arxiv' && any(/\.bib$/) && 'arXiv ZIP has .bib',
+        kind === 'journal' && out.status === 200 && (!has('main.pdf') || (hasBib && !any(/\.bib$/))) && 'journal ZIP lacks the PDF or .bib',
+      ].filter(Boolean);
+      if (problems.length) failures++;
+      console.log(`  ${problems.length ? '✗' : '✓'} ${name.padEnd(20)} ${kind} export: ${problems.length ? problems.join('; ') : `${out.names.length} files (${out.names.join(', ').slice(0, 90)})`}`);
+    }
+  }
+  if (fixtures.includes('broken')) {
+    const out = await exportOf('fixture-export-broken', readTree(path.join(ROOT, 'broken')).filter(f => !f.name.endsWith('/')), 'arxiv', 'pdflatex');
+    const ok = out.status === 422;
+    if (!ok) failures++;
+    console.log(`  ${ok ? '✓' : '✗'} ${'broken'.padEnd(20)} export refused: ${out.status} ${out.error ?? ''}`);
   }
 } catch (e) {
   failures++;

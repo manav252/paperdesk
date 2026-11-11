@@ -3,7 +3,7 @@ import type { Pool } from 'pg';
 
 export type Role = 'owner' | 'editor' | 'viewer';
 export const ROLES: readonly string[] = ['editor', 'viewer'];
-const VIEWER_POST = new Set(['/compile', '/synctex', '/wordcount']);
+const VIEWER_POST = new Set(['/compile', '/synctex', '/wordcount', '/export']);
 
 /**
  * Whether a role may make this request on a project; `sub` is the path after the project id. Deny by default, so a

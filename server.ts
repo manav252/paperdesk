@@ -181,12 +181,20 @@ async function walkFiles(root: string, relative = ''): Promise<StoredFile[]> {
 type ProjectUpdate = { name?: string; files?: StoredFile[]; mainFile?: string; archived?: boolean; settings?: unknown; versions?: unknown[]; comments?: unknown[]; changes?: unknown[] };
 /** Writes to one project run one at a time: overlapping saves (initial sync and autosave) used to read a half-written project.json. */
 const projectLocks = new Map<string, Promise<unknown>>();
-function writeProject(id: string, p: ProjectUpdate, options: { replace?: boolean } = {}, owner = '') {
+/**
+ * Runs a task while holding the project's lock. Anything that reads the stored files, changes them and writes them
+ * back must do all three inside one call (using writeProjectNow), or a save landing in between is overwritten:
+ * a collaborator's newly added image used to disappear that way.
+ */
+function lockProject<T>(id: string, owner: string, task: () => Promise<T>): Promise<T> {
   const lockId = persistence.mode === 'neon-r2' ? `${owner}/${id}` : id;
-  const run = (projectLocks.get(lockId) ?? Promise.resolve()).catch(() => undefined).then(() => writeProjectNow(id, p, options, owner));
+  const run = (projectLocks.get(lockId) ?? Promise.resolve()).catch(() => undefined).then(task);
   projectLocks.set(lockId, run);
   run.finally(() => { if (projectLocks.get(lockId) === run) projectLocks.delete(lockId); }).catch(() => undefined);
   return run;
+}
+function writeProject(id: string, p: ProjectUpdate, options: { replace?: boolean } = {}, owner = '') {
+  return lockProject(id, owner, () => writeProjectNow(id, p, options, owner));
 }
 
 async function writeProjectNow(id: string, p: ProjectUpdate, { replace = false } = {}, owner = '') {
@@ -417,6 +425,8 @@ app.put('/api/projects/:id', async (req, res) => {
     let changed = files;
     // A save with only the changed files: merged into the stored project, refusing files someone else changed.
     const patch = req.body.patch as FilePatch | undefined;
+    // Reading, merging and writing happen under one lock, so two saves at once can't drop each other's files.
+    const saved = await lockProject(req.params.id, projectOwner(res), async () => {
     if (patch && Array.isArray(patch.files)) {
       // The project may be gone from the server (deleted elsewhere): the browser then sends everything again.
       const stored = await readProject(req.params.id, projectOwner(res)).catch(() => null);
@@ -432,7 +442,9 @@ app.put('/api/projects/:id', async (req, res) => {
       const stored = await persistence.read(req.params.id, projectOwner(res)).catch(() => null);
       if (stored && stored.modified > base) return void res.status(409).json({ error: 'Someone else changed this project. Reload to get their version.', conflict: true });
     }
-    const saved = await writeProject(req.params.id, { name: req.body.name, files, mainFile: req.body.mainFile, archived: req.body.archived, settings: req.body.settings, versions: req.body.versions, comments: req.body.comments, changes: req.body.changes }, { replace: !!files }, projectOwner(res));
+    return writeProjectNow(req.params.id, { name: req.body.name, files, mainFile: req.body.mainFile, archived: req.body.archived, settings: req.body.settings, versions: req.body.versions, comments: req.body.comments, changes: req.body.changes }, { replace: !!files }, projectOwner(res));
+    });
+    if (!saved) return; // already answered: gone from the server, or a conflict
     // The browser already has the files it just sent; echoing them back would double the transfer.
     if (changed) mirrorToLiveRoom(resultKey(req.params.id, projectOwner(res)), changed, patch && Array.isArray(patch.deleted) ? patch.deleted : [], Array.isArray(req.body.files) ? files : undefined);
     if (changed && sharing) await sharing.record(projectOwner(res), req.params.id, changed, res.locals.author ?? null).catch(e => console.error('Saving file history failed:', e));
@@ -1052,9 +1064,11 @@ app.post('/api/projects/:id/history/:version/restore', async (req, res) => {
     const owner = projectOwner(res), id = String(req.params.id);
     const version = sharing && /^\d+$/.test(req.params.version) ? await sharing.version(owner, id, req.params.version) : null;
     if (!version) return void send(res, 404, 'Version not found');
-    const project = await readProject(id, owner);
-    const files = project.files.some(f => f.name === version.file) ? project.files.map(f => f.name === version.file ? { name: f.name, content: version.content } : f) : [...project.files, { name: version.file, content: version.content }];
-    const saved = await writeProject(id, { files }, { replace: true }, owner);
+    const saved = await lockProject(id, owner, async () => {
+      const project = await readProject(id, owner);
+      const files = project.files.some(f => f.name === version.file) ? project.files.map(f => f.name === version.file ? { name: f.name, content: version.content } : f) : [...project.files, { name: version.file, content: version.content }];
+      return writeProjectNow(id, { files }, { replace: true }, owner);
+    });
     mirrorToLiveRoom(resultKey(id, owner), [{ name: version.file, content: version.content }], []);
     await sharing!.insertVersion(owner, id, version.file, version.content, res.locals.author ?? null, `Restored from ${new Date(version.created).toISOString().slice(0, 16).replace('T', ' ')} UTC`);
     res.json({ file: version.file, content: version.content, modified: saved.modified });
@@ -1108,8 +1122,9 @@ async function socketAccess(socket: SocketLike, id: string): Promise<{ key: stri
 const collab = new CollabRooms({
   load: async (owner, projectId) => (await readProject(projectId, owner)).files,
   save: async (owner, projectId, texts, author) => {
-    const stored = await readProject(projectId, owner);
     const changed: StoredFile[] = [];
+    await lockProject(projectId, owner, async () => {
+    const stored = await readProject(projectId, owner);
     const files = stored.files.map(f => {
       const live = f.encoding === 'base64' || f.name.endsWith('/') ? undefined : texts.get(f.name);
       if (live === undefined || live === f.content) return f;
@@ -1117,8 +1132,9 @@ const collab = new CollabRooms({
       changed.push(next);
       return next;
     });
+    if (changed.length) await writeProjectNow(projectId, { files }, { replace: true }, owner);
+    });
     if (!changed.length) return;
-    await writeProject(projectId, { files }, { replace: true }, owner);
     await sharing?.record(owner, projectId, changed, author).catch(e => console.error('Saving file history failed:', e));
   },
 });
@@ -1129,6 +1145,7 @@ function mirrorToLiveRoom(key: string, changed: StoredFile[], deleted: string[],
   if (!room) return;
   // A full save replaces the project: files it no longer lists are gone.
   const gone = allFiles ? [...room.names.keys()].filter(name => !allFiles.some(f => f.name === name)) : deleted;
+  if (!changed.length && !gone.length) return; // a settings-only save: nobody needs to reload the file list
   room.applyExternal(changed, gone);
   io.to(collabChannel(key)).emit('collab:files');
 }

@@ -418,7 +418,9 @@ app.put('/api/projects/:id', async (req, res) => {
     // A save with only the changed files: merged into the stored project, refusing files someone else changed.
     const patch = req.body.patch as FilePatch | undefined;
     if (patch && Array.isArray(patch.files)) {
-      const stored = await readProject(req.params.id, projectOwner(res));
+      // The project may be gone from the server (deleted elsewhere): the browser then sends everything again.
+      const stored = await readProject(req.params.id, projectOwner(res)).catch(() => null);
+      if (!stored) return void res.json({ missing: true });
       const result = applyFilePatch(stored.files.map(f => ({ name: f.name, content: String(f.content ?? ''), encoding: f.encoding })), { files: patch.files, deleted: Array.isArray(patch.deleted) ? patch.deleted : [] }, contentHash);
       if (result.conflicts.length) return void res.status(409).json({ error: `Someone else changed ${result.conflicts.join(', ')}. Reload to get their version.`, conflict: true, files: result.conflicts });
       files = result.files;

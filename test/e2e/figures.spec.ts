@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { expect, test, type Page } from '@playwright/test';
 
 // Paste or drag images into the editor: files land in figures/, a figure block is inserted at the cursor,
@@ -33,10 +34,11 @@ const mainTex = async (page: Page) => (await files(page)).find(f => f.name === '
 const figureNames = async (page: Page) => (await files(page)).map(f => f.name).filter(n => n.startsWith('figures/') && n !== 'figures/');
 
 /** Makes an image in the page and delivers it as a paste or a drop, the way the browser would. */
-async function deliver(page: Page, how: 'paste' | 'drop' | 'tree', image: { name: string; type: string; width: number; height: number } | { name: string; type: string; bytes: number }) {
+async function deliver(page: Page, how: 'paste' | 'drop' | 'tree', image: { name: string; type: string; width: number; height: number } | { name: string; type: string; bytes: number } | { name: string; type: string; base64: string }) {
   await page.evaluate(async ([kind, spec]) => {
     let blob: Blob;
-    if ('bytes' in spec) blob = new Blob([new Uint8Array(spec.bytes)], { type: spec.type });
+    if ('base64' in spec) blob = new Blob([Uint8Array.from(atob(spec.base64), c => c.charCodeAt(0))], { type: spec.type });
+    else if ('bytes' in spec) blob = new Blob([new Uint8Array(spec.bytes)], { type: spec.type });
     else {
       const canvas = document.createElement('canvas');
       canvas.width = spec.width; canvas.height = spec.height;
@@ -108,4 +110,34 @@ test('dropped images are converted, scaled down and size-limited; a tree drop on
   await deliver(page, 'tree', { name: 'wide-chart.jpg', type: 'image/jpeg', width: 60, height: 40 });
   await expect.poll(() => figureNames(page)).toContain('figures/wide-chart-2.jpg');
   expect(await mainTex(page)).toBe(before);
+});
+
+test('a HEIC photo is converted to PNG; a broken one is refused with the reason', async ({ page }, info) => {
+  test.skip(info.project.name.startsWith('phone'), 'Dragging files needs a desktop pointer.');
+  // A real 64×40 HEIC file, one flat colour. Phones often give HEIC files no MIME type, so none is sent here.
+  const heic = readFileSync('test/fixtures/images/sample.heic').toString('base64');
+  await deliver(page, 'drop', { name: 'IMG_0042.HEIC', type: '', base64: heic });
+  await page.getByRole('dialog', { name: 'Add the graphicx package?' }).getByRole('button', { name: 'Cancel' }).click();
+  await expect.poll(() => figureNames(page), { timeout: 30_000 }).toEqual(['figures/img_0042.png']);
+  const decoded = await page.evaluate(async () => {
+    const stored = (JSON.parse(localStorage.getItem('paperdesk-projects')!)[0].files as { name: string; content: string }[]).find(f => f.name === 'figures/img_0042.png')!;
+    const blob = await (await fetch(`data:image/png;base64,${stored.content}`)).blob();
+    const bitmap = await createImageBitmap(blob), canvas = document.createElement('canvas');
+    canvas.width = bitmap.width; canvas.height = bitmap.height;
+    const context = canvas.getContext('2d')!;
+    context.drawImage(bitmap, 0, 0);
+    return { type: blob.type, size: [bitmap.width, bitmap.height], pixel: Array.from(context.getImageData(32, 20, 1, 1).data), png: stored.content.startsWith('iVBORw0KGgo') };
+  });
+  expect(decoded.png).toBe(true);
+  expect(decoded.size).toEqual([64, 40]);
+  // The source colour is rgb(45, 157, 111); HEIC is lossy, so allow a little drift.
+  for (const [i, want] of [45, 157, 111].entries()) expect(Math.abs(decoded.pixel[i]! - want)).toBeLessThanOrEqual(12);
+  expect(decoded.pixel[3]).toBe(255);
+  await expect(page.locator('.toast')).toContainText('Converted to PNG');
+  expect(await mainTex(page)).toContain('\\includegraphics[width=\\linewidth]{figures/img_0042.png}');
+
+  // Not really a HEIC file: nothing is added and the message says what to do.
+  await deliver(page, 'drop', { name: 'broken.heic', type: 'image/heic', base64: btoa('this is not a photo') });
+  await expect(page.locator('.toast')).toContainText('couldn’t be read as a HEIC photo');
+  expect(await figureNames(page)).toEqual(['figures/img_0042.png']);
 });

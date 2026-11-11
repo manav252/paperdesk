@@ -101,7 +101,7 @@ test('figures, tables and equations compile to a clean PDF', async ({ page }) =>
   await page.getByRole('button', { name: 'Insert image' }).click();
   await (await imageChooser).setFiles({ name: 'User attachment.png', mimeType: 'image/png', buffer: readFileSync(path.resolve('test/fixtures/compile/image-space-upload/user-attachment.png')) });
   await expect(page.locator('.file-label').getByText('user-attachment.png', { exact: true })).toBeVisible();
-  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('paperdesk-projects') ?? '[]')[0]?.files?.find((file: { name: string }) => file.name === 'main.tex')?.content)).toContain('\\includegraphics[width=0.8\\linewidth]{user-attachment.png}');
+  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('paperdesk-projects') ?? '[]')[0]?.files?.find((file: { name: string }) => file.name === 'main.tex')?.content)).toContain('\\includegraphics[width=\\linewidth]{figures/user-attachment.png}');
 
   const compiledResponse = page.waitForResponse(response => /\/api\/projects\/[^/]+\/compile$/.test(new URL(response.url()).pathname));
   await page.getByRole('button', { name: /^Recompile/ }).first().click();

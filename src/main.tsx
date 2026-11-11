@@ -18,6 +18,8 @@ import { authReady, currentAccessToken, currentAccount } from './lib/auth';
 import { AccountButton, SignInDialog } from './Account';
 import { startCollab, type Collab, type Peer } from './collab';
 import { CitationDialog } from './Citations';
+import { prepareFigure } from './figures';
+import { addGraphicx, appendToBody, FIGURE_FOLDER, figureBlock, figureSnippet, graphicxInsertion, hasGraphicx, inDocumentBody, isFigureFile } from './lib/figure';
 import { appendEntries } from './lib/bibtex';
 import { clearPendingJoin, HistoryPanel, pendingJoin, ShareAccess } from './Sharing';
 import { base64ToBytes, compileFiles, contentHash, type SyncState } from './lib/compileSync';
@@ -87,10 +89,10 @@ const rewriteImageReferences=(source:string,renames:Map<string,string>)=>[...ren
 },source);
 
 type Layout='split'|'editor'|'pdf';
-type LayoutPrefs={layout:Layout,sidebar:boolean,sidebarWidth:number,previewPct:number,assistant:boolean,wrap:boolean,outline:boolean,keymap:Keymap,spellcheck:boolean};
+type LayoutPrefs={layout:Layout,sidebar:boolean,sidebarWidth:number,previewPct:number,assistant:boolean,wrap:boolean,outline:boolean,keymap:Keymap,spellcheck:boolean,keepImageSize:boolean};
 const LAYOUT_KEY='paperdesk-layout';
 const NARROW='(max-width: 860px)';
-const readLayout=():LayoutPrefs=>{const base:LayoutPrefs={layout:'split',sidebar:true,sidebarWidth:232,previewPct:46,assistant:false,wrap:true,outline:true,keymap:'default',spellcheck:true};try{return{...base,...JSON.parse(localStorage.getItem(LAYOUT_KEY)??'{}')}}catch{return base}};
+const readLayout=():LayoutPrefs=>{const base:LayoutPrefs={layout:'split',sidebar:true,sidebarWidth:232,previewPct:46,assistant:false,wrap:true,outline:true,keymap:'default',spellcheck:true,keepImageSize:false};try{return{...base,...JSON.parse(localStorage.getItem(LAYOUT_KEY)??'{}')}}catch{return base}};
 
 type Tone='info'|'success'|'error';
 type Toast={text:string,tone:Tone};
@@ -346,11 +348,45 @@ function App(){
   if(imageInput.current)imageInput.current.value='';
   if(folderInput.current)folderInput.current.value='';
  };
+ // Images pasted or dropped into the editor (or dropped on the file tree) go to figures/ and, in the editor, get a
+ // full figure block at the cursor. Undoing the inserted block also removes the uploaded files; redo restores them.
+ const figureUndo=useRef<{model:string,paths:string[],files:ProjectFile[]}[]>([]),addFiguresRef=useRef<(list:globalThis.File[],at?:{x:number,y:number})=>void>(()=>undefined),figureSyncRef=useRef<()=>void>(()=>undefined);
+ const addFigures=async(list:globalThis.File[],{insertBlock=true,at}:{insertBlock?:boolean,at?:{x:number,y:number}}={})=>{
+  if(!project||project.role==='viewer'||!list.length)return;
+  const used=new Set(project.files.map(f=>f.name)),added:ProjectFile[]=[],paths:string[]=[],notes:string[]=[];let failed=0;
+  for(const[i,file]of list.entries()){
+   notify(list.length>1?`Adding image ${i+1} of ${list.length}…`:`Adding ${file.name||'image'}…`);
+   try{const out=await prepareFigure(file,{keepOriginal:prefs.keepImageSize,used});added.push(...out.files);paths.push(out.include);if(out.note)notes.push(out.note)}
+   catch(e){failed++;notify(e instanceof Error?e.message:'The image couldn’t be added.','error')}
+  }
+  if(!added.length)return;
+  const names=new Set(added.map(f=>f.name));
+  const main=project.files.find(f=>f.name===(project.mainFile??'main.tex'))??project.files.find(f=>f.name.endsWith('.tex'));
+  const ed=editorRef.current,model=ed?.getModel(),texOpen=!!ed&&!!model&&!!currentFile&&/\.tex$/i.test(currentFile.name);
+  if(texOpen&&at){const target=ed.getTargetAtClientPoint(at.x,at.y);if(target?.position)ed.setPosition(target.position)}
+  const position=ed?.getPosition(),atCursor=insertBlock&&texOpen&&!!position&&inDocumentBody(model.getValue(),model.getOffsetAt(position));
+  const fallback=insertBlock&&!atCursor&&main?main.name:'';
+  update(p=>({...p,files:[...p.files.filter(f=>!names.has(f.name)).map(f=>f.name===fallback?{...f,content:appendToBody(f.content,paths.map(x=>figureBlock(x)).join('\n'))}:f),...(p.files.some(f=>f.name===FIGURE_FOLDER)?[]:[{name:FIGURE_FOLDER,content:''}]),...added]}));
+  setCollapsed(c=>{const n=new Set(c);n.delete(FIGURE_FOLDER.replace(/\/$/,''));return n});
+  if(atCursor){
+   const lead=position.column>1&&model.getLineContent(position.lineNumber).trim()?'\n':'';
+   const snippets=ed.getContribution('snippetController2') as {insert?:(template:string)=>void}|null;
+   ed.focus();
+   if(snippets?.insert)snippets.insert(lead+figureSnippet(paths));else ed.executeEdits('figure',[{range:ed.getSelection()!,text:lead+paths.map(x=>figureBlock(x)).join('\n'),forceMoveMarkers:true}]);
+   figureUndo.current=[...figureUndo.current.slice(-9),{model:model.uri.toString(),paths,files:added}];
+  }else if(fallback)setFileName(fallback);
+  if(!failed)notify(notes.length?notes.join(' '):paths.length===1?`Added ${paths[0]}`:`Added ${paths.length} images to ${FIGURE_FOLDER}`,'success');
+  if(insertBlock&&main&&!hasGraphicx(main.content))setDialog({title:'Add the graphicx package?',message:<>Figures need <code>\usepackage{'{graphicx}'}</code>, and {main.name} doesn’t load it yet.</>,confirmLabel:'Add it',onConfirm:()=>{const live=editorRef.current,open=live?.getModel();/* In the open file, add it as an editor edit so the cursor stays in the caption. */if(live&&open&&currentFile?.name===main.name){if(!hasGraphicx(open.getValue())){const spot=graphicxInsertion(open.getValue()),at=open.getPositionAt(spot.offset);live.executeEdits('graphicx',[{range:{startLineNumber:at.lineNumber,startColumn:at.column,endLineNumber:at.lineNumber,endColumn:at.column},text:spot.text}])}window.setTimeout(()=>live.focus(),0)}else update(p=>({...p,files:p.files.map(f=>f.name===main.name&&!hasGraphicx(f.content)?{...f,content:addGraphicx(f.content)}:f)}))}});
+ };
+ addFiguresRef.current=(list,at)=>void addFigures(list,{at});
+ figureSyncRef.current=()=>{const model=editorRef.current?.getModel();if(!model||!project)return;const text=model.getValue();for(const entry of figureUndo.current){if(entry.model!==model.uri.toString())continue;const cited=entry.paths.some(x=>text.includes(`{${x}}`)),stored=project.files.some(f=>f.name===entry.files[0]!.name);if(!cited&&stored){const gone=new Set(entry.files.map(f=>f.name));update(p=>({...p,files:p.files.filter(f=>!gone.has(f.name))}));notify(`Removed ${entry.paths.join(', ')}`)}else if(cited&&!stored)update(p=>({...p,files:[...p.files,...entry.files.filter(f=>!p.files.some(x=>x.name===f.name))]}))}};
+ // Pasted images: caught on the document (Monaco's input element is not reliably under the editor's root node).
+ useEffect(()=>{const onPaste=(e:ClipboardEvent)=>{if(!(e.target instanceof Element)||!e.target.closest('.editor-canvas'))return;const images=Array.from(e.clipboardData?.files??[]).filter(isFigureFile);if(!images.length)return;e.preventDefault();e.stopPropagation();addFiguresRef.current(images)};document.addEventListener('paste',onPaste,true);return()=>document.removeEventListener('paste',onPaste,true)},[]);
  const [dropTarget,setDropTarget]=useState<string|null>(null);
  const dropProps=(folder:string)=>({
   onDragOver:(e:React.DragEvent)=>{if(!e.dataTransfer.types.includes('Files'))return;e.preventDefault();e.stopPropagation();e.dataTransfer.dropEffect='copy';setDropTarget(folder)},
   onDragLeave:(e:React.DragEvent)=>{if(!(e.currentTarget as HTMLElement).contains(e.relatedTarget as Node))setDropTarget(t=>t===folder?null:t)},
-  onDrop:async(e:React.DragEvent)=>{if(!e.dataTransfer.types.includes('Files'))return;e.preventDefault();e.stopPropagation();setDropTarget(null);await uploadFiles(await filesFromDrop(e.dataTransfer),folder)},
+  onDrop:async(e:React.DragEvent)=>{if(!e.dataTransfer.types.includes('Files'))return;e.preventDefault();e.stopPropagation();setDropTarget(null);const items=await filesFromDrop(e.dataTransfer);/* Loose images dropped on the tree itself go to figures/. */if(!folder&&items.length&&items.every(x=>isFigureFile(x.file)&&!x.path.includes('/'))){await addFigures(items.map(x=>x.file),{insertBlock:false});return}await uploadFiles(items,folder)},
  });
  const uploadTo=(folder:string)=>{uploadFolder.current=folder;folderInput.current?.click()};
  const setMainDocument=(f:ProjectFile)=>{update(p=>({...p,mainFile:f.name}));notify(`${f.name} is now the main document`,'success')};
@@ -448,7 +484,7 @@ function App(){
  const changeZoom=(delta:number)=>setZoom(z=>Math.min(300,Math.max(30,Math.round(((typeof z==='number'?z:scaleRef.current)+delta)/10)*10)));
  const goToPage=(n:number)=>setNav(v=>({page:Math.max(1,Math.min(pageTotal||1,n)),n:v.n+1}));
 
- const onMount:OnMount=(editor,monaco)=>{editorRef.current=editor;monacoRef.current=monaco;setEditorReady(true);editor.addAction({id:'paperdesk.addCitation',label:'Add citation by DOI or arXiv ID',run:()=>setModal('cite')});editor.addCommand(monaco.KeyMod.CtrlCmd|monaco.KeyCode.KeyS,()=>compileRef.current());editor.addCommand(monaco.KeyMod.CtrlCmd|monaco.KeyCode.Enter,()=>compileRef.current());editor.onDidChangeCursorPosition((e:any)=>setCursor({line:e.position.lineNumber,col:e.position.column}));editor.onDidChangeCursorSelection((e:any)=>{const model=editor.getModel();setSelectionChars(model&&!e.selection.isEmpty()?model.getValueLengthInRange(e.selection):0)});editor.onDidDispose(()=>{editorRef.current=null;setEditorReady(false)})};
+ const onMount:OnMount=(editor,monaco)=>{editorRef.current=editor;monacoRef.current=monaco;setEditorReady(true);editor.onDidChangeModelContent((e:any)=>{if(e.isUndoing||e.isRedoing)window.setTimeout(()=>figureSyncRef.current(),0)});editor.addAction({id:'paperdesk.addCitation',label:'Add citation by DOI or arXiv ID',run:()=>setModal('cite')});editor.addCommand(monaco.KeyMod.CtrlCmd|monaco.KeyCode.KeyS,()=>compileRef.current());editor.addCommand(monaco.KeyMod.CtrlCmd|monaco.KeyCode.Enter,()=>compileRef.current());editor.onDidChangeCursorPosition((e:any)=>setCursor({line:e.position.lineNumber,col:e.position.column}));editor.onDidChangeCursorSelection((e:any)=>{const model=editor.getModel();setSelectionChars(model&&!e.selection.isEmpty()?model.getValueLengthInRange(e.selection):0)});editor.onDidDispose(()=>{editorRef.current=null;setEditorReady(false)})};
  // Jump once the editor shows the requested file, and show compile problems as squiggles in it.
  useEffect(()=>{if(editorReady)applyJump()},[editorReady,currentFile?.name]);
  useEffect(()=>{const ed=editorRef.current,m=monacoRef.current,model=ed?.getModel();if(!m||!model)return;const name=currentFile?.name;const entries=[...(result?.errors??[]).map(e=>({e,sev:m.MarkerSeverity.Error})),...(result?.warnings??[]).map(e=>({e,sev:m.MarkerSeverity.Warning}))].filter(x=>x.e.file===name&&x.e.line);m.editor.setModelMarkers(model,'latex',entries.map(({e,sev})=>({severity:sev,message:e.message,startLineNumber:e.line!,endLineNumber:e.line!,startColumn:1,endColumn:model.getLineMaxColumn(Math.min(e.line!,model.getLineCount()))})))},[result,editorReady,currentFile?.name]);
@@ -519,7 +555,7 @@ function App(){
     </div>
     {prefs.outline&&editableFile&&/\.tex$/i.test(editableFile.name)&&<Outline content={editableFile.content} cursorLine={cursor.line} onJump={line=>jumpTo(editableFile.name,line)}/>}
     <div className="side-bottom"><button onClick={downloadProject}><FileArchive size={15}/> Download project</button><button onClick={()=>setModal('settings')}><Settings size={15}/> Project settings</button></div>
-    <input ref={fileInput} className="hidden" type="file" multiple accept=".tex,.bib,.bst,.sty,.cls,.png,.jpg,.jpeg,.pdf,.svg,.eps,.csv,.txt,.dat,.zip" onChange={e=>uploadFiles(e.target.files)}/><input ref={imageInput} className="hidden" data-testid="image-upload-input" type="file" accept="image/*" onChange={e=>uploadFiles(e.target.files,'',true)}/><input ref={folderInput} className="hidden" type="file" multiple aria-label="Upload into folder" onChange={e=>uploadFiles(e.target.files,uploadFolder.current)}/><input ref={zipInput} className="hidden" type="file" accept=".zip" onChange={e=>uploadFiles(e.target.files)}/>
+    <input ref={fileInput} className="hidden" type="file" multiple accept=".tex,.bib,.bst,.sty,.cls,.png,.jpg,.jpeg,.pdf,.svg,.eps,.csv,.txt,.dat,.zip" onChange={e=>uploadFiles(e.target.files)}/><input ref={imageInput} className="hidden" data-testid="image-upload-input" type="file" multiple accept="image/*,.pdf,.eps,.heic,.heif" onChange={e=>{const picked=Array.from(e.target.files??[]);e.target.value='';void addFigures(picked)}}/><input ref={folderInput} className="hidden" type="file" multiple aria-label="Upload into folder" onChange={e=>uploadFiles(e.target.files,uploadFolder.current)}/><input ref={zipInput} className="hidden" type="file" accept=".zip" onChange={e=>uploadFiles(e.target.files)}/>
    </aside>
    {sidebarOpen&&!narrow&&<Resizer label="Resize file tree" value={prefs.sidebarWidth} min={170} max={420} onChange={v=>setPref('sidebarWidth',v)} fromClientX={x=>x-(workRef.current?.getBoundingClientRect().left??0)} onReset={()=>setPref('sidebarWidth',232)}/>}
 
@@ -535,7 +571,7 @@ function App(){
      <button className="tool" title="Bold" aria-label="Bold" onClick={()=>wrap('\\textbf{','}')}><Bold size={15}/></button><button className="tool" title="Italic" aria-label="Italic" onClick={()=>wrap('\\textit{','}')}><Italic size={15}/></button><button className="tool" title="Underline" aria-label="Underline" onClick={()=>wrap('\\underline{','}')}><Underline size={15}/></button><span className="tool-divider"/>
      <button className="tool" title="Bulleted list" aria-label="Bulleted list" onClick={()=>insert('\\begin{itemize}\n  \\item Item\n\\end{itemize}')}><List size={15}/></button><button className="tool" title="Numbered list" aria-label="Numbered list" onClick={()=>insert('\\begin{enumerate}\n  \\item Item\n\\end{enumerate}')}><ListOrdered size={15}/></button><button className="tool" title="Table" aria-label="Table" onClick={()=>insert('\\begin{table}[ht]\n  \\centering\n  \\begin{tabular}{cc}\n    A & B \\\\\n    1 & 2 \\\\\n  \\end{tabular}\n  \\caption{Caption}\n\\end{table}')}><Table2 size={15}/></button><button className="tool" title="Equation" aria-label="Equation" onClick={()=>insert('\\[\n  \n\\]')}><Sigma size={15}/></button><button className={`tool${symbolsOpen?' on':''}`} title="Symbol palette" aria-label="Symbol palette" aria-pressed={symbolsOpen} onClick={()=>setSymbolsOpen(o=>!o)}><Omega size={15}/></button><button className="tool" title="Citation" aria-label="Citation" onClick={()=>wrap('\\cite{','}')}><Quote size={15}/></button><button className="tool" title="Add citation from a DOI or arXiv ID" aria-label="Add citation" onClick={()=>setModal('cite')}><BookPlus size={15}/></button><button className="tool" title="Reference" aria-label="Reference" onClick={()=>wrap('\\ref{','}')}><Link2 size={14}/></button><button className="tool" title="Insert image" aria-label="Insert image" onClick={()=>imageInput.current?.click()}><ImageIcon size={15}/></button><span className="tool-divider"/><button className="tool" title="Sync source to PDF" aria-label="Sync source to PDF" onClick={syncSourceToPdf}><Crosshair size={15}/></button>
     </div>
-    <div className="editor-canvas">
+    <div className="editor-canvas" onDragOverCapture={e=>{if(e.dataTransfer.types.includes('Files')){e.preventDefault();e.stopPropagation();e.dataTransfer.dropEffect='copy'}}} onDropCapture={e=>{const images=Array.from(e.dataTransfer.files).filter(isFigureFile);if(!images.length)return;e.preventDefault();e.stopPropagation();addFiguresRef.current(images,{x:e.clientX,y:e.clientY})}}>
      {currentFile&&!isEditable(currentFile)&&!currentFile.name.endsWith('/')?<div className="binary-file">{isImage(currentFile.name)&&currentFile.content?<img src={`data:${mimeType(currentFile.name)};base64,${currentFile.content}`} alt={currentFile.name}/>:<ImageIcon size={26}/>}<strong>{currentFile.name}</strong><p>{currentFile.content?`${formatBytes(Math.floor(currentFile.content.length*3/4))} · ${isBinary(currentFile.name)?'binary files':'files that aren’t UTF-8 text'} can’t be edited here; they’re included when the project compiles.`:'This file’s contents aren’t available in this browser. Re-upload it to include it in compiles.'}</p></div>
      :monacoState!=='ready'?<div className="pane-loading">{monacoState==='failed'?<><AlertCircle size={15}/> The editor couldn’t load. Reload the page to try again.</>:<><Spinner/> Loading editor…</>}</div>
      :<Editor height="100%" path={`${project.id}/${currentFile?.name??fileName}`} language={(currentFile?.name??fileName).endsWith('.bib')?'bibtex':'latex'} theme={theme.resolved==='dark'?'paperdesk-dark':'paperdesk-light'} beforeMount={setupMonaco} loading={<div className="pane-loading"><Spinner/> Loading editor…</div>} value={collabNames?.has(currentFile?.name??fileName)?undefined:content} onChange={v=>{const text=v??'';if(text===contentRef.current)return;if(collabNames)echo(currentFile?.name??fileName,text);setContent(text)}} onMount={onMount} options={{readOnly:project.role==='viewer',fontFamily:"'DM Mono', ui-monospace, monospace",fontSize:13.5,lineHeight:22,minimap:{enabled:false},padding:{top:14,bottom:24},automaticLayout:true,wordWrap:prefs.wrap?'on':'off',scrollBeyondLastLine:false,renderLineHighlight:'line',lineNumbers:'on',bracketPairColorization:{enabled:true},autoClosingBrackets:'always',autoClosingQuotes:'always',tabSize:2,folding:true,contextmenu:true,smoothScrolling:true,scrollbar:{verticalScrollbarSize:10,horizontalScrollbarSize:10}}}/>}
@@ -602,6 +638,7 @@ modal==='cite'?<CitationDialog bibFiles={project.files.filter(f=>f.name.endsWith
    <section><h4>Appearance</h4><div className="field-row"><div><strong>Theme</strong><span>Auto follows your operating system.</span></div><ThemeSegment pref={theme.pref} setPref={theme.setPref}/></div></section>
    <section><h4>Editor</h4>
     <div className="field-row"><div><strong>Key bindings</strong><span>Vim and Emacs modes apply right away.</span></div><select className="select" aria-label="Key bindings" value={prefs.keymap} onChange={e=>setPref('keymap',e.target.value as Keymap)}>{KEYMAPS.map(k=><option key={k.value} value={k.value}>{k.label}</option>)}</select></div>
+    <div className="field-row"><div><strong>Keep original image size</strong><span>Otherwise images over 3000 px are scaled down when added.</span></div><input type="checkbox" aria-label="Keep original image size" checked={prefs.keepImageSize} onChange={e=>setPref('keepImageSize',e.target.checked)}/></div>
     <div className="field-row"><div><strong>Spell check</strong><span>English (US). Skips commands, math, citations and comments.</span></div><input type="checkbox" aria-label="Spell check" checked={prefs.spellcheck} onChange={e=>setPref('spellcheck',e.target.checked)}/></div>
    </section>
    <section><h4>Project</h4>

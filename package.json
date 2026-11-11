@@ -28,6 +28,7 @@
     "archiver": "^7.0.1",
     "dictionary-en": "^4.0.0",
     "express": "^5.1.0",
+    "heic2any": "^0.0.4",
     "jose": "^6.2.15",
     "lucide-react": "^0.468.0",
     "monaco-editor": "^0.52.2",

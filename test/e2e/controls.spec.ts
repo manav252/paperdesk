@@ -214,7 +214,10 @@ test('file tree, toolbar, autocomplete, compile and PDF controls', async ({ page
   await page.getByRole('button', { name: 'Insert image' }).click();
   await (await imageChooser).setFiles({ name: 'User attachment.png', mimeType: 'image/png', buffer: readFileSync(path.resolve('test/fixtures/compile/image-space-upload/user-attachment.png')) });
   await expect(page.locator('.file-label').getByText('user-attachment.png', { exact: true })).toBeVisible();
-  await expect.poll(() => source(page)).toContain('\\includegraphics[width=0.8\\linewidth]{user-attachment.png}');
+  await expect.poll(() => source(page)).toContain('\\includegraphics[width=\\linewidth]{figures/user-attachment.png}');
+  // The starter document doesn't load graphicx yet: the editor offers to add it.
+  await page.getByRole('dialog', { name: 'Add the graphicx package?' }).getByRole('button', { name: 'Add it' }).click();
+  await expect.poll(() => source(page)).toContain('\\usepackage{graphicx}');
 
   // Autocomplete offers the project's labels and citation keys.
   await page.getByRole('textbox', { name: 'Editor content' }).click({ force: true });

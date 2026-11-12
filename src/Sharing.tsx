@@ -10,14 +10,16 @@ const JSON_HEADERS = { 'Content-Type': 'application/json' };
 // An invite link (?join=token) or a project link (?open=id) survives the sign-in redirect in browser storage.
 try {
   const url = new URL(location.href),
-    token = url.searchParams.get('join'),
+    // A share link is /#/s/<token>; ?join=<token> is the form used in invitation emails and after sign-in.
+    link = (url.hash.match(/^#\/s\/([\w-]+)\/?$/) ?? url.pathname.match(/^\/s\/([\w-]+)\/?$/))?.[1],
+    token = link ?? url.searchParams.get('join'),
     open = url.searchParams.get('open');
   if (token) localStorage.setItem(JOIN_KEY, token);
   if (open) localStorage.setItem(OPEN_KEY, open);
   if (token || open) {
     url.searchParams.delete('join');
     url.searchParams.delete('open');
-    history.replaceState(history.state, '', url.pathname + url.search + url.hash);
+    history.replaceState(history.state, '', (link ? '/' : url.pathname) + url.search + (link ? '' : url.hash));
   }
 } catch {
   /* no storage: the link can be opened again after signing in */
@@ -55,7 +57,7 @@ type Access = {
   invites: { token: string; email: string | null; role: string }[];
 };
 const projectUrl = (id: string) => `${location.origin}/#/project/${id}/`;
-const joinUrl = (token: string) => `${location.origin}${location.pathname}?join=${token}`;
+const joinUrl = (token: string) => `${location.origin}/#/s/${token}`;
 
 /** Owner’s panel: invite people by email, share links with a set role, change or remove access. */
 export function ShareAccess({
@@ -216,35 +218,54 @@ export function ShareAccess({
           <Copy size={13} /> Copy project link
         </button>
       </div>
-      <h4>Share with a link</h4>
-      <p className="muted">Anyone who signs in with a link joins with that role, until you turn the link off.</p>
+      <h4>Anyone with the link</h4>
+      <p className="muted">
+        Opening a link and signing in opens this project with that role. Turn a link off, or make a new one, to stop the
+        old one working.
+      </p>
       {(['editor', 'viewer'] as const).map((r) => {
         const link = links.find((l) => l.role === r);
         return (
-          <div className="share-person" key={r}>
-            <div>
-              <strong>{r === 'editor' ? 'Edit link' : 'View link'}</strong>
-            </div>
-            {link ? (
-              <>
-                <button className="btn btn-secondary btn-sm" onClick={() => copy(joinUrl(link.token), 'Link copied')}>
-                  <Copy size={13} /> Copy link
-                </button>
+          <div className="share-mode" key={r}>
+            <div className="share-person">
+              <div>
+                <strong>{r === 'editor' ? 'Edit link' : 'View link'}</strong>
+                <span>{link ? (r === 'editor' ? 'Can edit' : 'Can view') : 'Off'}</span>
+              </div>
+              {link ? (
+                <>
+                  <button className="btn btn-primary btn-sm" onClick={() => copy(joinUrl(link.token), 'Link copied')}>
+                    <Copy size={13} /> Copy link
+                  </button>
+                  <button
+                    className="btn btn-secondary btn-sm"
+                    disabled={!!creating}
+                    title="Replace this link with a new one; the old link stops working"
+                    onClick={() => void invite({ role: r })}
+                  >
+                    {creating === r ? 'Making…' : 'New link'}
+                  </button>
+                  <button
+                    className="btn btn-secondary btn-sm"
+                    onClick={() => void call(`/invites/${link.token}`, { method: 'DELETE' }).then(refresh)}
+                  >
+                    Turn off
+                  </button>
+                </>
+              ) : (
                 <button
                   className="btn btn-secondary btn-sm"
-                  onClick={() => void call(`/invites/${link.token}`, { method: 'DELETE' }).then(refresh)}
+                  disabled={!!creating}
+                  onClick={() => void invite({ role: r })}
                 >
-                  Turn off
+                  {creating === r ? 'Creating link…' : 'Create link'}
                 </button>
-              </>
-            ) : (
-              <button
-                className="btn btn-secondary btn-sm"
-                disabled={!!creating}
-                onClick={() => void invite({ role: r })}
-              >
-                {creating === r ? 'Creating link…' : 'Create link'}
-              </button>
+              )}
+            </div>
+            {link && (
+              <code className="share-url" aria-label={r === 'editor' ? 'Edit link address' : 'View link address'}>
+                {joinUrl(link.token)}
+              </code>
             )}
           </div>
         );

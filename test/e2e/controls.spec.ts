@@ -224,7 +224,7 @@ test('editor header, menus, panels and dialogs', async ({ page }) => {
 
   await page.getByRole('button', { name: 'Share' }).click();
   const share = page.getByRole('dialog', { name: 'Share project' });
-  await share.getByRole('button', { name: 'Create link' }).click();
+  await share.getByRole('button', { name: 'Create copy link' }).click();
   await expect(share.getByLabel('Read-only copy link')).toHaveValue(/\?copy=[0-9a-f-]{36}$/);
   const link = await share.getByLabel('Read-only copy link').inputValue();
   await share.getByRole('button', { name: 'Close' }).last().click();

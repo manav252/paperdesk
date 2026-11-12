@@ -219,8 +219,23 @@ test('owner shares through the dialog; the viewer gets a read-only project and a
   const invite = (await (await api.get(`/${id}/members`)).json()).invites.find((i: { email: string | null }) => i.email)
     ?.token as string;
 
+  expect(invite).toBeTruthy();
+
+  // The view link has its own address; making a new one replaces it, and the old one stops working.
+  const address = dialog.getByLabel('View link address');
+  await expect(address).toContainText(/\/#\/s\/[\w-]{20,}$/);
+  const oldLink = (await address.textContent())!.trim();
+  await dialog.getByRole('button', { name: 'New link' }).click();
+  await expect(address).not.toHaveText(oldLink);
+  const viewLink = new URL((await address.textContent())!.trim());
+
   const viewer = await signedIn(browser, 'viewer');
-  await viewer.page.goto(`/?join=${invite}`);
+  await viewer.page.goto(new URL(oldLink).hash ? `/${new URL(oldLink).hash}` : '/');
+  await expect(
+    viewer.page.getByRole('alert').filter({ hasText: 'This link is invalid or sharing is turned off' }),
+  ).toBeVisible({ timeout: 30_000 });
+  await viewer.page.goto('/');
+  await viewer.page.goto(`/${viewLink.hash}`);
   await expect(viewer.page.getByText('View only')).toBeVisible();
   await expect(viewer.page.locator('.view-line').filter({ hasText: 'Version two' })).toBeVisible();
   await viewer.page.locator('.view-line').filter({ hasText: 'Version two' }).click();
@@ -315,7 +330,7 @@ test('a signed-out visitor is told which project a link is for, and lands in it 
     localStorage.setItem('paperdesk-help-seen', '1');
   });
 
-  await page.goto(`/?join=${link}`);
+  await page.goto(`/#/s/${link}`);
   const dialog = page.getByRole('dialog', { name: 'Sign in to PaperDesk' });
   await expect(dialog).toContainText(
     'You were invited to edit “Smart Wardrobe Management System”. Sign in to open it.',
@@ -348,8 +363,10 @@ test('a signed-out visitor is told which project a link is for, and lands in it 
     localStorage.setItem('paperdesk-tour-done', '1');
     localStorage.setItem('paperdesk-help-seen', '1');
   });
-  await latePage.goto(`/?join=${link}`);
-  await expect(latePage.locator('.toast')).toContainText('This invitation link is no longer valid');
+  await latePage.goto(`/s/${link}`);
+  await expect(
+    latePage.getByRole('alert').filter({ hasText: 'This link is invalid or sharing is turned off' }),
+  ).toBeVisible();
   await expect(latePage.getByRole('dialog', { name: 'Sign in to PaperDesk' })).toHaveCount(0);
   await late.close();
   await api.del(`/${id}`);

@@ -3480,6 +3480,12 @@ body.is-resizing .resizer:active::after {
   font-size: 12px;
   overflow-wrap: anywhere;
 }
+.share-mode {
+  margin-bottom: 10px;
+}
+.share-mode .share-url {
+  display: block;
+}
 .no-access {
   max-width: 520px;
   margin: 15vh auto 0;

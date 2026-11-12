@@ -450,7 +450,7 @@ function App() {
   const [spellMenu, setSpellMenu] = useState<SpellMenu | null>(null),
     spellRef = useRef<Spellchecker | null>(null);
   const [pdfSearch, setPdfSearch] = useState(false);
-  const [noAccess, setNoAccess] = useState(false);
+  const [noAccess, setNoAccess] = useState<'' | 'project' | 'link'>('');
   const [joinPrompt, setJoinPrompt] = useState(''),
     [conflict, setConflict] = useState(''),
     serverModified = useRef(new Map<string, number>()),
@@ -767,6 +767,8 @@ function App() {
   }, [projects]);
   useEffect(() => {
     const onPopState = () => {
+      // A share link pasted into an open tab is read when the page loads, like on a fresh visit.
+      if (/^#\/s\/[\w-]+\/?$/.test(location.hash)) return void location.reload();
       const asked = routeProjectId(),
         known = projectsRef.current.find((p) => p.id === asked || p.shareId === asked);
       // A project link pasted into an open tab: load again so access is checked the same way as on a fresh visit.
@@ -875,7 +877,8 @@ function App() {
                 body.role === 'viewer' ? 'You joined this project with view access' : 'You joined this project',
                 'success',
               );
-            } else notify(body.error ?? 'This invitation could not be accepted.', 'error');
+            } else if (j.status === 404) setNoAccess('link');
+            else notify(body.error ?? 'This invitation could not be accepted.', 'error');
           } else {
             /* Not signed in: say which project the link is for and ask them to sign in, instead of opening the sample project. */ firstVisit.current = false;
             const about = await apiFetch(`/api/invites/${encodeURIComponent(join)}`)
@@ -885,7 +888,7 @@ function App() {
               .catch(() => undefined);
             if (about === null) {
               clearPendingJoin();
-              notify('This invitation link is no longer valid. Ask the project owner for a new one.', 'error');
+              setNoAccess('link');
             } else
               setJoinPrompt(
                 about
@@ -927,7 +930,7 @@ function App() {
             history.replaceState({ screen: 'dashboard' }, '', '/');
             setProjectId('');
             setActiveTab('dashboard');
-            if (authConfigured && currentAccessToken()) setNoAccess(true);
+            if (authConfigured && currentAccessToken()) setNoAccess('project');
             else if (authConfigured && !join) {
               /* Signed out: remember the project, ask them to sign in, and open it when they come back. */ firstVisit.current = false;
               keepPendingOpen(asked);
@@ -2532,12 +2535,21 @@ function App() {
     return (
       <div className="app-shell">
         <div className="empty-state no-access" role="alert">
-          <h3>You don’t have access to this project</h3>
-          <p>
-            You are signed in as {currentAccount()?.email ?? 'another account'}. Ask the project owner to invite this
-            address or send you a share link. The project may also have been deleted.
-          </p>
-          <button className="btn btn-primary" onClick={() => setNoAccess(false)}>
+          {noAccess === 'link' ? (
+            <>
+              <h3>This link is invalid or sharing is turned off</h3>
+              <p>The project owner may have turned the link off or replaced it. Ask them for a new link.</p>
+            </>
+          ) : (
+            <>
+              <h3>You don’t have access to this project</h3>
+              <p>
+                You are signed in as {currentAccount()?.email ?? 'another account'}. Ask the project owner to invite
+                this address or send you a share link. The project may also have been deleted.
+              </p>
+            </>
+          )}
+          <button className="btn btn-primary" onClick={() => setNoAccess('')}>
             Go to your projects
           </button>
         </div>
@@ -3782,8 +3794,8 @@ function App() {
                   Close
                 </button>
                 {share.state !== 'ready' && (
-                  <button className="btn btn-primary" disabled={share.state === 'creating'} onClick={createShareLink}>
-                    {share.state === 'creating' ? <Spinner light /> : <Link2 size={14} />} Create link
+                  <button className="btn btn-secondary" disabled={share.state === 'creating'} onClick={createShareLink}>
+                    {share.state === 'creating' ? <Spinner /> : <Link2 size={14} />} Create copy link
                   </button>
                 )}
               </div>

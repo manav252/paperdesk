@@ -6,4 +6,3 @@ playwright-report
 backend/storage
 .env
 .env.*
-PROGRESS.md

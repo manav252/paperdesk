@@ -28,16 +28,18 @@ put in a `VITE_` variable, because those are compiled into the public web app.
 5. **Render service.** Choose **New → Blueprint**, connect the GitHub repository and use its `render.yaml`. In the
    service's environment, set:
 
-   | Variable | Value |
-   | --- | --- |
-   | `DATABASE_URL` | Neon pooled connection string |
-   | `R2_ACCOUNT_ID` | Cloudflare account ID |
-   | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` | From the bucket-scoped R2 token |
-   | `R2_BUCKET` | `paperdesk-files` |
-   | `PAPERDESK_CORS_ORIGINS` | The Pages origin from step 1, without a trailing slash |
-   | `SUPABASE_URL` | The Supabase project URL from step 7 (optional; without it there are no accounts) |
-   | `CROSSREF_MAILTO` | A contact email sent with citation lookups, as Crossref asks (optional) |
-   | `ANTHROPIC_API_KEY` | Key for the assistant panel (optional; without it the panel says it is not configured) |
+   | Variable                                   | Value                                                                                  |
+   | ------------------------------------------ | -------------------------------------------------------------------------------------- |
+   | `DATABASE_URL`                             | Neon pooled connection string                                                          |
+   | `R2_ACCOUNT_ID`                            | Cloudflare account ID                                                                  |
+   | `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` | From the bucket-scoped R2 token                                                        |
+   | `R2_BUCKET`                                | `paperdesk-files`                                                                      |
+   | `PAPERDESK_CORS_ORIGINS`                   | The Pages origin from step 1, without a trailing slash                                 |
+   | `SUPABASE_URL`                             | The Supabase project URL from step 7 (optional; without it there are no accounts)      |
+   | `CROSSREF_MAILTO`                          | A contact email sent with citation lookups, as Crossref asks (optional)                |
+   | `BREVO_API_KEY`                            | Brevo API key for invitation emails (optional; without it invitations are links only)  |
+   | `MAIL_FROM`                                | The verified Brevo sender address invitations come from (needed with `BREVO_API_KEY`)  |
+   | `ANTHROPIC_API_KEY`                        | Key for the assistant panel (optional; without it the panel says it is not configured) |
 
    `ASSISTANT_MODEL` has a default in the blueprint and can be changed. After the service is created, note its
    public origin, for example `https://paperdesk-api-xxxx.onrender.com`.

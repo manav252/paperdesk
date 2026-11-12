@@ -21,7 +21,8 @@
   Supabase only honours that when the site is listed with a wildcard (`https://<site>/**`) under Authentication,
   URL Configuration, Redirect URLs. Without it, the target is kept in the browser's storage, which works only when
   the sign-in link is opened in the same browser.
-- Invitations are links; no email is sent.
+- Invitation emails are sent only when `BREVO_API_KEY` and `MAIL_FROM` are set on the API. Without them, or when
+  the provider refuses a message, the invitation is a link the owner copies and passes on.
 - Moving projects to an account on first sign-in does not move compiled PDFs; the next compile rebuilds them.
 - The personal spelling dictionary and editor preferences are stored per browser, not per account.
 

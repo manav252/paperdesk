@@ -16,13 +16,13 @@ API server (Express)  ──►  LaTeX compiler (Docker container locally, sandb
    └── Object storage (Cloudflare R2): file contents, compiled PDFs
 ```
 
-| Part | Where | Notes |
-| --- | --- | --- |
-| Web app | `src/` | Vite, React and TypeScript. Monaco is the editor, PDF.js renders the preview. |
-| API | `server/` (entry point `server/index.ts`) | Express 5 with socket.io on the same HTTP server. |
-| Shared logic | `src/lib/` | Pure functions used by both the web app and the API (log parsing, SyncTeX, patches, submission checks). |
-| Templates | `templates/` | One folder per template; see `templates/README.md`. |
-| Tests | `src/**/*.test.ts`, `server/*.test.ts`, `test/` | Unit tests sit next to the code; browser tests and compile fixtures are in `test/`. |
+| Part         | Where                                           | Notes                                                                                                   |
+| ------------ | ----------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| Web app      | `src/`                                          | Vite, React and TypeScript. Monaco is the editor, PDF.js renders the preview.                           |
+| API          | `server/` (entry point `server/index.ts`)       | Express 5 with socket.io on the same HTTP server.                                                       |
+| Shared logic | `src/lib/`                                      | Pure functions used by both the web app and the API (log parsing, SyncTeX, patches, submission checks). |
+| Templates    | `templates/`                                    | One folder per template; see `templates/README.md`.                                                     |
+| Tests        | `src/**/*.test.ts`, `server/*.test.ts`, `test/` | Unit tests sit next to the code; browser tests and compile fixtures are in `test/`.                     |
 
 Without a database the API stores projects as plain files under `PAPERDESK_DATA`, which is what local development
 uses. With `DATABASE_URL` and the `R2_*` variables set it uses Postgres and object storage.

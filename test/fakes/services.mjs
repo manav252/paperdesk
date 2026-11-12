@@ -1,4 +1,4 @@
-// Stand-ins for the outside services the API calls (Crossref, arXiv), so browser tests never use the network.
+// Stand-ins for the outside services the API calls (Crossref, arXiv, the email provider), so browser tests never use the network.
 import http from 'node:http';
 
 const works = {
@@ -30,6 +30,7 @@ const arxiv = {
     '<feed xmlns:arxiv="http://arxiv.org/schemas/atom"><entry><id>http://arxiv.org/abs/1706.03762v5</id><published>2017-06-12T17:57:34Z</published><title>Attention Is All You Need</title><author><name>Ashish Vaswani</name></author><arxiv:primary_category term="cs.CL"/></entry></feed>',
 };
 export const requests = [];
+const mail = [];
 
 http
   .createServer((req, res) => {
@@ -41,6 +42,15 @@ http
     };
     if (url.pathname === '/health') return json(200, { ok: true });
     if (url.pathname === '/requests') return json(200, requests);
+    if (url.pathname === '/mail/sent') return json(200, mail);
+    if (url.pathname === '/mail' && req.method === 'POST') {
+      let body = '';
+      req.on('data', (chunk) => (body += chunk));
+      return req.on('end', () => {
+        mail.push({ key: req.headers['api-key'], ...JSON.parse(body) });
+        json(201, { messageId: 'test' });
+      });
+    }
     if (url.pathname.startsWith('/crossref/works/')) {
       const doi = decodeURIComponent(url.pathname.slice('/crossref/works/'.length));
       return works[doi] ? json(200, { status: 'ok', message: works[doi] }) : json(404, { status: 'error' });

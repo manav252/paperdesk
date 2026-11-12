@@ -18,6 +18,7 @@ import { applyFilePatch, type FilePatch } from '../src/lib/filePatch';
 import { BUILD_FILE, exportFiles, parseFls, type ExportKind } from '../src/lib/submission';
 import { createAuth, userOwnerId, type AuthUser } from './auth';
 import { ROLES, roleAllows, SharingStore, type Role } from './sharing';
+import { mailConfigured, sendInvite } from './mail';
 import * as Y from 'yjs';
 import { CollabRooms, type CollabRoom } from './collab';
 import { Kv } from './kv';
@@ -564,6 +565,7 @@ app.get('/api/health', async (_req, res) => {
     compilerImage: IMAGE,
     assistant: { configured: assistantConfigured(), model: assistantModel() },
     auth: { configured: auth.configured },
+    mail: { configured: mailConfigured },
   });
 });
 
@@ -1877,7 +1879,22 @@ app.post(
     const email = req.body.email === undefined ? undefined : String(req.body.email);
     if (email !== undefined && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim()))
       return void send(res, 400, 'Enter a valid email address.');
-    res.status(201).json(await store.createInvite(owner, id, String(req.body.role), email));
+    const invite = await store.createInvite(owner, id, String(req.body.role), email);
+    // The link in the email points at the site the owner is using, or the first allowed site.
+    const asked = req.headers.origin,
+      site = asked && originAllowed(asked) ? asked : allowedOrigins[0];
+    let emailed = false;
+    if (invite.email && site && !overBudget(`mail:${owner}`, 10)) {
+      const about = await store.invitation(invite.token);
+      emailed = await sendInvite({
+        to: invite.email,
+        project: about?.project ?? 'a project',
+        role: invite.role,
+        inviter: (res.locals.user as AuthUser | undefined)?.email,
+        link: `${site}/?join=${invite.token}`,
+      });
+    }
+    res.status(201).json({ ...invite, emailed });
   }),
 );
 app.delete(

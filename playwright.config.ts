@@ -62,6 +62,11 @@ export default defineConfig({
               CROSSREF_API_URL: `${FAKES_URL}/crossref`,
               ARXIV_API_URL: `${FAKES_URL}/arxiv`,
               CROSSREF_MAILTO: 'tests@example.com',
+              // Invitation emails go to the stand-in, with the link pointing at the test site.
+              MAIL_API_URL: `${FAKES_URL}/mail`,
+              BREVO_API_KEY: 'test-mail-key',
+              MAIL_FROM: 'paperdesk@example.com',
+              PAPERDESK_CORS_ORIGINS: 'http://127.0.0.1:4173',
             },
           },
           {

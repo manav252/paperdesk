@@ -71,6 +71,7 @@ export function ShareAccess({
   const [email, setEmail] = useState('');
   const [role, setRole] = useState('editor');
   const [error, setError] = useState('');
+  const [notice, setNotice] = useState('');
   // What is being created ('email' or a link's role), so its button can say so: the server may be waking up.
   const [creating, setCreating] = useState('');
   const base = `/api/projects/${projectId}`;
@@ -95,7 +96,17 @@ export function ShareAccess({
     setCreating(body.email ? 'email' : body.role);
     try {
       const r = await call('/invites', { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify(body) });
-      if (r) await refresh();
+      if (r) {
+        const made = (await r.json().catch(() => ({}))) as { emailed?: boolean };
+        setNotice(
+          !body.email
+            ? ''
+            : made.emailed
+              ? `Invitation emailed to ${body.email}.`
+              : `No email was sent to ${body.email}. Copy the link below and send it to them.`,
+        );
+        await refresh();
+      }
       return !!r;
     } finally {
       setCreating('');
@@ -139,11 +150,16 @@ export function ShareAccess({
           <span>{error}</span>
         </div>
       )}
+      {notice && (
+        <p className="muted" role="status">
+          {notice}
+        </p>
+      )}
       {pending.map((i) => (
         <div className="share-person" key={i.token}>
           <div>
             <strong>{i.email}</strong>
-            <span>Invited, {i.role === 'editor' ? 'can edit' : 'can view'}. Send them this link.</span>
+            <span>Invited, {i.role === 'editor' ? 'can edit' : 'can view'}. They can also open this link.</span>
           </div>
           <button className="btn btn-secondary btn-sm" onClick={() => copy(joinUrl(i.token), 'Invite link copied')}>
             <Copy size={13} /> Copy link

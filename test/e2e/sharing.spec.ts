@@ -368,7 +368,17 @@ test('a project link opens that project for the owner and a collaborator, and no
     files: [{ name: 'main.tex', content: source('Linked paper') }],
   });
   // The editor is invited by email only: the project link alone must be enough for them.
-  await api.post(`/${id}/invites`, { role: 'editor', email: people.editor.email });
+  const invited = await (await api.post(`/${id}/invites`, { role: 'editor', email: people.editor.email })).json();
+  expect(invited.emailed).toBe(true);
+  const sent = (await (await request.get('http://127.0.0.1:3997/mail/sent')).json()) as {
+    to: { email: string }[];
+    subject: string;
+    textContent: string;
+  }[];
+  const message = sent.find((m) => m.textContent.includes(invited.token));
+  expect(message?.to).toEqual([{ email: people.editor.email }]);
+  expect(message?.subject).toBe('owner@example.com invited you to “Linked project” on PaperDesk');
+  expect(message?.textContent).toContain(`http://127.0.0.1:4173/?join=${invited.token}`);
   const shareId = (await (await api.get(`/${id}/members`)).json()).alias as string;
   expect(shareId).toMatch(/^s-/);
   const link = `/#/project/${shareId}/`;

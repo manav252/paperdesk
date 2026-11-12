@@ -77,13 +77,21 @@ export class SharingStore {
     }));
   }
 
-  /** Ids of this owner's projects that have invited people or open invites. */
+  /** This owner's shared projects: project id to the stable id used in project links, and whether anyone was invited. */
   async sharedIds(ownerId: string) {
     const { rows } = await this.pool.query(
-      `SELECT s.project_id FROM paperdesk_shares s WHERE s.owner_id = $1 AND (EXISTS (SELECT 1 FROM paperdesk_project_members m WHERE m.alias = s.alias) OR EXISTS (SELECT 1 FROM paperdesk_invites i WHERE i.alias = s.alias))`,
+      `SELECT s.project_id, s.alias, (EXISTS (SELECT 1 FROM paperdesk_project_members m WHERE m.alias = s.alias) OR EXISTS (SELECT 1 FROM paperdesk_invites i WHERE i.alias = s.alias)) AS shared FROM paperdesk_shares s WHERE s.owner_id = $1`,
       [ownerId],
     );
-    return new Set(rows.map((r) => String(r.project_id)));
+    return new Map(rows.map((r) => [String(r.project_id), { alias: String(r.alias), shared: r.shared === true }]));
+  }
+
+  /** Email invitations for this person's address become memberships, so the project link alone opens the project. */
+  async claimEmailInvites(user: { id: string; ownerId: string; email?: string }) {
+    const email = user.email?.toLowerCase();
+    if (!email) return;
+    const { rows } = await this.pool.query('SELECT token FROM paperdesk_invites WHERE email = $1', [email]);
+    for (const r of rows) await this.accept(String(r.token), user);
   }
 
   async access(ownerId: string, projectId: string) {
@@ -95,6 +103,7 @@ export class SharingStore {
       this.pool.query('SELECT token, email, role FROM paperdesk_invites WHERE alias = $1 ORDER BY created', [alias]),
     ]);
     return {
+      alias,
       members: members.rows.map((m) => ({ userId: m.user_id, email: m.email, role: m.role })),
       invites: invites.rows,
     };

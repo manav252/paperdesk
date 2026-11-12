@@ -354,3 +354,119 @@ test('a signed-out visitor is told which project a link is for, and lands in it 
   await late.close();
   await api.del(`/${id}`);
 });
+
+test('a project link opens that project for the owner and a collaborator, and nobody else', async ({
+  browser,
+  request,
+}) => {
+  test.setTimeout(120_000);
+  const api = client(request, await tokenFor('owner')),
+    id = newId();
+  await api.put(`/${id}`, {
+    name: 'Linked project',
+    mainFile: 'main.tex',
+    files: [{ name: 'main.tex', content: source('Linked paper') }],
+  });
+  // The editor is invited by email only: the project link alone must be enough for them.
+  await api.post(`/${id}/invites`, { role: 'editor', email: people.editor.email });
+  const shareId = (await (await api.get(`/${id}/members`)).json()).alias as string;
+  expect(shareId).toMatch(/^s-/);
+  const link = `/#/project/${shareId}/`;
+
+  const visit = async (person: Person, signedIn: boolean) => {
+    const context = await browser.newContext({ viewport: { width: 1440, height: 900 } }),
+      page = await context.newPage();
+    const token = await tokenFor(person);
+    await page.route(/^https:\/\/fonts\.(googleapis|gstatic)\.com\//, (route) =>
+      route.fulfill({ status: 200, contentType: 'text/css', body: '' }),
+    );
+    await page.route(`${SUPABASE}/auth/v1/**`, async (route) => {
+      const url = new URL(route.request().url());
+      if (url.pathname.endsWith('/settings'))
+        return route.fulfill({ json: { external: { email: true, google: false } } });
+      if (url.pathname.endsWith('/otp')) return route.fulfill({ json: {} });
+      if (url.pathname.endsWith('/token'))
+        return route.fulfill({
+          json: {
+            access_token: token,
+            token_type: 'bearer',
+            expires_in: 3600,
+            expires_at: Math.floor(Date.now() / 1000) + 3600,
+            refresh_token: 'test-refresh',
+            user: {
+              id: people[person].id,
+              aud: 'authenticated',
+              role: 'authenticated',
+              email: people[person].email,
+              app_metadata: { provider: 'email' },
+              user_metadata: {},
+              created_at: new Date().toISOString(),
+            },
+          },
+        });
+      return route.fulfill({ status: 404, json: { error: 'unexpected auth call' } });
+    });
+    await page.addInitScript(() => {
+      localStorage.setItem('paperdesk-tour-done', '1');
+      localStorage.setItem('paperdesk-help-seen', '1');
+    });
+    if (signedIn) {
+      // Signed in once the project list has been asked for with this person's token.
+      const listed = page.waitForResponse(
+        (r) => r.url().endsWith('/api/projects') && !!r.request().headers()['authorization'],
+        { timeout: 60_000 },
+      );
+      await page.goto('/');
+      await page.getByRole('button', { name: 'Sign in' }).click();
+      const dialog = page.getByRole('dialog', { name: 'Sign in to PaperDesk' });
+      await dialog.getByLabel('Email').fill(people[person].email);
+      await dialog.getByRole('button', { name: 'Email me a sign-in link' }).click();
+      await expect(dialog).toContainText('for a sign-in link');
+      await page.goto('/?code=test-code');
+      await listed;
+    }
+    return { context, page };
+  };
+  const opened = (page: import('@playwright/test').Page) =>
+    expect(page.locator('.view-line').filter({ hasText: 'Linked paper' })).toBeVisible({ timeout: 30_000 });
+
+  // Signed out, in a browser that has never opened the app: sign in, then land on the project.
+  const guest = await visit('editor', false);
+  await guest.page.goto(link);
+  const dialog = guest.page.getByRole('dialog', { name: 'Sign in to PaperDesk' });
+  await expect(dialog).toContainText('Sign in to open this project.');
+  await expect(guest.page.locator('.monaco-editor')).toHaveCount(0);
+  await dialog.getByLabel('Email').fill(people.editor.email);
+  await dialog.getByRole('button', { name: 'Email me a sign-in link' }).click();
+  await expect(dialog).toContainText(`Check ${people.editor.email} for a sign-in link`);
+  await guest.page.goto('/?code=test-code');
+  await opened(guest.page);
+  // The collaborator can edit, and a reload stays on the project.
+  await guest.page.locator('.monaco-editor').first().click();
+  await guest.page.keyboard.press('ControlOrMeta+End');
+  await guest.page.keyboard.type('% edited by the collaborator');
+  await expect(guest.page.locator('.view-line').filter({ hasText: 'edited by the collaborator' })).toBeVisible();
+  await guest.page.reload();
+  await opened(guest.page);
+  await guest.context.close();
+
+  // The owner's own id for the project differs; the same link still opens it.
+  const owner = await visit('owner', true);
+  await owner.page.goto(link);
+  await opened(owner.page);
+  expect(new URL(owner.page.url()).hash).toBe(`#/paper/${id}/`);
+  await owner.page.getByRole('button', { name: 'Share' }).first().click();
+  await expect(owner.page.locator('.share-url')).toContainText(link);
+  await owner.context.close();
+
+  // Signed in without access: a clear screen, not the dashboard.
+  const stranger = await visit('stranger', true);
+  await stranger.page.goto(link);
+  await expect(
+    stranger.page.getByRole('alert').filter({ hasText: 'You don’t have access to this project' }),
+  ).toBeVisible({ timeout: 30_000 });
+  await expect(stranger.page.getByRole('alert')).toContainText(people.stranger.email);
+  await stranger.page.getByRole('button', { name: 'Go to your projects' }).click();
+  await expect(stranger.page.getByRole('alert').filter({ hasText: 'access' })).toHaveCount(0);
+  await stranger.context.close();
+});

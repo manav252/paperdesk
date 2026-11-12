@@ -7,6 +7,8 @@ export type Project = {
   modified: number;
   role?: 'owner' | 'editor' | 'viewer';
   shared?: boolean;
+  /** The id used in this project's link; everyone with access opens the project through it. */
+  shareId?: string;
   files: ProjectFile[];
   compiled?: string;
   mainFile?: string;

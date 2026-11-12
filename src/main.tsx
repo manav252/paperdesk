@@ -97,7 +97,7 @@ import { applyFix, clipSelection, fixStillApplies, logContext, numberedFile, typ
 import { AssistantPanel, ExplainButton, QUICK_PROMPTS, useAssistant, type AssistantStatus } from './Assistant';
 import { Tour, TOUR_KEY, type TourStep } from './Tour';
 import { apiUrl, fetchWithWake, ownerHeaders, projectOwnerId } from './lib/api';
-import { authReady, currentAccessToken, currentAccount } from './lib/auth';
+import { authConfigured, authReady, currentAccessToken, currentAccount } from './lib/auth';
 import { AccountButton, SignInDialog } from './Account';
 import { startCollab, type Collab, type Peer } from './collab';
 import { CitationDialog } from './Citations';
@@ -116,7 +116,15 @@ import {
   isFigureFile,
 } from './lib/figure';
 import { appendEntries } from './lib/bibtex';
-import { clearPendingJoin, HistoryPanel, pendingJoin, ShareAccess } from './Sharing';
+import {
+  clearPendingJoin,
+  clearPendingOpen,
+  HistoryPanel,
+  keepPendingOpen,
+  pendingJoin,
+  pendingOpen,
+  ShareAccess,
+} from './Sharing';
 import { base64ToBytes, compileFiles, contentHash, type SyncState } from './lib/compileSync';
 import { PdfViewer, type Zoom } from './PdfViewer';
 import { SpellSuggestions, SymbolPalette, WordCountView } from './Tools';
@@ -187,7 +195,8 @@ const seed: Project[] = [
 ];
 const routeProjectId = () => {
   const match =
-    window.location.hash.match(/^#\/paper\/([^/?]+)\/?$/) ?? window.location.pathname.match(/^\/paper\/([^/]+)\/?$/);
+    window.location.hash.match(/^#\/(?:paper|project)\/([^/?]+)\/?$/) ??
+    window.location.pathname.match(/^\/(?:paper|project)\/([^/]+)\/?$/);
   if (!match) return null;
   try {
     return decodeURIComponent(match[1]!);
@@ -441,6 +450,7 @@ function App() {
   const [spellMenu, setSpellMenu] = useState<SpellMenu | null>(null),
     spellRef = useRef<Spellchecker | null>(null);
   const [pdfSearch, setPdfSearch] = useState(false);
+  const [noAccess, setNoAccess] = useState(false);
   const [joinPrompt, setJoinPrompt] = useState(''),
     [conflict, setConflict] = useState(''),
     serverModified = useRef(new Map<string, number>()),
@@ -757,7 +767,12 @@ function App() {
   }, [projects]);
   useEffect(() => {
     const onPopState = () => {
-      const id = routeProjectId();
+      const asked = routeProjectId(),
+        known = projectsRef.current.find((p) => p.id === asked || p.shareId === asked);
+      // A project link pasted into an open tab: load again so access is checked the same way as on a fresh visit.
+      if (asked && !known) return void location.reload();
+      const id = known?.id;
+      if (id && id !== asked) history.replaceState({ screen: 'project', id }, '', projectPath(id));
       setProjectId(id ?? '');
       setActiveTab(id ? 'editor' : 'dashboard');
     };
@@ -843,6 +858,11 @@ function App() {
           if (open && map.has(open))
             history.replaceState({ screen: 'project', id: map.get(open) }, '', projectPath(map.get(open)!));
         }
+        const wanted = pendingOpen();
+        if (wanted && currentAccessToken()) {
+          clearPendingOpen();
+          if (!routeProjectId()) history.replaceState({ screen: 'project', id: wanted }, '', projectPath(wanted));
+        }
         const join = pendingJoin();
         if (join) {
           if (currentAccessToken()) {
@@ -893,14 +913,26 @@ function App() {
           remote.map((p: Project) => normalizeProject(p, 'server')),
         );
         setProjects(merged);
-        if (routeProjectId()) {
-          if (merged.some((p) => p.id === routeProjectId())) {
-            setProjectId(routeProjectId()!);
+        const asked = routeProjectId();
+        if (asked) {
+          /* A project link names the project by its share id; the owner's own id differs. */ const found = merged.find(
+            (p) => p.id === asked || p.shareId === asked,
+          );
+          if (found) {
+            if (found.id !== asked)
+              history.replaceState({ screen: 'project', id: found.id }, '', projectPath(found.id));
+            setProjectId(found.id);
             setActiveTab('editor');
           } else {
             history.replaceState({ screen: 'dashboard' }, '', '/');
             setProjectId('');
             setActiveTab('dashboard');
+            if (authConfigured && currentAccessToken()) setNoAccess(true);
+            else if (authConfigured && !join) {
+              /* Signed out: remember the project, ask them to sign in, and open it when they come back. */ firstVisit.current = false;
+              keepPendingOpen(asked);
+              setJoinPrompt('Sign in to open this project.');
+            }
           }
         } else if (firstVisit.current && !merged.length) openSample();
         else if (merged.length) firstVisit.current = false;
@@ -2494,6 +2526,21 @@ function App() {
     return (
       <div className="app-shell">
         <div className="pane-loading">Loading project…</div>
+      </div>
+    );
+  if (noAccess)
+    return (
+      <div className="app-shell">
+        <div className="empty-state no-access" role="alert">
+          <h3>You don’t have access to this project</h3>
+          <p>
+            You are signed in as {currentAccount()?.email ?? 'another account'}. Ask the project owner to invite this
+            address or send you a share link. The project may also have been deleted.
+          </p>
+          <button className="btn btn-primary" onClick={() => setNoAccess(false)}>
+            Go to your projects
+          </button>
+        </div>
       </div>
     );
   return (

@@ -15,6 +15,12 @@
 
 ## Sharing and accounts
 
+- A project link opens the project only for people who already have access. Someone without access sees a
+  "no access" screen; there is no "request access" button yet, so they have to ask the owner directly.
+- Sign-in returns to the project or invitation being opened by adding `?open=` or `?join=` to the return address.
+  Supabase only honours that when the site is listed with a wildcard (`https://<site>/**`) under Authentication,
+  URL Configuration, Redirect URLs. Without it, the target is kept in the browser's storage, which works only when
+  the sign-in link is opened in the same browser.
 - Invitations are links; no email is sent.
 - Moving projects to an account on first sign-in does not move compiled PDFs; the next compile rebuilds them.
 - The personal spelling dictionary and editor preferences are stored per browser, not per account.

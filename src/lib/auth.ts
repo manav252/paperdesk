@@ -130,7 +130,21 @@ export function enabledProviders() {
   return providersPromise;
 }
 
-const redirectTo = () => `${location.origin}${location.pathname}`;
+export const JOIN_KEY = 'paperdesk-pending-join',
+  OPEN_KEY = 'paperdesk-pending-open';
+/** Where sign-in returns to. It carries the invite or project being opened, so it survives a different tab or browser. */
+const redirectTo = (keepTarget = true) => {
+  const url = new URL(`${location.origin}${location.pathname}`);
+  try {
+    const join = keepTarget && localStorage.getItem(JOIN_KEY),
+      open = keepTarget && localStorage.getItem(OPEN_KEY);
+    if (join) url.searchParams.set('join', join);
+    else if (open) url.searchParams.set('open', open);
+  } catch {
+    /* no storage: sign-in returns to the dashboard */
+  }
+  return url.toString();
+};
 
 export async function signInWithGoogle() {
   const { error } = await (
@@ -156,5 +170,5 @@ export async function signOut() {
   } catch {
     /* storage unavailable: nothing kept */
   }
-  location.assign(redirectTo());
+  location.assign(redirectTo(false));
 }

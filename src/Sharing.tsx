@@ -2,43 +2,59 @@ import { useEffect, useState } from 'react';
 import { DiffEditor } from '@monaco-editor/react';
 import { Copy, Trash2 } from 'lucide-react';
 import { setupMonaco } from './monacoSetup';
-import { currentAccessToken } from './lib/auth';
+import { currentAccessToken, JOIN_KEY, OPEN_KEY } from './lib/auth';
 
 type Fetcher = (input: string, init?: RequestInit) => Promise<Response>;
 const JSON_HEADERS = { 'Content-Type': 'application/json' };
-const JOIN_KEY = 'paperdesk-pending-join';
 
-// An invite link (?join=token) survives the sign-in redirect in browser storage.
+// An invite link (?join=token) or a project link (?open=id) survives the sign-in redirect in browser storage.
 try {
   const url = new URL(location.href),
-    token = url.searchParams.get('join');
-  if (token) {
-    localStorage.setItem(JOIN_KEY, token);
+    token = url.searchParams.get('join'),
+    open = url.searchParams.get('open');
+  if (token) localStorage.setItem(JOIN_KEY, token);
+  if (open) localStorage.setItem(OPEN_KEY, open);
+  if (token || open) {
     url.searchParams.delete('join');
+    url.searchParams.delete('open');
     history.replaceState(history.state, '', url.pathname + url.search + url.hash);
   }
 } catch {
   /* no storage: the link can be opened again after signing in */
 }
-export const pendingJoin = () => {
+const stored = (key: string) => () => {
   try {
-    return localStorage.getItem(JOIN_KEY);
+    return localStorage.getItem(key);
   } catch {
     return null;
   }
 };
-export const clearPendingJoin = () => {
+const forget = (key: string) => () => {
   try {
-    localStorage.removeItem(JOIN_KEY);
+    localStorage.removeItem(key);
   } catch {
     /* nothing kept */
   }
 };
+export const pendingJoin = stored(JOIN_KEY),
+  clearPendingJoin = forget(JOIN_KEY);
+/** The project a signed-out visitor asked for, opened once they have signed in. */
+export const pendingOpen = stored(OPEN_KEY),
+  clearPendingOpen = forget(OPEN_KEY);
+export const keepPendingOpen = (id: string) => {
+  try {
+    localStorage.setItem(OPEN_KEY, id);
+  } catch {
+    /* no storage: the link can be opened again after signing in */
+  }
+};
 
 type Access = {
+  alias: string;
   members: { userId: string; email: string | null; role: string }[];
   invites: { token: string; email: string | null; role: string }[];
 };
+const projectUrl = (id: string) => `${location.origin}/#/project/${id}/`;
 const joinUrl = (token: string) => `${location.origin}${location.pathname}?join=${token}`;
 
 /** Owner’s panel: invite people by email, share links with a set role, change or remove access. */
@@ -170,6 +186,20 @@ export function ShareAccess({
           </button>
         </div>
       ))}
+      <h4>Project link</h4>
+      <p className="muted">
+        Opens this project for you and for people you have given access. It does not grant access.
+      </p>
+      <div className="share-row">
+        <code className="share-url">{access ? projectUrl(access.alias) : 'Loading…'}</code>
+        <button
+          className="btn btn-secondary btn-sm"
+          disabled={!access}
+          onClick={() => access && copy(projectUrl(access.alias), 'Project link copied')}
+        >
+          <Copy size={13} /> Copy project link
+        </button>
+      </div>
       <h4>Share with a link</h4>
       <p className="muted">Anyone who signs in with a link joins with that role, until you turn the link off.</p>
       {(['editor', 'viewer'] as const).map((r) => {

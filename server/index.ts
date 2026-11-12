@@ -645,6 +645,7 @@ app.get('/api/projects', async (_req, res) => {
     const own = await listProjects(owner);
     const user = res.locals.user as AuthUser | undefined;
     if (!sharing || !user) return void res.json(own);
+    await sharing.claimEmailInvites({ id: user.id, ownerId: userOwnerId(user), email: user.email });
     const [mine, memberships] = await Promise.all([sharing.sharedIds(owner), sharing.memberships(user.id)]);
     const joined = await Promise.all(
       memberships.map((m) =>
@@ -655,7 +656,10 @@ app.get('/api/projects', async (_req, res) => {
       ),
     );
     res.json([
-      ...own.map((p) => (mine.has(p.id) ? { ...p, role: 'owner', shared: true } : p)),
+      ...own.map((p) => {
+        const share = mine.get(p.id);
+        return share ? { ...p, shareId: share.alias, ...(share.shared ? { role: 'owner', shared: true } : {}) } : p;
+      }),
       ...joined.filter(Boolean),
     ]);
   } catch (e) {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseBibtexLog, parseLatexLog, unwrapTexLog } from './latexLog';
+import { parseBibtexLog, parseLatexLog, unwrapTexLog, withFileSuggestion } from './latexLog';
 
 const undefinedCs = String.raw`This is pdfTeX, Version 3.141592653-2.6-1.40.26 (TeX Live 2024) (preloaded format=pdflatex)
 (./main.tex
@@ -122,5 +122,23 @@ describe('bibliography hints', () => {
     expect(bibliography!.message).toContain('The reference list is empty: none of the keys you \\cite are in your .bib file.');
     expect(list).toMatchObject({ file: 'main.tex', line: 30 });
     expect(list!.message).not.toContain('reference list');
+  });
+});
+
+describe('missing file suggestions', () => {
+  const error = (name: string) => ({ file: 'main.tex', line: 28, message: `Package pdftex.def Error: File \`${name}' not found: using draft setting.` });
+  const files = ['main.tex', 'wadrobe.png', 'figures/', 'figures/Plot-Final.png', 'notes.txt'];
+  it('names a file that differs by a typo, by capitals or by folder', () => {
+    expect(withFileSuggestion(error('wardrobe.png'), files).message).toContain('Did you mean “wadrobe.png”?');
+    expect(withFileSuggestion(error('plot-final.png'), files).message).toContain('Did you mean “figures/Plot-Final.png”?');
+    expect(withFileSuggestion(error('wardrobe'), files).message).toContain('Did you mean “wadrobe.png”?');
+  });
+  it('stays quiet when nothing is close, for other errors, and when already suggested', () => {
+    expect(withFileSuggestion(error('diagram.png'), files)).toEqual(error('diagram.png'));
+    expect(withFileSuggestion(error('wardrobe.pdf'), files)).toEqual(error('wardrobe.pdf'));
+    const other = { file: 'main.tex', line: 2, message: 'Undefined control sequence.' };
+    expect(withFileSuggestion(other, files)).toBe(other);
+    const once = withFileSuggestion(error('wardrobe.png'), files);
+    expect(withFileSuggestion(once, files)).toBe(once);
   });
 });

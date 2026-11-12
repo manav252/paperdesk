@@ -77,9 +77,9 @@ test('dashboard controls', async ({ page }) => {
 });
 
 test('auto compile is off until someone turns it on', async ({ page }) => {
-  // A browser with no saved compile settings: typing must not start a compile.
-  await page.goto('/');
-  await page.evaluate(() => localStorage.removeItem('paperdesk-compile-prefs'));
+  // Typing must not start a compile unless the person turned auto compile on themselves.
+  // Older versions saved "on" for everyone without being asked; that saved value must not turn it back on.
+  await page.addInitScript(() => localStorage.setItem('paperdesk-compile-prefs', JSON.stringify({ autoCompile: true, stopOnFirstError: true })));
   await openControls(page);
   const before = compiles;
   await page.locator('.view-line').filter({ hasText: 'Hello world' }).click();

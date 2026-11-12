@@ -150,3 +150,33 @@ export function withHint(entry: LogEntry): LogEntry {
   const hint = emptyBibliography ? EMPTY_BIBLIOGRAPHY : HINTS.find(([pattern]) => pattern.test(entry.message))?.[1];
   return hint && !entry.message.includes(hint) ? { ...entry, message: `${entry.message} ${hint}` } : entry;
 }
+
+function editDistance(a: string, b: string) {
+  let row = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    const next = [i];
+    for (let j = 1; j <= b.length; j++) next[j] = Math.min(row[j]! + 1, next[j - 1]! + 1, row[j - 1]! + (a[i - 1] === b[j - 1] ? 0 : 1));
+    row = next;
+  }
+  return row[b.length]!;
+}
+
+/**
+ * For a "file not found" error, names the project file that was probably meant: the same name with different
+ * capitals or in another folder, or one that differs by a typo ("wadrobe.png" for "wardrobe.png").
+ */
+export function withFileSuggestion(entry: LogEntry, projectFiles: string[]): LogEntry {
+  const wanted = /File [`'‘]([^'’]+)['’] not found/i.exec(entry.message)?.[1];
+  if (!wanted || /Did you mean/.test(entry.message)) return entry;
+  const stem = (name: string) => name.split('/').pop()!.replace(/\.[A-Za-z0-9]+$/, '').toLowerCase();
+  const extension = /\.([A-Za-z0-9]+)$/.exec(wanted)?.[1]?.toLowerCase();
+  const target = stem(wanted), limit = target.length >= 8 ? 3 : target.length >= 4 ? 2 : 1;
+  let best: { name: string; distance: number } | null = null;
+  for (const name of projectFiles) {
+    if (name.endsWith('/') || name === wanted) continue;
+    if (extension && !name.toLowerCase().endsWith(`.${extension}`)) continue;
+    const distance = editDistance(target, stem(name));
+    if (distance <= limit && (!best || distance < best.distance)) best = { name, distance };
+  }
+  return best ? { ...entry, message: `${entry.message} Did you mean “${best.name}”? Rename the file or change the name in the document so the two match.` } : entry;
+}

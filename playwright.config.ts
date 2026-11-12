@@ -30,7 +30,7 @@ export default defineConfig({
     // Crossref and arXiv stand-ins (test/fakes/services.mjs): tests never call the real services.
     { command: 'node test/fakes/services.mjs', url: `${FAKES_URL}/health`, reuseExistingServer: false, timeout: 30_000 },
     {
-      command: 'node --import tsx server.ts',
+      command: 'node --import tsx server/index.ts',
       url: 'http://127.0.0.1:3002/api/health',
       reuseExistingServer: false,
       timeout: 180_000,

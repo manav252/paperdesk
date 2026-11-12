@@ -10,7 +10,7 @@ type SymbolEntry = { char: string; command: string; keywords?: string };
 /** Counts words with texcount on the server, using the current (possibly uncompiled) text files. */
 export function WordCountView({ projectId, files, mainFile, apiFetch }: { projectId: string; files: TextFile[]; mainFile: string; apiFetch: Fetcher }) {
   const [state, setState] = useState<{ count?: WordCount; error?: string }>({});
-  // Read once when the dialog opens, like Overleaf; reopening counts again.
+  // Read once when the dialog opens; reopening counts again.
   const [body] = useState(() => JSON.stringify({ mainFile, files: files.filter(f => f.encoding !== 'base64' && /\.(tex|bib|sty|cls)$/i.test(f.name)).map(f => ({ name: f.name, content: f.content })) }));
   useEffect(() => {
     let live = true;

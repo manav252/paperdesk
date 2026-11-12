@@ -242,12 +242,12 @@ function App(){
 
  const setContent=(value:string)=>{sourceRevision.current++;setAutoCompileRevision(v=>v+1);setCompileState(s=>pdfUrl?{...s,status:s.status==='running'?'running':s.status==='error'?'error':'outdated',message:s.status==='running'?s.message:s.status==='error'?s.message:'PDF is out of date',stale:true}:s);const previous=contentRef.current;contentRef.current=value;update(p=>{const now=Date.now(),latest=p.versions?.[0],recent=latest!==undefined&&latest.label==='Automatic snapshot'&&now-latest.created<1200;return{...p,versions:(recent?(p.versions??[]):[{id:crypto.randomUUID(),label:'Automatic snapshot',created:now,files:p.files.map(f=>({...f}))},...(p.versions??[])]).slice(0,30),changes:compilePrefs.trackChanges?recordEdit(previous,value,fileName,p.changes??[]):p.changes??[],files:p.files.map(f=>f.name===fileName?{...f,content:value}:f)}})};
  const insert=(s:string)=>{const ed=editorRef.current;if(!ed){notify('Open a text file in the editor to insert LaTeX');return}ed.executeEdits('toolbar',[{range:ed.getSelection(),text:s,forceMoveMarkers:true}]);ed.focus()};
- /** Wraps the selection (or places the cursor between `before` and `after` when nothing is selected), like Overleaf's toolbar. */
+ /** Wraps the selection (or places the cursor between `before` and `after` when nothing is selected). */
  const wrap=(before:string,after:string)=>{const ed=editorRef.current,model=ed?.getModel();if(!ed||!model){notify('Open a text file in the editor to insert LaTeX');return}const sels=ed.getSelections()??[];ed.pushUndoStop();ed.executeEdits('toolbar',sels.map((sel:any)=>({range:sel,text:before+model.getValueInRange(sel)+after,forceMoveMarkers:true})));const first=sels[0];if(first&&first.isEmpty()){const pos={lineNumber:first.startLineNumber,column:first.startColumn+before.length};ed.setSelection({startLineNumber:pos.lineNumber,startColumn:pos.column,endLineNumber:pos.lineNumber,endColumn:pos.column})}ed.pushUndoStop();ed.focus()};
  const addCitations=(entries:string[],keys:string[],target:string,cite:boolean)=>{if(entries.length)update(p=>({...p,files:p.files.some(f=>f.name===target)?p.files.map(f=>f.name===target?{...f,content:appendEntries(f.content,entries)}:f):[...p.files,{name:target,content:appendEntries('',entries)}]}));if(cite&&keys.length)insert(`\\cite{${keys.join(',')}}`);notify(entries.length?`Added ${entries.length} ${entries.length===1?'citation':'citations'} to ${target}`:'Citation inserted','success')};
  const edAction=(id:string)=>{const ed=editorRef.current;if(!ed)return;ed.focus();const action=ed.getAction(id);if(action)action.run();else ed.trigger('keyboard',id,null)};
 
- /** Compiles the open project. Starting a compile replaces one still running, like Overleaf's restart. */
+ /** Compiles the open project. Starting a compile replaces one still running. */
  const compile=async({auto=false}:{auto?:boolean}={})=>{
   if(!project)return;
   const target=project,mainFile=target.mainFile??'main.tex',revision=sourceRevision.current;
@@ -436,7 +436,7 @@ function App(){
   finally{sourceSyncPending.current=false}
  };
  const syncPdfToSource=async(syncPage:number,x:number,y:number)=>{
-  // One lookup at a time; a newer request waits and runs next (older queued ones are replaced), like Overleaf.
+  // One lookup at a time; a newer request waits and runs next (older queued ones are replaced).
   if(pdfSyncPending.current){pdfSyncNext.current={page:syncPage,x,y};return}
   pdfSyncPending.current=true;
   try{
@@ -767,7 +767,7 @@ function TreeLevel({nodes,depth,selected,collapsed,act}:{nodes:TreeNode[],depth:
  </div>})}</>;
 }
 
-/** Overleaf-style file outline: the open file's sectioning commands; click one to jump to it. */
+/** File outline: the open file's sectioning commands; click one to jump to it. */
 function Outline({content,cursorLine,onJump}:{content:string,cursorLine:number,onJump:(line:number)=>void}){
  const items=useMemo(()=>outlineOf(content),[content]);
  const [open,setOpen]=useState(true);

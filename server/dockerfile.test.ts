@@ -18,6 +18,6 @@ function localImports(file: string, seen = new Set<string>()): Set<string> {
 
 describe('Dockerfile.api', () => {
   it('copies every file the API server imports', () => {
-    expect([...localImports('server.ts')].filter(f => !copied.includes(f))).toEqual([]);
+    expect([...localImports('server/index.ts')].filter(f => !copied.includes(f))).toEqual([]);
   });
 });

@@ -60,7 +60,7 @@ export function setupMonaco(monaco: Monaco) {
         return { suggestions: ENVIRONMENTS.map(([name, body]) => ({ label: name, kind: K.Struct, detail: opening ? `\\begin{${name}} … \\end{${name}}` : 'Environment',
           insertText: opening ? `${name}}\n${body}\n\\end{${name}}` : `${name}}`, insertTextRules: snippet, range: range(start, closes) })) };
       }
-      // Picking a name also steps over the closing brace, so typing continues after the command, as in Overleaf.
+      // Picking a name also steps over the closing brace, so typing continues after the command.
       const close = after.startsWith('}') ? 1 : 0;
       const name = (value: string) => ({ insertText: `${value}}`, range: range(start, close) });
       if (ctx.kind === 'ref') return { suggestions: collectLabels(files).map(l => ({ label: l.label, kind: K.Reference, detail: `${l.file}:${l.line}`, ...name(l.label) })) };

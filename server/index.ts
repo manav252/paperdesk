@@ -11,20 +11,20 @@ import { promisify } from 'node:util';
 import multer from 'multer';
 import unzipper from 'unzipper';
 import archiver from 'archiver';
-import { parseLatexLog, type LogEntry } from './src/lib/latexLog';
-import { parseForwardSync, parseInverseSync } from './src/lib/synctex';
-import { parseTexcount } from './src/lib/wordcount';
-import { applyFilePatch, type FilePatch } from './src/lib/filePatch';
-import { BUILD_FILE, exportFiles, parseFls, type ExportKind } from './src/lib/submission';
-import { createAuth, userOwnerId, type AuthUser } from './server/auth';
-import { ROLES, roleAllows, SharingStore, type Role } from './server/sharing';
+import { parseLatexLog, type LogEntry } from '../src/lib/latexLog';
+import { parseForwardSync, parseInverseSync } from '../src/lib/synctex';
+import { parseTexcount } from '../src/lib/wordcount';
+import { applyFilePatch, type FilePatch } from '../src/lib/filePatch';
+import { BUILD_FILE, exportFiles, parseFls, type ExportKind } from '../src/lib/submission';
+import { createAuth, userOwnerId, type AuthUser } from './auth';
+import { ROLES, roleAllows, SharingStore, type Role } from './sharing';
 import * as Y from 'yjs';
-import { CollabRooms, type CollabRoom } from './server/collab';
-import { Kv } from './server/kv';
-import { createCitationLookup } from './server/citations';
-import { assistantConfigured, assistantModel, assistantRouter } from './server/assistant';
-import { ProjectPersistence, type ProjectData, type StoredFile } from './server/persistence';
-import { contentHash, syncWorkspace, Workspaces, type SourceFile, type Workspace } from './server/workspace';
+import { CollabRooms, type CollabRoom } from './collab';
+import { Kv } from './kv';
+import { createCitationLookup } from './citations';
+import { assistantConfigured, assistantModel, assistantRouter } from './assistant';
+import { ProjectPersistence, type ProjectData, type StoredFile } from './persistence';
+import { contentHash, syncWorkspace, Workspaces, type SourceFile, type Workspace } from './workspace';
 
 // Local settings and secrets come from an untracked .env (see .env.example); real environment variables win.
 try { process.loadEnvFile(); } catch { /* no .env file */ }

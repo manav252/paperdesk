@@ -43,7 +43,7 @@ const json = async (url, init) => {
 };
 
 const data = mkdtempSync(path.join(tmpdir(), 'paperdesk-fixtures-'));
-const server = process.env.FIXTURE_API_URL ? null : spawn('npx', ['tsx', 'server.ts'], { env: { ...process.env, PORT: String(PORT), PAPERDESK_DATA: data }, stdio: ['ignore', 'pipe', 'inherit'] });
+const server = process.env.FIXTURE_API_URL ? null : spawn('npx', ['tsx', 'server/index.ts'], { env: { ...process.env, PORT: String(PORT), PAPERDESK_DATA: data }, stdio: ['ignore', 'pipe', 'inherit'] });
 const cleanup = () => { server?.kill(); rmSync(data, { recursive: true, force: true }); };
 process.on('SIGINT', () => { cleanup(); process.exit(130); });
 

@@ -1,12 +1,22 @@
 {
   "name": "paperdesk",
   "version": "1.0.0",
+  "description": "A browser-based LaTeX editor with real-time collaboration, templates and submission checks.",
+  "license": "MIT",
+  "author": "Manav Doshi",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/manav252/paperdesk.git"
+  },
+  "engines": {
+    "node": ">=20"
+  },
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "dev:all": "node scripts/dev-all.mjs",
-    "server": "tsx watch server.ts",
+    "server": "tsx watch server/index.ts",
     "start": "concurrently -k \"npm:server\" \"npm:dev\"",
     "compiler:build": "docker build -t paperdesk-texlive:latest -f Dockerfile.compiler .",
     "build": "tsc -b && vite build",

@@ -1,0 +1,50 @@
+\documentclass[runningheads]{llncs}
+\usepackage[T1]{fontenc}
+\usepackage{graphicx}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage[hidelinks]{hyperref}
+
+\begin{document}
+
+% Replace with your title; \titlerunning is the short form printed in the page header.
+\title{Detecting Schema Drift in Streaming Data Pipelines with Mergeable Sketches}
+\titlerunning{Detecting Schema Drift in Streaming Data Pipelines}
+
+% Authors and their institutes. \inst{n} links an author to institute n.
+\author{Lukas Brandt\inst{1} \and
+Aisha Rahman\inst{1,2} \and
+Tom\'as Herrera\inst{2}}
+\authorrunning{L. Brandt et al.}
+
+\institute{Institute for Data Systems, Lindenau University, Leipzig, Germany\\
+\email{\{lukas.brandt,aisha.rahman\}@lindenau.example}
+\and
+Streamline Analytics GmbH, Berlin, Germany\\
+\email{tomas.herrera@streamline.example}}
+
+\maketitle
+
+% Replace with your abstract (150 to 250 words).
+\begin{abstract}
+Streaming pipelines break when the structure of incoming records changes without notice: a field is renamed, a number arrives as text, or an optional field stops appearing. Such schema drift is usually found hours later, when a downstream report is wrong. We describe a detector that summarizes the structure of each stream partition in a small mergeable sketch and compares sketches across time windows. The sketch needs 2.4 kB per partition, can be merged in any order, and bounds the probability of missing a change that affects at least a fraction $\varepsilon$ of records. On three production pipelines with 10 million events per hour, the detector reported 46 of 48 injected changes within one second and raised two false alarms in a week, while adding 1.8\% to processing time.
+
+\keywords{Data streams \and Schema evolution \and Sketches \and Data quality.}
+\end{abstract}
+
+\input{sections/introduction}
+\input{sections/background}
+\input{sections/method}
+\input{sections/evaluation}
+\input{sections/conclusion}
+
+% Thank people and funders here, or delete the block.
+\subsubsection*{Acknowledgements}
+We thank the platform team at Streamline Analytics for access to their pipelines. This work was funded by the Saxon Digital Research Fund (grant SDR-2025-08).
+
+\bibliographystyle{splncs04}
+\bibliography{references}
+
+\end{document}

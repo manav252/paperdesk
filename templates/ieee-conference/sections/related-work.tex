@@ -1,0 +1,9 @@
+\section{Related Work}\label{sec:related-work}
+\subsection{Occupancy Sensing}
+Early systems used a single passive infrared (PIR) detector with a timeout, which keeps the lights on for a fixed period after the last movement. Later work added carbon dioxide and door sensors and treated occupancy as a classification problem over hand-built features. These approaches run on a central server and assume a wired sensor network.
+
+\subsection{Compact Neural Networks}
+Convolutional networks have been the standard tool for learning from sensor and image data since LeNet~\cite{lecun1998gradient}, and residual connections made much deeper models trainable~\cite{he2016deep}. For devices with little memory, depthwise-separable convolutions reduce the parameter count by an order of magnitude at a small cost in accuracy~\cite{howard2017mobilenets}. Recurrent models such as the long short-term memory network~\cite{hochreiter1997long} capture longer histories, but their state does not quantize as cleanly, which is why we use a convolutional model over a fixed window.
+
+\subsection{Position of This Work}
+Unlike server-based systems, our estimate is computed where the data is measured, and unlike single-sensor nodes, it reports a count rather than a yes-or-no answer. To our knowledge, this is the first field evaluation of such a node that reports accuracy, power draw and the resulting ventilation savings together.

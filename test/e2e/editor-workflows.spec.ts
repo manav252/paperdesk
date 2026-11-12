@@ -1,7 +1,8 @@
 import { expect, test, type Page } from '@playwright/test';
 import { cleanExternalProjects } from './external-api';
 
-const templates = ['IEEE conference', 'Springer', 'Article', 'Report', 'Beamer', 'CV'];
+// Template folder names in templates/.
+const templates = ['ieee-conference', 'springer-journal', 'article', 'report', 'beamer', 'cv'];
 const errorsByPage = new WeakMap<Page, string[]>();
 const syncModesByPage = new WeakMap<Page, string[]>();
 
@@ -51,11 +52,15 @@ test.afterEach(async ({ page, request }) => {
   expect(errorsByPage.get(page)).toEqual([]);
 });
 
-async function openTemplate(page: Page, name: string) {
+async function openTemplate(page: Page, id: string) {
   await page.goto('/');
   await expect(page.getByRole('heading', { name: 'Your projects' })).toBeVisible();
   await page.getByRole('button', { name: 'Templates' }).click();
-  await page.getByRole('button', { name: new RegExp(name) }).click();
+  await page.locator(`.template-card[data-template="${id}"]`).click();
+  // A project made from a template compiles once by itself. Wait for that PDF so the steps that follow act on a
+  // settled page; on a phone the PDF takes the screen, so go back to the source.
+  await expect(page.locator('.pdf-scroll canvas:not(.is-loading)').first()).toBeVisible({ timeout: 60_000 });
+  if (test.info().project.name.startsWith('phone')) await page.getByRole('radio', { name: 'Editor' }).click();
   await expect(page.locator('.monaco-editor')).toBeVisible();
   await expect(page.locator('html')).toHaveAttribute('data-theme', /light|dark/);
 }
@@ -87,7 +92,7 @@ async function compileAndViewPdf(page: Page) {
 for (const template of templates) {
   test(`${template} starter can be edited, compiled and rendered`, async ({ page }) => {
     await openTemplate(page, template);
-    if (template === 'Springer') {
+    if (template === 'springer-journal') {
       const files = await page.evaluate(() => (JSON.parse(localStorage.getItem('paperdesk-projects') ?? '[]')[0]?.files ?? []).map((file: { name: string }) => file.name));
       expect(files).toEqual(expect.arrayContaining(['sn-jnl.cls', 'sn-mathphys-num.bst', 'references.bib']));
     }
@@ -97,12 +102,12 @@ for (const template of templates) {
     await page.getByRole('button', { name: 'Sync source to PDF' }).click();
     const pdfPage = page.locator('canvas[aria-label="PDF page 1"]');
     await expect(pdfPage).not.toHaveClass(/is-loading/);
-    // Clicking or selecting PDF text jumps to its source line. Auto compile may swap the PDF under the pointer on a
-    // slow machine, so repeat until the jump request is sent.
-    const text = page.locator('.pdf-text-layer span').first();
-    await expect(text).toBeVisible();
-    await text.click();
-    await expect.poll(() => syncModesByPage.get(page)).toContain('inverse');
+    // Clicking or selecting PDF text jumps to its source line. The recompiled PDF may still be replacing the first
+    // one under the pointer, so repeat until the jump request is sent.
+    await expect(async () => {
+      await page.locator('.pdf-text-layer span').first().click({ timeout: 3000 });
+      expect(syncModesByPage.get(page)).toContain('inverse');
+    }).toPass({ timeout: 30_000 });
     const previousInverseJumps = syncModesByPage.get(page)?.filter(mode => mode === 'inverse').length ?? 0;
     if (test.info().project.name.startsWith('phone')) await page.getByRole('radio', { name: 'PDF' }).click();
     const selectableText = page.locator('.pdf-text-layer span').first();
@@ -121,7 +126,7 @@ for (const template of templates) {
 }
 
 test('template project supports ZIP import/export and PDF download', async ({ page }) => {
-  await openTemplate(page, 'Article');
+  await openTemplate(page, 'article');
   const archive = zipOneFile('main.tex', '\\documentclass{article}\n\\begin{document}\n\\section{Imported}\nA complete project imported from ZIP.\n\\end{document}\n');
   await page.locator('input[type="file"]').first().setInputFiles({ name: 'browser-check.zip', mimeType: 'application/zip', buffer: archive });
   await expect.poll(async () => page.evaluate(() => JSON.parse(localStorage.getItem('paperdesk-projects') ?? '[]')[0]?.files?.some((f: { name: string }) => f.name === 'main.tex' && f.content.includes('complete project imported from ZIP')))).toBe(true);
@@ -140,7 +145,7 @@ test('template project supports ZIP import/export and PDF download', async ({ pa
 });
 
 test('theme can be switched and the phone layout keeps editor and PDF controls usable', async ({ page }) => {
-  await openTemplate(page, 'Article');
+  await openTemplate(page, 'article');
   const initialTheme = await page.locator('html').getAttribute('data-theme');
   const otherTheme = initialTheme === 'dark' ? 'Light' : 'Dark';
   if (test.info().project.name.startsWith('phone')) {
@@ -163,10 +168,10 @@ test('theme can be switched and the phone layout keeps editor and PDF controls u
 });
 
 test('LaTeX completion suggests commands and find and replace updates the source', async ({ page }) => {
-  await openTemplate(page, 'Article');
-  const finalLine = page.locator('.view-line').filter({ hasText: /\\end\{document\}/ }).last();
-  await finalLine.click();
-  await page.keyboard.press('End');
+  await openTemplate(page, 'article');
+  // The sample document is longer than the screen, so go to its last line with the keyboard.
+  await page.getByRole('textbox', { name: 'Editor content' }).click({ force: true });
+  await page.keyboard.press('Control+End');
   await page.keyboard.type('\n\\sect');
   await page.keyboard.press('Control+Space');
   const suggestions = page.getByRole('listbox', { name: 'Suggest' });
@@ -177,10 +182,10 @@ test('LaTeX completion suggests commands and find and replace updates the source
   await openMenuItem(page, 'Edit', 'Find and replace');
   const widget = page.locator('.find-widget');
   await expect(widget).toBeVisible();
-  await widget.getByRole('textbox').nth(0).fill('Article Template');
-  await widget.getByRole('textbox').nth(1).fill('Browser Test Template');
+  await widget.getByRole('textbox').nth(0).fill('Sofia Lindqvist');
+  await widget.getByRole('textbox').nth(1).fill('Browser Test Author');
   await widget.getByRole('button', { name: /Replace All/ }).click();
-  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('paperdesk-projects') ?? '[]')[0]?.files?.[0]?.content)).toContain('Browser Test Template');
+  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('paperdesk-projects') ?? '[]')[0]?.files?.[0]?.content)).toContain('Browser Test Author');
 });
 
 async function openMenuItem(page: Page, menu: string, item: string) {

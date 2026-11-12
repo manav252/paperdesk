@@ -1,0 +1,2 @@
+\section{Conclusion}\label{sec:conclusion}
+Schema drift can be detected without a declared schema by summarizing the structure of records in a mergeable sketch and comparing consecutive windows. The sketch is small, fits the parallel execution model of stream processors, and comes with a bound on missed changes. In a week on three production pipelines it found 46 of 48 injected changes with two false alarms and 1.8\% overhead. Future work includes identifying the changed field directly and adapting the threshold to the variability of each stream.

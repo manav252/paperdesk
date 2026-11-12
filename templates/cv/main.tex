@@ -1,0 +1,93 @@
+\documentclass[10pt,a4paper]{article}
+\usepackage[margin=1.6cm]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage{enumitem}
+\usepackage{titlesec}
+\usepackage{xcolor}
+\usepackage[hidelinks]{hyperref}
+
+% Layout: change the accent colour here.
+\definecolor{accent}{HTML}{1F5F8B}
+\pagestyle{empty}
+\setlength{\parindent}{0pt}
+\titleformat{\section}{\large\bfseries\color{accent}}{}{0pt}{}[\vspace{-6pt}\rule{\linewidth}{0.5pt}]
+\titlespacing*{\section}{0pt}{9pt}{5pt}
+\setlist[itemize]{leftmargin=1.2em, itemsep=1pt, topsep=2pt, parsep=0pt}
+
+% \entry{Title}{Dates}{Organisation}{Place}
+\newcommand{\entry}[4]{\textbf{#1}\hfill #2\\\textit{#3}\hfill \textit{#4}\par\vspace{1pt}}
+
+\begin{document}
+
+% Header: replace with your name and contact details.
+\begin{center}
+  {\Huge\bfseries Ananya Mehta}\\[5pt]
+  Software Engineer\\[4pt]
+  Mumbai, India \,\textbar\, +91 98765 01234 \,\textbar\,
+  \href{mailto:ananya.mehta@example.com}{ananya.mehta@example.com} \,\textbar\,
+  \href{https://ananyamehta.example}{ananyamehta.example} \,\textbar\,
+  \href{https://github.com/ananya-mehta-example}{github.com/ananya-mehta-example}
+\end{center}
+
+\section{Education}
+\entry{M.Tech. in Computer Science}{2019 -- 2021}{Western Institute of Technology}{Mumbai, India}
+\begin{itemize}
+  \item CGPA 9.1/10. Thesis: \emph{Incremental Query Processing for Time-Series Dashboards}.
+\end{itemize}
+\vspace{3pt}
+\entry{B.E. in Information Technology}{2015 -- 2019}{Sahyadri College of Engineering}{Pune, India}
+\begin{itemize}
+  \item CGPA 8.7/10. Graduated in the top 5\% of a class of 240.
+\end{itemize}
+
+\section{Experience}
+\entry{Senior Software Engineer}{Jul 2023 -- Present}{Kestrel Payments}{Mumbai, India}
+\begin{itemize}
+  \item Lead a team of four that owns the settlement service, which processes 2.3 million transactions a day.
+  \item Cut end-of-day settlement time from 47 to 12 minutes by replacing batch jobs with a streaming pipeline.
+  \item Introduced contract tests between services, reducing integration incidents from nine to two per quarter.
+\end{itemize}
+\vspace{3pt}
+\entry{Software Engineer}{Jul 2021 -- Jun 2023}{Brightline Analytics}{Bengaluru, India}
+\begin{itemize}
+  \item Built the query layer of a dashboard product used by 300 retail customers.
+  \item Reduced median dashboard load time from 3.8 s to 0.9 s with result caching and incremental refresh.
+  \item Mentored three interns, two of whom joined the team full time.
+\end{itemize}
+\vspace{3pt}
+\entry{Software Engineering Intern}{May 2020 -- Jul 2020}{Brightline Analytics}{Bengaluru, India}
+\begin{itemize}
+  \item Wrote a data-quality checker that now runs on every nightly import.
+\end{itemize}
+
+\section{Projects}
+\textbf{tidytable} \hfill \href{https://github.com/ananya-mehta-example/tidytable}{github.com/ananya-mehta-example/tidytable}
+\begin{itemize}
+  \item Open-source command-line tool that finds and fixes formatting problems in CSV files; 1.4k stars.
+\end{itemize}
+\textbf{Monsoon Watch} \hfill 2022
+\begin{itemize}
+  \item Volunteer-run map of waterlogged streets in Mumbai, used by 18\,000 people during the 2022 monsoon.
+\end{itemize}
+
+\section{Skills}
+\begin{tabular}{@{}p{2.6cm}p{14.4cm}@{}}
+  \textbf{Languages}   & Go, Python, TypeScript, SQL \\
+  \textbf{Systems}     & PostgreSQL, Kafka, Redis, Kubernetes, Terraform \\
+  \textbf{Practices}   & System design, code review, incident response, technical writing \\
+  \textbf{Spoken}      & English, Hindi, Gujarati
+\end{tabular}
+
+\section{Publications}
+\begin{itemize}
+  \item A. Mehta and R. Iyer, ``Incremental Refresh for Time-Series Dashboards,'' in \emph{Proc. Workshop on Interactive Data Systems}, 2021, pp. 44--51.
+\end{itemize}
+
+\section{Awards}
+\begin{itemize}
+  \item Engineering Excellence Award, Kestrel Payments, 2024.
+  \item First place, Western Institute of Technology Hackathon, 2020 (120 teams).
+  \item Institute Merit Scholarship, 2019 -- 2021.
+\end{itemize}
+
+\end{document}

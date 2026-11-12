@@ -1,0 +1,10 @@
+{
+  "name": "IEEE Conference Paper",
+  "description": "Two-column conference paper with authors and affiliations, a figure, a table, an equation, an algorithm and cited references.",
+  "category": "Paper",
+  "tags": ["Paper", "Conference", "Two-column"],
+  "mainFile": "main.tex",
+  "engine": "pdflatex",
+  "order": 1,
+  "test": { "engines": ["pdflatex", "xelatex", "lualatex"], "minPages": 3, "bibtex": true, "image": true, "contains": ["Low-Power Occupancy Sensing", "Index Terms", "Algorithm 1", "TABLE I", "Smart Campus Initiative"] }
+}

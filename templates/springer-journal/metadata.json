@@ -1,0 +1,10 @@
+{
+  "name": "Springer Nature Journal Article",
+  "description": "Journal manuscript in the official sn-jnl class, with affiliations, abstract, keywords, a figure, a table, declarations and references.",
+  "category": "Paper",
+  "tags": ["Paper", "Journal", "Springer"],
+  "mainFile": "main.tex",
+  "engine": "pdflatex",
+  "order": 3,
+  "test": { "engines": ["pdflatex", "xelatex", "lualatex"], "minPages": 3, "bibtex": true, "image": true, "contains": ["Estimating Sleep Duration", "Keywords", "Declarations", "References"] }
+}

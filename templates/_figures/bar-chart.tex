@@ -1,0 +1,14 @@
+\documentclass[border=6pt]{standalone}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.17}
+\begin{document}
+\begin{tikzpicture}
+\begin{axis}[ybar, width=9cm, height=6cm, font=\sffamily\small, bar width=9pt, ylabel={Trips per day}, ymin=0, ymax=700,
+  symbolic x coords={Mar,Apr,May,Jun,Jul,Aug}, xtick=data, ymajorgrids, grid style={black!12},
+  legend pos=north west, legend cell align=left, enlarge x limits=0.12]
+  \addplot[fill=blue!55, draw=blue!70!black] coordinates {(Mar,182)(Apr,296)(May,415)(Jun,388)(Jul,342)(Aug,521)};
+  \addplot[fill=orange!60, draw=orange!80!black] coordinates {(Mar,96)(Apr,141)(May,203)(Jun,236)(Jul,251)(Aug,274)};
+  \legend{Weekdays, Weekends}
+\end{axis}
+\end{tikzpicture}
+\end{document}

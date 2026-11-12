@@ -1,0 +1,10 @@
+{
+  "name": "Assignment / Homework",
+  "description": "Problem set with a course header, numbered problems, worked solutions, a matrix calculation and a short proof.",
+  "category": "Assignment",
+  "tags": ["Assignment", "Homework", "Problem set"],
+  "mainFile": "main.tex",
+  "engine": "pdflatex",
+  "order": 9,
+  "test": { "engines": ["pdflatex", "xelatex", "lualatex"], "minPages": 2, "contains": ["Problem Set 4", "Problem 1", "Solution", "Problem 4"] }
+}

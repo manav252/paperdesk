@@ -1,0 +1,10 @@
+{
+  "name": "CV / Resume",
+  "description": "Clean one-page CV: contact header, education, experience, projects, skills, publications and awards.",
+  "category": "CV",
+  "tags": ["CV", "Resume", "One page"],
+  "mainFile": "main.tex",
+  "engine": "pdflatex",
+  "order": 5,
+  "test": { "engines": ["pdflatex", "xelatex", "lualatex"], "maxPages": 1, "contains": ["Ananya Mehta", "Education", "Experience", "Projects", "Skills", "Publications", "Awards"] }
+}

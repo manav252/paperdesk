@@ -1,0 +1,13 @@
+\section{Introduction}\label{sec:introduction}
+Buildings account for roughly a third of final energy use, and a large share of that goes to conditioning and lighting rooms that nobody is in. Office meeting rooms are a clear example: they are booked in blocks, used for part of each booking, and ventilated at a constant rate from early morning until evening. Knowing whether a room is occupied, and by how many people, lets a building controller match fresh-air supply to demand.
+
+Cameras can count people accurately, but they raise privacy concerns and need mains power and network cabling. Simple motion detectors are cheap and private, yet they miss people who sit still and cannot say how many are present. Carbon dioxide concentration follows occupancy, but only after several minutes. No single low-cost sensor is sufficient; combining them is the natural step, and the open question is where the combination should be computed.
+
+This paper argues that it should be computed on the sensor node. Sending raw readings to a server costs radio energy, which dominates the power budget of a battery-powered node, and exposes sound-level traces that occupants may not want to leave the room. Recent work on compact convolutional networks~\cite{howard2017mobilenets} shows that useful models fit in a few kilobytes once they are designed for the task.
+
+Our contributions are as follows.
+\begin{itemize}
+  \item A sensor node that fuses three inexpensive sensors and runs an 8-bit neural network on a microcontroller, transmitting one small estimate per minute (Section~\ref{sec:methodology}).
+  \item A training procedure that keeps accuracy within one percentage point of the floating-point model after quantization.
+  \item A twelve-week field study in 14 meeting rooms, with accuracy, power and energy-saving results (Section~\ref{sec:experiments}).
+\end{itemize}

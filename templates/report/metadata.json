@@ -1,0 +1,10 @@
+{
+  "name": "Project Report",
+  "description": "Long report with a title page, abstract, contents, lists of figures and tables, five chapters, an appendix and a bibliography.",
+  "category": "Report",
+  "tags": ["Report", "Thesis", "Multi-chapter"],
+  "mainFile": "main.tex",
+  "engine": "pdflatex",
+  "order": 6,
+  "test": { "engines": ["pdflatex", "xelatex", "lualatex"], "minPages": 12, "bibtex": true, "image": true, "contains": ["Campus Bike-Share Pilot", "Contents", "List of Figures", "List of Tables", "Appendix A", "Bibliography"] }
+}

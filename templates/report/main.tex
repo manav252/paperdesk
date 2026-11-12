@@ -1,0 +1,56 @@
+\documentclass[11pt,a4paper]{report}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage[hidelinks]{hyperref}
+
+\begin{document}
+
+% ---- Title page: replace the title, authors, organisation and date. ----
+\begin{titlepage}
+  \centering
+  \vspace*{3cm}
+  {\Huge\bfseries Campus Bike-Share Pilot\par}
+  \vspace{0.6cm}
+  {\LARGE Final Evaluation Report\par}
+  \vspace{2.5cm}
+  {\Large Maya Oyelaran \quad Felix Brauer \quad Chen Jing\par}
+  \vspace{0.6cm}
+  {\large Sustainable Transport Office\\Riverside University\par}
+  \vfill
+  {\large Prepared for the University Estates Committee\par}
+  \vspace{0.4cm}
+  {\large 14 March 2026\par}
+\end{titlepage}
+
+\pagenumbering{roman}
+
+% ---- Abstract: replace with a one-paragraph summary of the whole report. ----
+\begin{abstract}
+Between March and August 2025 Riverside University ran a pilot bike-share scheme with 120 bicycles at eight docking stations. This report evaluates the pilot against the three goals set by the Estates Committee: use, cost and effect on car travel to campus. Members made 71\,460 trips, an average of 3.3 trips per bicycle per day, and use grew in every month except June and July, when teaching stopped. The scheme cost 2.10 per trip after membership income, which is below the 2.50 target. A survey of 412 members indicates that 14\% of trips replaced a car journey. We recommend extending the scheme to 200 bicycles and twelve stations, and moving two stations that saw little use.
+\end{abstract}
+
+\tableofcontents
+\listoffigures
+\listoftables
+
+\clearpage
+\pagenumbering{arabic}
+
+% ---- Chapters: one file each in chapters/. Add a chapter by adding a file and an \input line. ----
+\input{chapters/introduction}
+\input{chapters/background}
+\input{chapters/methods}
+\input{chapters/results}
+\input{chapters/recommendations}
+
+\appendix
+\input{appendices/survey}
+
+\bibliographystyle{plain}
+\bibliography{references}
+
+\end{document}

@@ -1,0 +1,10 @@
+{
+  "name": "Research Article",
+  "description": "Single-column article with abstract, sections, a figure, a table, an equation and an author-year bibliography.",
+  "category": "Paper",
+  "tags": ["Paper", "Article", "Single-column"],
+  "mainFile": "main.tex",
+  "engine": "pdflatex",
+  "order": 4,
+  "test": { "engines": ["pdflatex", "xelatex", "lualatex"], "minPages": 3, "bibtex": true, "image": true, "contains": ["Tree Canopy and Summer Surface Temperature", "Abstract", "Table 1", "Figure 1", "References"] }
+}

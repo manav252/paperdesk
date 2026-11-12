@@ -1,0 +1,13 @@
+\section{Introduction}\label{sec:introduction}
+A streaming pipeline reads records from a log, transforms them and writes the results to tables, dashboards and other services. Systems such as Kafka~\cite{kreps2011kafka} and Spark~\cite{zaharia2012resilient} made these pipelines routine, and one team's output is now commonly another team's input. The record structure, or \emph{schema}, is the contract between them, and it is rarely enforced.
+
+When a producer changes its records, consumers often keep running. A renamed field is read as missing, a missing value becomes zero, and the totals on a dashboard quietly drop. We call an unannounced change of this kind \emph{schema drift}. It differs from concept drift~\cite{gama2014survey}, in which the structure stays the same and the distribution of values changes.
+
+Checking every record against a declared schema catches drift immediately, but it requires a schema to exist and to be kept up to date, and it stops the pipeline for changes that are harmless. We take a different approach: observe the structure that records actually have, summarize it compactly, and report when the summary changes.
+
+The paper makes three contributions:
+\begin{enumerate}
+  \item a sketch of record structure that is small and mergeable, so it fits the parallel execution model of stream processors (Sect.~\ref{sec:method});
+  \item a bound on the probability that a change goes unnoticed (Theorem~\ref{thm:bound});
+  \item an evaluation on three production pipelines (Sect.~\ref{sec:evaluation}).
+\end{enumerate}

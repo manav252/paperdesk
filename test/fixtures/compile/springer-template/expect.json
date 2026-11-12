@@ -1,1 +1,0 @@
-{"engines": ["pdflatex", "xelatex", "lualatex"], "success": true, "minPages": 1, "bibtex": true, "contains": ["Your Article Title", "Einstein"]}

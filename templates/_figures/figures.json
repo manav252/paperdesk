@@ -1,0 +1,26 @@
+{
+  "system-overview": [
+    "ieee-conference/figures/system-overview.png",
+    "beamer/figures/system-overview.png"
+  ],
+  "accuracy": [
+    "ieee-conference/figures/accuracy.png",
+    "beamer/figures/accuracy.png"
+  ],
+  "pipeline": [
+    "springer-journal/figures/workflow.png",
+    "report/figures/method.png"
+  ],
+  "convergence": [
+    "springer-lncs/figures/detection-delay.png"
+  ],
+  "bar-chart": [
+    "report/figures/daily-trips.png"
+  ],
+  "scatter": [
+    "article/figures/canopy-temperature.png"
+  ],
+  "sketch-pipeline": [
+    "springer-lncs/figures/pipeline.png"
+  ]
+}

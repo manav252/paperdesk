@@ -1,6 +1,7 @@
 #!/usr/bin/env node
-// End-to-end compile check: uploads each project in test/fixtures/compile through the real API,
-// compiles it with every engine listed in its expect.json, and checks the PDF or the reported error.
+// End-to-end compile check: uploads each project in test/fixtures/compile and every template in templates/ through
+// the real API, compiles it with every engine it lists, and checks the PDF or the reported error. A template must
+// also build without undefined or multiply defined references and citations.
 // Needs Docker and the compiler image (npm run compiler:build). Usage: npm run test:compile [-- name ...]
 import { spawn } from 'node:child_process';
 import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
@@ -10,6 +11,9 @@ import { getDocument, OPS } from 'pdfjs-dist/legacy/build/pdf.mjs';
 import unzipper from 'unzipper';
 
 const ROOT = path.resolve('test/fixtures/compile');
+const TEMPLATES = path.resolve('templates');
+// Files in a template folder that describe it and are not part of the project.
+const NOT_PROJECT_FILES = new Set(['expect.json', 'metadata.json', 'thumbnail.png']);
 const PORT = Number(process.env.FIXTURE_PORT ?? 3101);
 const API = `${(process.env.FIXTURE_API_URL ?? `http://localhost:${PORT}`).replace(/\/+$/, '')}/api`;
 const ownerHeaders = process.env.FIXTURE_OWNER_ID ? { 'X-PaperDesk-Owner': process.env.FIXTURE_OWNER_ID } : {};
@@ -20,7 +24,7 @@ function readTree(dir, rel = '') {
   const out = [];
   for (const name of readdirSync(path.join(dir, rel)).sort()) {
     const r = rel ? `${rel}/${name}` : name;
-    if (r === 'expect.json') continue;
+    if (!rel && NOT_PROJECT_FILES.has(name)) continue;
     if (statSync(path.join(dir, r)).isDirectory()) out.push({ name: r + '/', content: '' }, ...readTree(dir, r));
     else {
       const buf = readFileSync(path.join(dir, r));
@@ -58,11 +62,17 @@ try {
     if (!health.image) throw new Error(`Compiler image ${health.compilerImage} is missing; run npm run compiler:build`);
   }
 
-  const fixtures = readdirSync(ROOT).filter(n => statSync(path.join(ROOT, n)).isDirectory() && (!only.length || only.includes(n)));
-  console.log(`Compiling ${fixtures.length} fixture project(s)…\n`);
-  for (const name of fixtures) {
-    const expect = JSON.parse(readFileSync(path.join(ROOT, name, 'expect.json'), 'utf8'));
-    const files = readTree(path.join(ROOT, name));
+  const isDir = (root, n) => statSync(path.join(root, n)).isDirectory();
+  // Fixtures keep their expectations in expect.json; templates keep theirs under "test" in metadata.json.
+  const cases = [
+    ...readdirSync(ROOT).filter(n => isDir(ROOT, n)).map(n => ({ name: n, dir: path.join(ROOT, n), expect: JSON.parse(readFileSync(path.join(ROOT, n, 'expect.json'), 'utf8')) })),
+    ...readdirSync(TEMPLATES).filter(n => !n.startsWith('_') && isDir(TEMPLATES, n)).map(n => ({ name: `tpl-${n}`, dir: path.join(TEMPLATES, n), expect: { success: true, template: true, ...JSON.parse(readFileSync(path.join(TEMPLATES, n, 'metadata.json'), 'utf8')).test } })),
+  ].filter(c => !only.length || only.includes(c.name) || (only.includes('templates') && c.expect.template));
+  const fixtures = cases.map(c => c.name);
+  const dirOf = name => cases.find(c => c.name === name).dir;
+  console.log(`Compiling ${cases.length} project(s): ${cases.filter(c => !c.expect.template).length} fixture(s), ${cases.filter(c => c.expect.template).length} template(s)…\n`);
+  for (const { name, dir, expect } of cases) {
+    const files = readTree(dir);
     const id = `fixture-${name}`;
     const created = await json(`${API}/projects`, { method: 'POST', body: JSON.stringify({ id, name, files }) });
     if (created.status !== 201) throw new Error(`Could not create ${name}: ${JSON.stringify(created.body)}`);
@@ -108,6 +118,10 @@ try {
         if (/\?\s*\]|\[\s*\?/.test(text)) problems.push('PDF has unresolved citations ([?])');
         if (body.warnings.some(w => /Shell escape feature is not enabled/i.test(w.message))) problems.push('TeX ran without restricted shell escape');
         if (expect.minPages && pages < expect.minPages) problems.push(`expected ≥${expect.minPages} pages, got ${pages}`);
+        if (expect.maxPages && !edit && pages > expect.maxPages) problems.push(`expected ≤${expect.maxPages} page(s), got ${pages}`);
+        // A template must be clean on a first build: nothing undefined, nothing defined twice.
+        const unresolved = expect.template ? body.warnings.filter(w => /undefined|multiply.defined/i.test(w.message)) : [];
+        if (unresolved.length) problems.push(`unresolved references: ${unresolved.slice(0, 3).map(w => w.message).join('; ')}`);
         if ((expect.bibtex || expect.bibliography === 'bibtex') && !/BibTeX|bibtex/i.test(body.log)) problems.push('BibTeX did not run');
         if (expect.bibliography === 'biber' && !/biber/i.test(body.log)) problems.push('Biber did not run');
         if ((expect.bibtex || expect.bibliography) && body.warnings.some(w => /undefined|Citation/.test(w.message) && /cit/i.test(w.message))) problems.push('undefined citations');
@@ -138,9 +152,9 @@ try {
   }
   // A newer compile replaces one still running: the first must get 410 (not hang) and the second must succeed
   // even though the first was killed part-way through writing its auxiliary files.
-  const target = fixtures.find(n => n === 'ieee-template') ?? fixtures.find(n => JSON.parse(readFileSync(path.join(ROOT, n, 'expect.json'), 'utf8')).success);
+  const target = fixtures.find(n => n === 'tpl-ieee-conference') ?? cases.find(c => c.expect.success)?.name;
   if (target) {
-    const files = readTree(path.join(ROOT, target));
+    const files = readTree(dirOf(target));
     const id = `fixture-${target}-replaced`;
     const edited = mark => files.map(f => f.name === 'main.tex' ? { ...f, content: f.content.replace(/\\end\{document\}/, `% ${mark}\n\\end{document}`) } : f);
     const send = mark => json(`${API}/projects/${id}/compile`, { method: 'POST', body: JSON.stringify({ engine: 'pdflatex', mainFile: 'main.tex', name: id, files: edited(mark) }) });
@@ -163,10 +177,10 @@ try {
     const zip = await unzipper.Open.buffer(Buffer.from(await r.arrayBuffer()));
     return { status: 200, names: zip.files.map(f => f.path).sort() };
   };
-  for (const name of ['article-template', 'biber', 'subfolders'].filter(n => fixtures.includes(n))) {
-    const expect = JSON.parse(readFileSync(path.join(ROOT, name, 'expect.json'), 'utf8'));
+  for (const name of ['tpl-report', 'biber', 'subfolders'].filter(n => fixtures.includes(n))) {
+    const expect = cases.find(c => c.name === name).expect;
     const engine = (expect.engines ?? ['pdflatex'])[0];
-    const base = readTree(path.join(ROOT, name)).filter(f => !f.name.endsWith('/'));
+    const base = readTree(dirOf(name)).filter(f => !f.name.endsWith('/'));
     const extras = [{ name: 'main.aux', content: 'stale' }, { name: 'main.log', content: 'stale' }, { name: 'never-used.tex', content: 'Not part of the document.' }];
     const hasBib = base.some(f => f.name.endsWith('.bib'));
     for (const kind of ['arxiv', 'journal']) {
@@ -186,7 +200,7 @@ try {
     }
   }
   if (fixtures.includes('broken')) {
-    const out = await exportOf('fixture-export-broken', readTree(path.join(ROOT, 'broken')).filter(f => !f.name.endsWith('/')), 'arxiv', 'pdflatex');
+    const out = await exportOf('fixture-export-broken', readTree(dirOf('broken')).filter(f => !f.name.endsWith('/')), 'arxiv', 'pdflatex');
     const ok = out.status === 422;
     if (!ok) failures++;
     console.log(`  ${ok ? '✓' : '✗'} ${'broken'.padEnd(20)} export refused: ${out.status} ${out.error ?? ''}`);
@@ -196,7 +210,7 @@ try {
   console.error(`\n✗ ${e.message}`);
 } finally {
   if (process.env.FIXTURE_API_URL && process.env.FIXTURE_OWNER_ID) {
-    const fixtures = readdirSync(ROOT).filter(n => statSync(path.join(ROOT, n)).isDirectory() && (!only.length || only.includes(n)));
+    const fixtures = [...readdirSync(ROOT).filter(n => statSync(path.join(ROOT, n)).isDirectory()), ...readdirSync(TEMPLATES).filter(n => !n.startsWith('_')).map(n => `tpl-${n}`)];
     await Promise.all(fixtures.map(id => fetch(`${API}/projects/fixture-${id}`, { method: 'DELETE', headers: ownerHeaders }).catch(() => undefined)));
   }
   cleanup();

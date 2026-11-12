@@ -1,0 +1,62 @@
+\documentclass[conference]{IEEEtran}
+\usepackage{cite}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{algorithm}
+\usepackage{algpseudocode}
+\usepackage{textcomp}
+\usepackage{xcolor}
+\usepackage[hidelinks]{hyperref}
+
+\begin{document}
+
+% Replace with your title. Keep formulas and unexplained abbreviations out of it.
+\title{Low-Power Occupancy Sensing for Smart Buildings Using Edge-Deployed Neural Networks}
+
+% One block per author: copy a block to add an author, delete one to remove an author.
+\author{\IEEEauthorblockN{Priya Raman}
+\IEEEauthorblockA{\textit{Dept. of Electrical Engineering} \\
+\textit{Northfield Institute of Technology}\\
+Pune, India \\
+priya.raman@northfield.example}
+\and
+\IEEEauthorblockN{Daniel Okafor}
+\IEEEauthorblockA{\textit{Dept. of Computer Science} \\
+\textit{Northfield Institute of Technology}\\
+Pune, India \\
+daniel.okafor@northfield.example}
+\and
+\IEEEauthorblockN{Mei Tanaka}
+\IEEEauthorblockA{\textit{Building Systems Group} \\
+\textit{Harbour Automation Ltd.}\\
+Osaka, Japan \\
+m.tanaka@harbour-automation.example}
+}
+
+\maketitle
+
+% Replace with your abstract. IEEEtran prints the word "Abstract" for you.
+\begin{abstract}
+Heating, ventilation and lighting are usually run on fixed schedules, although most rooms in an office are empty for a large part of the day. We present a battery-powered sensor node that estimates how many people are in a room from passive infrared, carbon dioxide and sound-level readings, using a small neural network that runs on the node itself. The network has 4.1 thousand parameters, is quantized to 8-bit integers and needs 38 ms per inference on a microcontroller. In a twelve-week deployment across 14 meeting rooms, the node detected occupancy with 94.2\% accuracy and estimated the number of occupants to within one person in 87.6\% of intervals, while drawing an average of 0.31 mW. Running the ventilation from these estimates reduced fan energy by 23\% compared with the existing schedule.
+\end{abstract}
+
+% Replace with three to five keywords.
+\begin{IEEEkeywords}
+occupancy sensing, embedded machine learning, smart buildings, energy efficiency, sensor fusion
+\end{IEEEkeywords}
+
+\input{sections/introduction}
+\input{sections/related-work}
+\input{sections/methodology}
+\input{sections/experiments}
+\input{sections/conclusion}
+
+% Thank people and funders who are not authors. Delete the section if it does not apply.
+\section*{Acknowledgment}
+The authors thank the facilities team at Northfield Institute of Technology for access to the meeting rooms and the building controller logs. This work was supported in part by the Smart Campus Initiative under grant SCI-2024-117.
+
+\bibliographystyle{IEEEtran}
+\bibliography{references}
+
+\end{document}

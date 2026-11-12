@@ -1,3 +1,0 @@
-sn-jnl.cls and sn-mathphys-num.bst are from the official Springer Nature LaTeX template
-(Version 3.1, December 2024), distributed under the LaTeX Project Public License 1.3c.
-Source: https://resource-cms.springernature.com/springer-cms/rest/v1/content/18782940/data/v12

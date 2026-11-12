@@ -1,0 +1,10 @@
+{
+  "name": "Cover Letter",
+  "description": "One-page job application letter with a matching header, recipient block, three body paragraphs and a signature.",
+  "category": "Letter",
+  "tags": ["Letter", "Job application", "One page"],
+  "mainFile": "main.tex",
+  "engine": "pdflatex",
+  "order": 8,
+  "test": { "engines": ["pdflatex", "xelatex", "lualatex"], "maxPages": 1, "contains": ["Ananya Mehta", "Dear Ms. Fernandes", "Yours sincerely"] }
+}

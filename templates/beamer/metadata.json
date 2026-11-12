@@ -1,0 +1,10 @@
+{
+  "name": "Beamer Presentation",
+  "description": "Slide deck with a title slide, outline, content slides with a figure, a table, equations and columns, and a closing slide.",
+  "category": "Presentation",
+  "tags": ["Presentation", "Slides", "Talk"],
+  "mainFile": "main.tex",
+  "engine": "pdflatex",
+  "order": 7,
+  "test": { "engines": ["pdflatex", "xelatex", "lualatex"], "minPages": 10, "image": true, "contains": ["Low-Power Occupancy Sensing", "Outline", "Thank you"] }
+}

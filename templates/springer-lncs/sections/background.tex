@@ -1,0 +1,12 @@
+\section{Background and Related Work}\label{sec:background}
+\subsection{Stream Processing}
+Stream processors divide a stream into partitions that are handled in parallel and combine partial results afterwards, an idea that goes back to MapReduce~\cite{dean2008mapreduce}. The Dataflow model~\cite{akidau2015dataflow} adds windows, which group records by the time they were produced. Any summary we compute must therefore be mergeable: combining the summaries of two partitions has to give the summary of their union.
+
+\subsection{Schemas and Their Evolution}
+Schema registries store a declared schema per stream and reject records that do not match. They work well when every producer uses them. In the pipelines we studied, between 20\% and 35\% of streams had no registered schema, mostly because they were produced by third-party systems.
+
+\begin{definition}[Structural signature]\label{def:signature}
+The \emph{structural signature} of a record is the set of pairs $(p, t)$, where $p$ is the path of a field in the record and $t$ is the type of its value. Two records have the same structure if their signatures are equal.
+\end{definition}
+
+For example, the record \texttt{\{"id": 7, "tags": ["a"]\}} has the signature $\{(\mathit{id}, \mathit{int}), (\mathit{tags}, \mathit{array}), (\mathit{tags}[\,], \mathit{string})\}$. Drift, in these terms, is a change in how often each pair occurs.

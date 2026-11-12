@@ -1,0 +1,10 @@
+{
+  "name": "Springer LNCS Paper",
+  "description": "Lecture Notes in Computer Science paper with institutes, a definition and theorem, a figure, a table, an algorithm and references.",
+  "category": "Paper",
+  "tags": ["Paper", "Conference", "Springer"],
+  "mainFile": "main.tex",
+  "engine": "pdflatex",
+  "order": 2,
+  "test": { "engines": ["pdflatex", "xelatex", "lualatex"], "minPages": 4, "bibtex": true, "image": true, "contains": ["Detecting Schema Drift", "Keywords", "Algorithm 1", "Theorem 1", "References"] }
+}

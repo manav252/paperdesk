@@ -100,6 +100,13 @@ export class SharingStore {
     await this.pool.query('DELETE FROM paperdesk_project_members WHERE alias = $1 AND user_id = $2', [alias, userId]);
   }
 
+  /** What an invitation is for, so the person opening the link can be told before they sign in. */
+  async invitation(token: string) {
+    const { rows } = await this.pool.query(`SELECT i.role, i.email, p.name FROM paperdesk_invites i JOIN paperdesk_shares s USING (alias)
+      LEFT JOIN paperdesk_projects p ON p.id = s.project_id AND p.owner_id = s.owner_id WHERE i.token = $1`, [token]);
+    return rows[0] ? { project: String(rows[0].name ?? 'a project'), role: String(rows[0].role), forEmail: !!rows[0].email } : null;
+  }
+
   /** Returns the id to open, or an error status. Accepting again never lowers or raises an existing role. */
   async accept(token: string, user: { id: string; ownerId: string; email?: string }) {
     const { rows } = await this.pool.query('SELECT i.alias, i.email, i.role, s.owner_id, s.project_id FROM paperdesk_invites i JOIN paperdesk_shares s USING (alias) WHERE i.token = $1', [token]);

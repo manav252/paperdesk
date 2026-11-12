@@ -169,3 +169,65 @@ test('owner shares through the dialog; the viewer gets a read-only project and a
   await api.del(`/${id}`);
   await owner.context.close(); await viewer.context.close();
 });
+
+test('a signed-out visitor is told which project a link is for, and lands in it after signing in', async ({ browser, request }) => {
+  test.setTimeout(90_000);
+  const api = client(request, await tokenFor('owner')), id = newId();
+  // A project with a large image: creating a link must not depend on loading the project's files.
+  const image = Buffer.alloc(3 * 1024 * 1024, 7).toString('base64');
+  await api.put(`/${id}`, { name: 'Smart Wardrobe Management System', mainFile: 'main.tex', files: [{ name: 'main.tex', content: source('Wardrobe paper') }, { name: 'figures/big.png', content: image, encoding: 'base64' }] });
+  const started = Date.now();
+  const link = (await (await api.post(`/${id}/invites`, { role: 'editor' })).json()).token as string;
+  expect((await (await api.get(`/${id}/members`)).json()).invites.map((i: { token: string }) => i.token)).toEqual([link]);
+  expect(Date.now() - started).toBeLessThan(2000);
+
+  // Anyone holding the link can see what it is for; an unknown link says so.
+  expect(await (await request.get(`${API}/api/invites/${link}`)).json()).toEqual({ project: 'Smart Wardrobe Management System', role: 'editor', forEmail: false });
+  expect((await request.get(`${API}/api/invites/not-a-real-link`)).status()).toBe(404);
+
+  // A visitor who is not signed in, on a browser that has never opened the app.
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } }), page = await context.newPage();
+  const errors: string[] = [];
+  page.on('pageerror', e => errors.push(e.message));
+  await page.route(/^https:\/\/fonts\.(googleapis|gstatic)\.com\//, route => route.fulfill({ status: 200, contentType: 'text/css', body: '' }));
+  const token = await tokenFor('editor');
+  await page.route(`${SUPABASE}/auth/v1/**`, async route => {
+    const url = new URL(route.request().url());
+    if (url.pathname.endsWith('/settings')) return route.fulfill({ json: { external: { email: true, google: false } } });
+    if (url.pathname.endsWith('/otp')) return route.fulfill({ json: {} });
+    if (url.pathname.endsWith('/token')) return route.fulfill({ json: {
+      access_token: token, token_type: 'bearer', expires_in: 3600, expires_at: Math.floor(Date.now() / 1000) + 3600, refresh_token: 'test-refresh',
+      user: { id: people.editor.id, aud: 'authenticated', role: 'authenticated', email: people.editor.email, app_metadata: { provider: 'email' }, user_metadata: {}, created_at: new Date().toISOString() },
+    } });
+    return route.fulfill({ status: 404, json: { error: 'unexpected auth call' } });
+  });
+  await page.addInitScript(() => { localStorage.setItem('paperdesk-tour-done', '1'); localStorage.setItem('paperdesk-help-seen', '1'); });
+
+  await page.goto(`/?join=${link}`);
+  const dialog = page.getByRole('dialog', { name: 'Sign in to PaperDesk' });
+  await expect(dialog).toContainText('You were invited to edit “Smart Wardrobe Management System”. Sign in to open it.');
+  // The sample project is not opened behind the dialog: that looked like the link had opened the wrong project.
+  await expect(page.locator('.monaco-editor')).toHaveCount(0);
+  expect(new URL(page.url()).hash).toBe('');
+  await dialog.getByLabel('Email').fill(people.editor.email);
+  await dialog.getByRole('button', { name: 'Email me a sign-in link' }).click();
+  await expect(dialog).toContainText(`Check ${people.editor.email} for a sign-in link`);
+
+  // Opening the emailed link comes back with a one-time code; the invited project opens.
+  await page.goto('/?code=test-code');
+  await expect(page.locator('.view-line').filter({ hasText: 'Wardrobe paper' })).toBeVisible({ timeout: 30_000 });
+  await expect(page.locator('.project-title, .editor-title, header').filter({ hasText: 'Smart Wardrobe Management System' }).first()).toBeVisible();
+  expect(new URL(page.url()).hash).toMatch(/^#\/paper\/s-/);
+  expect(errors).toEqual([]);
+  await context.close();
+
+  // A link that was turned off says so instead of asking the visitor to sign in.
+  await api.del(`/${id}/invites/${link}`);
+  const late = await browser.newContext(), latePage = await late.newPage();
+  await latePage.addInitScript(() => { localStorage.setItem('paperdesk-tour-done', '1'); localStorage.setItem('paperdesk-help-seen', '1'); });
+  await latePage.goto(`/?join=${link}`);
+  await expect(latePage.locator('.toast')).toContainText('This invitation link is no longer valid');
+  await expect(latePage.getByRole('dialog', { name: 'Sign in to PaperDesk' })).toHaveCount(0);
+  await late.close();
+  await api.del(`/${id}`);
+});

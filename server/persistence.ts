@@ -91,6 +91,12 @@ export class ProjectPersistence {
     return Promise.all(rows.map(row => this.readRow(row)));
   }
 
+  /** Whether the project exists, without loading its files. */
+  async exists(id: string, ownerId: string) {
+    const { rowCount } = await this.pool!.query('SELECT 1 FROM paperdesk_projects WHERE id = $1 AND owner_id = $2', [id, ownerId]);
+    return !!rowCount;
+  }
+
   async read(id: string, ownerId: string): Promise<ProjectData> {
     const { rows } = await this.pool!.query('SELECT * FROM paperdesk_projects WHERE id = $1 AND owner_id = $2', [id, ownerId]);
     if (!rows[0]) throw new Error('Project not found');

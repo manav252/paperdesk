@@ -25,6 +25,8 @@ export function ShareAccess({ projectId, apiFetch, copy }: { projectId: string; 
   const [email, setEmail] = useState('');
   const [role, setRole] = useState('editor');
   const [error, setError] = useState('');
+  // What is being created ('email' or a link's role), so its button can say so: the server may be waking up.
+  const [creating, setCreating] = useState('');
   const base = `/api/projects/${projectId}`;
   const call = async (path: string, init?: RequestInit) => {
     setError('');
@@ -34,7 +36,12 @@ export function ShareAccess({ projectId, apiFetch, copy }: { projectId: string; 
   };
   const refresh = async () => { const r = await call('/members'); if (r) setAccess(await r.json()); };
   useEffect(() => { if (currentAccessToken()) void refresh(); }, [projectId]);
-  const invite = async (body: object) => { const r = await call('/invites', { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify(body) }); if (r) await refresh(); return !!r; };
+  const invite = async (body: { role: string; email?: string }) => {
+    if (creating) return false;
+    setCreating(body.email ? 'email' : body.role);
+    try { const r = await call('/invites', { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify(body) }); if (r) await refresh(); return !!r; }
+    finally { setCreating(''); }
+  };
   if (!currentAccessToken()) return <p className="dialog-message">Sign in to invite people to edit or view this project.</p>;
   const links = access?.invites.filter(i => !i.email) ?? [], pending = access?.invites.filter(i => i.email) ?? [];
   return <section className="share-access" aria-label="People with access">
@@ -42,7 +49,7 @@ export function ShareAccess({ projectId, apiFetch, copy }: { projectId: string; 
     <form className="share-row" onSubmit={e => { e.preventDefault(); void invite({ email, role }).then(ok => { if (ok) setEmail(''); }); }}>
       <input className="text-input" type="email" required value={email} onChange={e => setEmail(e.target.value)} placeholder="name@university.edu" aria-label="Email to invite" />
       <select className="select" value={role} onChange={e => setRole(e.target.value)} aria-label="Invite role"><option value="editor">Can edit</option><option value="viewer">Can view</option></select>
-      <button className="btn btn-primary btn-sm" type="submit">Create invite</button>
+      <button className="btn btn-primary btn-sm" type="submit" disabled={!!creating}>{creating === 'email' ? 'Creating…' : 'Create invite'}</button>
     </form>
     {error && <div className="inline-alert error" role="alert"><span>{error}</span></div>}
     {pending.map(i => <div className="share-person" key={i.token}><div><strong>{i.email}</strong><span>Invited, {i.role === 'editor' ? 'can edit' : 'can view'}. Send them this link.</span></div>
@@ -55,7 +62,7 @@ export function ShareAccess({ projectId, apiFetch, copy }: { projectId: string; 
     <p className="muted">Anyone who signs in with a link joins with that role, until you turn the link off.</p>
     {(['editor', 'viewer'] as const).map(r => { const link = links.find(l => l.role === r); return <div className="share-person" key={r}><div><strong>{r === 'editor' ? 'Edit link' : 'View link'}</strong></div>
       {link ? <><button className="btn btn-secondary btn-sm" onClick={() => copy(joinUrl(link.token), 'Link copied')}><Copy size={13} /> Copy link</button><button className="btn btn-secondary btn-sm" onClick={() => void call(`/invites/${link.token}`, { method: 'DELETE' }).then(refresh)}>Turn off</button></>
-        : <button className="btn btn-secondary btn-sm" onClick={() => void invite({ role: r })}>Create link</button>}</div>; })}
+        : <button className="btn btn-secondary btn-sm" disabled={!!creating} onClick={() => void invite({ role: r })}>{creating === r ? 'Creating link…' : 'Create link'}</button>}</div>; })}
   </section>;
 }
 

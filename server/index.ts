@@ -381,6 +381,17 @@ app.post('/api/citations/lookup', async (req, res) => {
 });
 
 /** Joins a project from an invite or link token. */
+/** Names the project an invitation is for. The token is the only credential, as it is for accepting. */
+app.get('/api/invites/:token', async (req, res) => {
+  try {
+    if (overBudget(`invite:${req.ip}`, 30)) return void send(res, 429, 'Too many requests. Wait a minute and try again.');
+    if (!sharing) return void send(res, 501, 'Sharing needs the production database.');
+    const invitation = await sharing.invitation(String(req.params.token));
+    if (!invitation) return void send(res, 404, 'This invitation is no longer valid.');
+    res.json(invitation);
+  } catch (e) { send(res, 500, e); }
+});
+
 app.post('/api/invites/:token/accept', async (req, res) => {
   try {
     const token = bearerToken(req);
@@ -1116,7 +1127,8 @@ const sharingRoute = (handler: (store: SharingStore, req: express.Request, res: 
     if (!sharing) return void send(res, 501, 'Sharing needs the production database.');
     const owner = projectOwner(res), id = String(req.params.id);
     if (!owner.startsWith('user:')) return void send(res, 401, 'Sign in to share this project.');
-    await persistence.read(id, owner);
+    // Only that the project exists matters here; loading its files would make every sharing request slow.
+    if (!await persistence.exists(id, owner)) return void send(res, 404, 'Project not found');
     await handler(sharing, req, res, owner, id);
   } catch (e) { send(res, e instanceof Error && /not found/i.test(e.message) ? 404 : 500, e); }
 };

@@ -24,8 +24,12 @@ export function parseForwardSync(output: string): PdfSyncPosition | null {
   const y = number(result, 'y');
   if (page === null || page < 1 || x === null || y === null) return null;
   // h/v/W/H give the whole box (v is its baseline); fall back to the reference point alone.
-  const h = number(result, 'h'), v = number(result, 'v'), width = number(result, 'W'), height = number(result, 'H');
-  if (h !== null && v !== null && width !== null && height !== null && width > 0 && height > 0) return { page, x: h, y: v, width, height };
+  const h = number(result, 'h'),
+    v = number(result, 'v'),
+    width = number(result, 'W'),
+    height = number(result, 'H');
+  if (h !== null && v !== null && width !== null && height !== null && width > 0 && height > 0)
+    return { page, x: h, y: v, width, height };
   return { page, x, y };
 }
 
@@ -36,7 +40,10 @@ export function parseInverseSync(output: string, sourceRoot = '/work'): SourceSy
   const column = number(result, 'Column') ?? 1;
   const prefix = `${sourceRoot.replace(/\/+$/, '')}/`;
   if (!raw?.startsWith(prefix) || line === null || line < 1) return null;
-  const parts = raw.slice(prefix.length).split('/').filter(part => part && part !== '.');
-  if (!parts.length || parts.some(part => part === '..')) return null;
+  const parts = raw
+    .slice(prefix.length)
+    .split('/')
+    .filter((part) => part && part !== '.');
+  if (!parts.length || parts.some((part) => part === '..')) return null;
   return { file: parts.join('/'), line, column: Math.max(1, column) };
 }

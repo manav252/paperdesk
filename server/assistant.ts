@@ -4,7 +4,14 @@
 import express, { type Request, type Response } from 'express';
 import Anthropic from '@anthropic-ai/sdk';
 
-export const LIMITS = { messages: 20, messageChars: 8_000, fileChars: 60_000, selectionChars: 8_000, logChars: 8_000, entries: 30 };
+export const LIMITS = {
+  messages: 20,
+  messageChars: 8_000,
+  fileChars: 60_000,
+  selectionChars: 8_000,
+  logChars: 8_000,
+  entries: 30,
+};
 
 export type AssistantEntry = { file: string | null; line: number | null; message: string };
 export type AssistantContext = {
@@ -16,7 +23,11 @@ export type AssistantContext = {
   log?: { success: boolean | null; errors: AssistantEntry[]; warnings: AssistantEntry[]; tail?: string };
   error?: AssistantEntry;
 };
-export type AssistantRequest = { mode: 'chat' | 'explain'; messages: Anthropic.MessageParam[]; context?: AssistantContext };
+export type AssistantRequest = {
+  mode: 'chat' | 'explain';
+  messages: Anthropic.MessageParam[];
+  context?: AssistantContext;
+};
 
 export const SYSTEM_PROMPT = `You are the PaperDesk assistant, a patient LaTeX tutor for people who are new to LaTeX.
 
@@ -37,38 +48,62 @@ export const EXPLAIN_PROMPT = `The user clicked "Explain this error" on a LaTeX 
 If the fix is a change to lines shown in the <file> block, end with exactly one code block whose opening fence is \`\`\`latex replace-lines START-END (the first and last line numbers being replaced, inclusive). Inside it, write the corrected text for exactly those lines, without line numbers. Keep the range as small as possible, and copy unchanged lines exactly. To add a line, replace a neighbouring line with that line plus the new one. If the fix needs something that isn't shown (another file, a package to install), describe it and use an ordinary \`\`\`latex block instead.`;
 
 const isEntry = (e: any): e is AssistantEntry =>
-  e && typeof e.message === 'string' && (e.file === null || typeof e.file === 'string') && (e.line === null || Number.isInteger(e.line));
+  e &&
+  typeof e.message === 'string' &&
+  (e.file === null || typeof e.file === 'string') &&
+  (e.line === null || Number.isInteger(e.line));
 const tooLong = (s: unknown, max: number) => typeof s === 'string' && s.length > max;
 
 /** Validates a request body. Returns the parsed request, or an error message for a 400/413 response. */
-export function parseAssistantRequest(body: any): { ok: true; request: AssistantRequest } | { ok: false; status: number; error: string } {
+export function parseAssistantRequest(
+  body: any,
+): { ok: true; request: AssistantRequest } | { ok: false; status: number; error: string } {
   const bad = (error: string, status = 400) => ({ ok: false as const, status, error });
   if (!body || typeof body !== 'object') return bad('Expected a JSON body');
   const mode = body.mode ?? 'chat';
   if (mode !== 'chat' && mode !== 'explain') return bad('Unknown mode');
   const { messages, context } = body;
   if (!Array.isArray(messages) || !messages.length) return bad('Ask a question first');
-  if (messages.length > LIMITS.messages) return bad(`Conversations are limited to ${LIMITS.messages} messages; start a new chat`, 413);
+  if (messages.length > LIMITS.messages)
+    return bad(`Conversations are limited to ${LIMITS.messages} messages; start a new chat`, 413);
   for (const m of messages) {
-    if (!m || (m.role !== 'user' && m.role !== 'assistant') || typeof m.content !== 'string' || !m.content.trim()) return bad('Invalid message');
-    if (m.content.length > LIMITS.messageChars) return bad(`Messages are limited to ${LIMITS.messageChars.toLocaleString('en')} characters`, 413);
+    if (!m || (m.role !== 'user' && m.role !== 'assistant') || typeof m.content !== 'string' || !m.content.trim())
+      return bad('Invalid message');
+    if (m.content.length > LIMITS.messageChars)
+      return bad(`Messages are limited to ${LIMITS.messageChars.toLocaleString('en')} characters`, 413);
   }
-  if (messages[0].role !== 'user' || messages.at(-1).role !== 'user') return bad('The conversation must start and end with a question');
+  if (messages[0].role !== 'user' || messages.at(-1).role !== 'user')
+    return bad('The conversation must start and end with a question');
   if (context !== undefined) {
     if (!context || typeof context !== 'object') return bad('Invalid context');
     if (context.file !== undefined && typeof context.file !== 'string') return bad('Invalid context file');
-    if (context.cursor !== undefined && !(Number.isInteger(context.cursor?.line) && Number.isInteger(context.cursor?.col))) return bad('Invalid cursor');
+    if (
+      context.cursor !== undefined &&
+      !(Number.isInteger(context.cursor?.line) && Number.isInteger(context.cursor?.col))
+    )
+      return bad('Invalid cursor');
     if (context.selection !== undefined && typeof context.selection !== 'string') return bad('Invalid selection');
     if (context.content !== undefined && typeof context.content !== 'string') return bad('Invalid file content');
-    if (tooLong(context.selection, LIMITS.selectionChars) || tooLong(context.content, LIMITS.fileChars)) return bad('The shared file or selection is too large', 413);
+    if (tooLong(context.selection, LIMITS.selectionChars) || tooLong(context.content, LIMITS.fileChars))
+      return bad('The shared file or selection is too large', 413);
     if (context.error !== undefined && !isEntry(context.error)) return bad('Invalid error');
     const log = context.log;
     if (log !== undefined) {
-      if (!log || !Array.isArray(log.errors) || !Array.isArray(log.warnings) || ![...log.errors, ...log.warnings].every(isEntry)) return bad('Invalid compile log');
-      if (log.errors.length + log.warnings.length > LIMITS.entries * 2 || tooLong(log.tail, LIMITS.logChars)) return bad('The shared compile log is too large', 413);
+      if (
+        !log ||
+        !Array.isArray(log.errors) ||
+        !Array.isArray(log.warnings) ||
+        ![...log.errors, ...log.warnings].every(isEntry)
+      )
+        return bad('Invalid compile log');
+      if (log.errors.length + log.warnings.length > LIMITS.entries * 2 || tooLong(log.tail, LIMITS.logChars))
+        return bad('The shared compile log is too large', 413);
     }
   }
-  return { ok: true, request: { mode, messages: messages.map((m: any) => ({ role: m.role, content: m.content })), context } };
+  return {
+    ok: true,
+    request: { mode, messages: messages.map((m: any) => ({ role: m.role, content: m.content })), context },
+  };
 }
 
 const entryLine = (e: AssistantEntry) => `- ${e.file ?? '(unknown file)'}${e.line ? `:${e.line}` : ''}: ${e.message}`;
@@ -96,7 +131,16 @@ export function buildMessages(r: AssistantRequest): Anthropic.MessageParam[] {
   const context = r.context ? formatContext(r.context) : '';
   if (!context) return r.messages;
   const last = r.messages.at(-1)!;
-  return [...r.messages.slice(0, -1), { role: 'user', content: [{ type: 'text', text: context }, { type: 'text', text: last.content as string }] }];
+  return [
+    ...r.messages.slice(0, -1),
+    {
+      role: 'user',
+      content: [
+        { type: 'text', text: context },
+        { type: 'text', text: last.content as string },
+      ],
+    },
+  ];
 }
 
 /** Fixed-window request counter per client IP. */
@@ -106,7 +150,10 @@ export function createRateLimiter(limit: number, windowMs: number, now = () => D
     const t = now();
     if (hits.size > 10_000) for (const [k, v] of hits) if (v.reset <= t) hits.delete(k);
     const h = hits.get(key);
-    if (!h || h.reset <= t) { hits.set(key, { count: 1, reset: t + windowMs }); return { allowed: true }; }
+    if (!h || h.reset <= t) {
+      hits.set(key, { count: 1, reset: t + windowMs });
+      return { allowed: true };
+    }
     if (h.count >= limit) return { allowed: false, retryAfterSec: Math.ceil((h.reset - t) / 1000) };
     h.count++;
     return { allowed: true };
@@ -117,12 +164,24 @@ export const assistantModel = () => process.env.ASSISTANT_MODEL || 'claude-haiku
 export const assistantConfigured = () => !!process.env.ANTHROPIC_API_KEY;
 
 const describeApiError = (e: unknown): { status: number; error: string } => {
-  if (e instanceof Anthropic.AuthenticationError || e instanceof Anthropic.PermissionDeniedError) return { status: 503, error: 'The assistant’s API key was rejected. Check ANTHROPIC_API_KEY on the API server.' };
-  if (e instanceof Anthropic.NotFoundError) return { status: 503, error: `The assistant model “${assistantModel()}” wasn’t found. Check ASSISTANT_MODEL on the API server.` };
-  if (e instanceof Anthropic.RateLimitError) return { status: 429, error: 'The assistant is busy right now. Try again in a minute.' };
-  if (e instanceof Anthropic.BadRequestError) return { status: 400, error: 'The assistant couldn’t process this request. Try a shorter question or start a new chat.' };
-  if (e instanceof Anthropic.APIConnectionError) return { status: 502, error: 'The API server couldn’t reach the assistant service.' };
-  if (e instanceof Anthropic.APIError) return { status: 502, error: 'The assistant service had a problem. Try again shortly.' };
+  if (e instanceof Anthropic.AuthenticationError || e instanceof Anthropic.PermissionDeniedError)
+    return { status: 503, error: 'The assistant’s API key was rejected. Check ANTHROPIC_API_KEY on the API server.' };
+  if (e instanceof Anthropic.NotFoundError)
+    return {
+      status: 503,
+      error: `The assistant model “${assistantModel()}” wasn’t found. Check ASSISTANT_MODEL on the API server.`,
+    };
+  if (e instanceof Anthropic.RateLimitError)
+    return { status: 429, error: 'The assistant is busy right now. Try again in a minute.' };
+  if (e instanceof Anthropic.BadRequestError)
+    return {
+      status: 400,
+      error: 'The assistant couldn’t process this request. Try a shorter question or start a new chat.',
+    };
+  if (e instanceof Anthropic.APIConnectionError)
+    return { status: 502, error: 'The API server couldn’t reach the assistant service.' };
+  if (e instanceof Anthropic.APIError)
+    return { status: 502, error: 'The assistant service had a problem. Try again shortly.' };
   return { status: 500, error: 'The assistant failed unexpectedly.' };
 };
 
@@ -133,13 +192,16 @@ export function assistantRouter() {
   let client: Anthropic | null = null;
 
   router.post('/api/assistant', express.json({ limit: `${maxKb}kb` }), async (req: Request, res: Response) => {
-    if (!assistantConfigured()) return res.status(503).json({ error: 'Assistant not configured', code: 'not_configured' });
+    if (!assistantConfigured())
+      return res.status(503).json({ error: 'Assistant not configured', code: 'not_configured' });
     const parsed = parseAssistantRequest(req.body);
     if (!parsed.ok) return res.status(parsed.status).json({ error: parsed.error });
     const rate = limiter(req.ip ?? 'unknown');
     if (!rate.allowed) {
       res.setHeader('Retry-After', String(rate.retryAfterSec));
-      return res.status(429).json({ error: `You’ve reached the assistant’s hourly limit. Try again in ${Math.ceil(rate.retryAfterSec / 60)} minute(s).` });
+      return res.status(429).json({
+        error: `You’ve reached the assistant’s hourly limit. Try again in ${Math.ceil(rate.retryAfterSec / 60)} minute(s).`,
+      });
     }
 
     client ??= new Anthropic();
@@ -151,17 +213,23 @@ export function assistantRouter() {
       messages: buildMessages(parsed.request),
     });
     // Stop generating (and paying) as soon as the browser goes away.
-    res.on('close', () => { if (!res.writableFinished) stream.abort(); });
+    res.on('close', () => {
+      if (!res.writableFinished) stream.abort();
+    });
     const start = () => {
       if (res.headersSent) return;
       res.status(200).setHeader('Content-Type', 'application/x-ndjson; charset=utf-8');
       res.setHeader('X-Accel-Buffering', 'no');
       res.flushHeaders();
     };
-    const send = (event: object) => { start(); res.write(JSON.stringify(event) + '\n'); };
+    const send = (event: object) => {
+      start();
+      res.write(JSON.stringify(event) + '\n');
+    };
     try {
       for await (const event of stream) {
-        if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') send({ type: 'text', text: event.delta.text });
+        if (event.type === 'content_block_delta' && event.delta.type === 'text_delta')
+          send({ type: 'text', text: event.delta.text });
       }
       const final = await stream.finalMessage();
       send({ type: 'done', stopReason: final.stop_reason });
@@ -170,8 +238,10 @@ export function assistantRouter() {
       if (stream.aborted) return;
       const { status, error } = describeApiError(e);
       if (!(e instanceof Anthropic.APIError)) console.error('Assistant request failed:', e);
-      if (res.headersSent) { res.write(JSON.stringify({ type: 'error', error }) + '\n'); res.end(); }
-      else res.status(status).json({ error });
+      if (res.headersSent) {
+        res.write(JSON.stringify({ type: 'error', error }) + '\n');
+        res.end();
+      } else res.status(status).json({ error });
     }
   });
   return router;

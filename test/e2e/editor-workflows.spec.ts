@@ -11,8 +11,8 @@ test.beforeEach(async ({ page, request }) => {
   if (!process.env.E2E_BASE_URL) {
     const response = await request.get('/api/projects');
     if (response.ok()) {
-      const projects = await response.json() as { id: string }[];
-      await Promise.all(projects.map(project => request.delete(`/api/projects/${project.id}`)));
+      const projects = (await response.json()) as { id: string }[];
+      await Promise.all(projects.map((project) => request.delete(`/api/projects/${project.id}`)));
     }
   }
   await page.addInitScript(() => {
@@ -21,34 +21,61 @@ test.beforeEach(async ({ page, request }) => {
   });
   if (process.env.E2E_BASE_URL) {
     // Keep an external site isolated from existing user projects while each test creates its own workspace.
-    await page.route('**/api/projects', route => route.request().method() === 'GET' ? route.fulfill({ json: [] }) : route.continue());
+    await page.route('**/api/projects', (route) =>
+      route.request().method() === 'GET' ? route.fulfill({ json: [] }) : route.continue(),
+    );
   }
   if (!process.env.E2E_BASE_URL) {
     const pdf = onePagePdf();
-    await page.route('**/api/health', route => route.fulfill({ json: { ok: true, compilerReady: true, maxCompileTimeoutMs: 120_000, assistant: { configured: false } } }));
-    await page.route('**/api/projects/*/compile', route => route.fulfill({ json: { success: true, log: '', errors: [], warnings: [], durationMs: 100 } }));
-    await page.route('**/api/projects/*/pdf*', route => route.fulfill({ status: 200, contentType: 'application/pdf', body: pdf }));
+    await page.route('**/api/health', (route) =>
+      route.fulfill({
+        json: { ok: true, compilerReady: true, maxCompileTimeoutMs: 120_000, assistant: { configured: false } },
+      }),
+    );
+    await page.route('**/api/projects/*/compile', (route) =>
+      route.fulfill({ json: { success: true, log: '', errors: [], warnings: [], durationMs: 100 } }),
+    );
+    await page.route('**/api/projects/*/pdf*', (route) =>
+      route.fulfill({ status: 200, contentType: 'application/pdf', body: pdf }),
+    );
   }
-  await page.route(/^https:\/\/fonts\.(googleapis|gstatic)\.com\//, route => route.fulfill({ status: 200, contentType: 'text/css', body: '' }));
+  await page.route(/^https:\/\/fonts\.(googleapis|gstatic)\.com\//, (route) =>
+    route.fulfill({ status: 200, contentType: 'text/css', body: '' }),
+  );
   const errors: string[] = [];
   errorsByPage.set(page, errors);
   syncModesByPage.set(page, []);
-  page.on('request', request => {
+  page.on('request', (request) => {
     if (!request.url().includes('/synctex')) return;
-    try { syncModesByPage.get(page)?.push(String(request.postDataJSON().mode)); } catch { /* malformed request is reported by the assertion */ }
+    try {
+      syncModesByPage.get(page)?.push(String(request.postDataJSON().mode));
+    } catch {
+      /* malformed request is reported by the assertion */
+    }
   });
   if (!process.env.E2E_BASE_URL) {
-    await page.route('**/api/projects/*/synctex', async route => {
+    await page.route('**/api/projects/*/synctex', async (route) => {
       const mode = route.request().postDataJSON().mode as string;
-      await route.fulfill({ json: mode === 'forward' ? { found: true, page: 1, x: 110, y: 125 } : { found: true, file: 'main.tex', line: 3, column: 1 } });
+      await route.fulfill({
+        json:
+          mode === 'forward'
+            ? { found: true, page: 1, x: 110, y: 125 }
+            : { found: true, file: 'main.tex', line: 3, column: 1 },
+      });
     });
   }
-  page.on('console', message => { if (message.type() === 'error') errors.push(`${message.text()} (${message.location().url}:${message.location().lineNumber})`); });
-  page.on('pageerror', error => errors.push(error.stack ?? error.message));
+  page.on('console', (message) => {
+    if (message.type() === 'error')
+      errors.push(`${message.text()} (${message.location().url}:${message.location().lineNumber})`);
+  });
+  page.on('pageerror', (error) => errors.push(error.stack ?? error.message));
 });
 
 test.afterEach(async ({ page, request }) => {
-  if (process.env.E2E_BASE_URL) { await page.waitForTimeout(800); await cleanExternalProjects(page, request); }
+  if (process.env.E2E_BASE_URL) {
+    await page.waitForTimeout(800);
+    await cleanExternalProjects(page, request);
+  }
   expect(errorsByPage.get(page)).toEqual([]);
 });
 
@@ -66,10 +93,13 @@ async function openTemplate(page: Page, id: string) {
 }
 
 async function appendToEditor(page: Page, text: string) {
-  const readSource = () => page.evaluate(() => {
-    const projects = JSON.parse(localStorage.getItem('paperdesk-projects') ?? '[]') as { files: { name: string; content?: string }[] }[];
-    return String(projects[0]?.files.find(file => file.name === 'main.tex')?.content ?? '');
-  });
+  const readSource = () =>
+    page.evaluate(() => {
+      const projects = JSON.parse(localStorage.getItem('paperdesk-projects') ?? '[]') as {
+        files: { name: string; content?: string }[];
+      }[];
+      return String(projects[0]?.files.find((file) => file.name === 'main.tex')?.content ?? '');
+    });
   await expect.poll(readSource).toContain('\\documentclass');
   const source = await readSource();
   const editor = page.getByRole('textbox', { name: 'Editor content' });
@@ -83,8 +113,14 @@ async function compileAndViewPdf(page: Page) {
   if (test.info().project.name.startsWith('phone')) {
     await page.getByRole('button', { name: 'Menu' }).click();
     await page.getByRole('menuitem', { name: 'Compile' }).click();
-  } else await page.getByRole('button', { name: /^Recompile/ }).first().click();
-  await expect(page.getByRole('region', { name: 'PDF preview' }).getByRole('status')).toContainText('Compiled in', { timeout: 120_000 });
+  } else
+    await page
+      .getByRole('button', { name: /^Recompile/ })
+      .first()
+      .click();
+  await expect(page.getByRole('region', { name: 'PDF preview' }).getByRole('status')).toContainText('Compiled in', {
+    timeout: 120_000,
+  });
   await expect(page.locator('.pdf-scroll canvas:not(.is-loading)').first()).toBeVisible({ timeout: 60_000 });
   await expect(page.getByRole('toolbar', { name: 'PDF controls' })).toBeVisible();
 }
@@ -93,7 +129,11 @@ for (const template of templates) {
   test(`${template} starter can be edited, compiled and rendered`, async ({ page }) => {
     await openTemplate(page, template);
     if (template === 'springer-journal') {
-      const files = await page.evaluate(() => (JSON.parse(localStorage.getItem('paperdesk-projects') ?? '[]')[0]?.files ?? []).map((file: { name: string }) => file.name));
+      const files = await page.evaluate(() =>
+        (JSON.parse(localStorage.getItem('paperdesk-projects') ?? '[]')[0]?.files ?? []).map(
+          (file: { name: string }) => file.name,
+        ),
+      );
       expect(files).toEqual(expect.arrayContaining(['sn-jnl.cls', 'sn-mathphys-num.bst', 'references.bib']));
     }
     await appendToEditor(page, '\n% Browser compile check\n');
@@ -108,7 +148,7 @@ for (const template of templates) {
       await page.locator('.pdf-text-layer span').first().click({ timeout: 3000 });
       expect(syncModesByPage.get(page)).toContain('inverse');
     }).toPass({ timeout: 30_000 });
-    const previousInverseJumps = syncModesByPage.get(page)?.filter(mode => mode === 'inverse').length ?? 0;
+    const previousInverseJumps = syncModesByPage.get(page)?.filter((mode) => mode === 'inverse').length ?? 0;
     if (test.info().project.name.startsWith('phone')) await page.getByRole('radio', { name: 'PDF' }).click();
     const selectableText = page.locator('.pdf-text-layer span').first();
     const bounds = await selectableText.boundingBox();
@@ -117,7 +157,9 @@ for (const template of templates) {
     await page.mouse.down();
     await page.mouse.move(bounds.x + Math.max(3, bounds.width - 2), bounds.y + bounds.height / 2, { steps: 4 });
     await page.mouse.up();
-    await expect.poll(() => syncModesByPage.get(page)?.filter(mode => mode === 'inverse').length ?? 0).toBeGreaterThan(previousInverseJumps);
+    await expect
+      .poll(() => syncModesByPage.get(page)?.filter((mode) => mode === 'inverse').length ?? 0)
+      .toBeGreaterThan(previousInverseJumps);
     // Locally the SyncTeX answer is mocked (line 3); on a live site it is the real line of the selected text.
     if (!process.env.E2E_BASE_URL) await expect(page.locator('.status-bar')).toContainText('Ln 3');
     else await expect(page.locator('.status-bar')).toContainText(/Ln \d+/);
@@ -127,9 +169,23 @@ for (const template of templates) {
 
 test('template project supports ZIP import/export and PDF download', async ({ page }) => {
   await openTemplate(page, 'article');
-  const archive = zipOneFile('main.tex', '\\documentclass{article}\n\\begin{document}\n\\section{Imported}\nA complete project imported from ZIP.\n\\end{document}\n');
-  await page.locator('input[type="file"]').first().setInputFiles({ name: 'browser-check.zip', mimeType: 'application/zip', buffer: archive });
-  await expect.poll(async () => page.evaluate(() => JSON.parse(localStorage.getItem('paperdesk-projects') ?? '[]')[0]?.files?.some((f: { name: string }) => f.name === 'main.tex' && f.content.includes('complete project imported from ZIP')))).toBe(true);
+  const archive = zipOneFile(
+    'main.tex',
+    '\\documentclass{article}\n\\begin{document}\n\\section{Imported}\nA complete project imported from ZIP.\n\\end{document}\n',
+  );
+  await page
+    .locator('input[type="file"]')
+    .first()
+    .setInputFiles({ name: 'browser-check.zip', mimeType: 'application/zip', buffer: archive });
+  await expect
+    .poll(async () =>
+      page.evaluate(() =>
+        JSON.parse(localStorage.getItem('paperdesk-projects') ?? '[]')[0]?.files?.some(
+          (f: { name: string }) => f.name === 'main.tex' && f.content.includes('complete project imported from ZIP'),
+        ),
+      ),
+    )
+    .toBe(true);
 
   await compileAndViewPdf(page);
   const pdfDownload = page.waitForEvent('download');
@@ -176,8 +232,15 @@ test('LaTeX completion suggests commands and find and replace updates the source
   await page.keyboard.press('Control+Space');
   const suggestions = page.getByRole('listbox', { name: 'Suggest' });
   await expect(suggestions.getByRole('option', { name: /section/ }).first()).toBeVisible();
-  await suggestions.getByRole('option', { name: /section/ }).first().click();
-  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('paperdesk-projects') ?? '[]')[0]?.files?.[0]?.content)).toContain('\\section{}');
+  await suggestions
+    .getByRole('option', { name: /section/ })
+    .first()
+    .click();
+  await expect
+    .poll(() =>
+      page.evaluate(() => JSON.parse(localStorage.getItem('paperdesk-projects') ?? '[]')[0]?.files?.[0]?.content),
+    )
+    .toContain('\\section{}');
 
   await openMenuItem(page, 'Edit', 'Find and replace');
   const widget = page.locator('.find-widget');
@@ -185,7 +248,11 @@ test('LaTeX completion suggests commands and find and replace updates the source
   await widget.getByRole('textbox').nth(0).fill('Sofia Lindqvist');
   await widget.getByRole('textbox').nth(1).fill('Browser Test Author');
   await widget.getByRole('button', { name: /Replace All/ }).click();
-  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('paperdesk-projects') ?? '[]')[0]?.files?.[0]?.content)).toContain('Browser Test Author');
+  await expect
+    .poll(() =>
+      page.evaluate(() => JSON.parse(localStorage.getItem('paperdesk-projects') ?? '[]')[0]?.files?.[0]?.content),
+    )
+    .toContain('Browser Test Author');
 });
 
 async function openMenuItem(page: Page, menu: string, item: string) {
@@ -205,16 +272,29 @@ function zipOneFile(name: string, body: string): Buffer {
   }
   crc = (crc ^ 0xffffffff) >>> 0;
   const local = Buffer.alloc(30 + filename.length + contents.length);
-  local.writeUInt32LE(0x04034b50, 0); local.writeUInt16LE(20, 4); local.writeUInt32LE(crc, 14);
-  local.writeUInt32LE(contents.length, 18); local.writeUInt32LE(contents.length, 22); local.writeUInt16LE(filename.length, 26);
-  filename.copy(local, 30); contents.copy(local, 30 + filename.length);
+  local.writeUInt32LE(0x04034b50, 0);
+  local.writeUInt16LE(20, 4);
+  local.writeUInt32LE(crc, 14);
+  local.writeUInt32LE(contents.length, 18);
+  local.writeUInt32LE(contents.length, 22);
+  local.writeUInt16LE(filename.length, 26);
+  filename.copy(local, 30);
+  contents.copy(local, 30 + filename.length);
   const central = Buffer.alloc(46 + filename.length);
-  central.writeUInt32LE(0x02014b50, 0); central.writeUInt16LE(20, 4); central.writeUInt16LE(20, 6); central.writeUInt32LE(crc, 16);
-  central.writeUInt32LE(contents.length, 20); central.writeUInt32LE(contents.length, 24); central.writeUInt16LE(filename.length, 28);
+  central.writeUInt32LE(0x02014b50, 0);
+  central.writeUInt16LE(20, 4);
+  central.writeUInt16LE(20, 6);
+  central.writeUInt32LE(crc, 16);
+  central.writeUInt32LE(contents.length, 20);
+  central.writeUInt32LE(contents.length, 24);
+  central.writeUInt16LE(filename.length, 28);
   filename.copy(central, 46);
   const end = Buffer.alloc(22);
-  end.writeUInt32LE(0x06054b50, 0); end.writeUInt16LE(1, 8); end.writeUInt16LE(1, 10);
-  end.writeUInt32LE(central.length, 12); end.writeUInt32LE(local.length, 16);
+  end.writeUInt32LE(0x06054b50, 0);
+  end.writeUInt16LE(1, 8);
+  end.writeUInt16LE(1, 10);
+  end.writeUInt32LE(central.length, 12);
+  end.writeUInt32LE(local.length, 16);
   return Buffer.concat([local, central, end]);
 }
 

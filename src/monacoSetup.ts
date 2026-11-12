@@ -1,10 +1,19 @@
 import type { Monaco } from '@monaco-editor/react';
-import { collectCitations, collectLabels, COMMANDS, completionContext, ENVIRONMENTS, projectPaths } from './lib/completion';
+import {
+  collectCitations,
+  collectLabels,
+  COMMANDS,
+  completionContext,
+  ENVIRONMENTS,
+  projectPaths,
+} from './lib/completion';
 import type { ProjectFile } from './lib/project';
 
 /** The open project's files, for label, citation and path suggestions. Set by the editor. */
 let projectFiles: () => ProjectFile[] = () => [];
-export const setCompletionFiles = (get: () => ProjectFile[]) => { projectFiles = get; };
+export const setCompletionFiles = (get: () => ProjectFile[]) => {
+  projectFiles = get;
+};
 
 let registered = false;
 
@@ -18,7 +27,7 @@ export function setupMonaco(monaco: Monaco) {
     tokenizer: {
       root: [
         [/%.*$/, 'comment'],
-        [/(\\(?:begin|end))(\s*)(\{)([^}]*)(\})/,['keyword', '', 'delimiter.curly', 'type', 'delimiter.curly']],
+        [/(\\(?:begin|end))(\s*)(\{)([^}]*)(\})/, ['keyword', '', 'delimiter.curly', 'type', 'delimiter.curly']],
         [/\\(section|subsection|subsubsection|chapter|part|paragraph|title|author|date)\*?/, 'keyword.heading'],
         [/\\[a-zA-Z@]+\*?/, 'keyword'],
         [/\\./, 'keyword'],
@@ -29,43 +38,109 @@ export function setupMonaco(monaco: Monaco) {
         [/[[\]]/, 'delimiter.square'],
         [/[&~]/, 'operator'],
       ],
-      inlineMath: [[/\$/, { token: 'string.math', next: '@pop' }], [/\\[a-zA-Z]+/, 'string.math.command'], [/[^$\\]+/, 'string.math'], [/./, 'string.math']],
-      displayMath: [[/\$\$/, { token: 'string.math', next: '@pop' }], [/\\[a-zA-Z]+/, 'string.math.command'], [/[^$\\]+/, 'string.math'], [/./, 'string.math']],
-      bracketMath: [[/\\\]/, { token: 'string.math', next: '@pop' }], [/\\[a-zA-Z]+/, 'string.math.command'], [/[^\\]+/, 'string.math'], [/./, 'string.math']],
+      inlineMath: [
+        [/\$/, { token: 'string.math', next: '@pop' }],
+        [/\\[a-zA-Z]+/, 'string.math.command'],
+        [/[^$\\]+/, 'string.math'],
+        [/./, 'string.math'],
+      ],
+      displayMath: [
+        [/\$\$/, { token: 'string.math', next: '@pop' }],
+        [/\\[a-zA-Z]+/, 'string.math.command'],
+        [/[^$\\]+/, 'string.math'],
+        [/./, 'string.math'],
+      ],
+      bracketMath: [
+        [/\\\]/, { token: 'string.math', next: '@pop' }],
+        [/\\[a-zA-Z]+/, 'string.math.command'],
+        [/[^\\]+/, 'string.math'],
+        [/./, 'string.math'],
+      ],
     },
   });
   monaco.languages.setLanguageConfiguration('latex', {
     comments: { lineComment: '%' },
-    brackets: [['{', '}'], ['[', ']'], ['(', ')']],
-    autoClosingPairs: [{ open: '{', close: '}' }, { open: '[', close: ']' }, { open: '(', close: ')' }, { open: '$', close: '$' }],
-    surroundingPairs: [{ open: '{', close: '}' }, { open: '[', close: ']' }, { open: '$', close: '$' }],
+    brackets: [
+      ['{', '}'],
+      ['[', ']'],
+      ['(', ')'],
+    ],
+    autoClosingPairs: [
+      { open: '{', close: '}' },
+      { open: '[', close: ']' },
+      { open: '(', close: ')' },
+      { open: '$', close: '$' },
+    ],
+    surroundingPairs: [
+      { open: '{', close: '}' },
+      { open: '[', close: ']' },
+      { open: '$', close: '$' },
+    ],
   });
   monaco.languages.registerCompletionItemProvider('latex', {
     triggerCharacters: ['\\', '{', ','],
     provideCompletionItems(model, position) {
       const line = model.getLineContent(position.lineNumber);
-      const before = line.slice(0, position.column - 1), after = line.slice(position.column - 1);
+      const before = line.slice(0, position.column - 1),
+        after = line.slice(position.column - 1);
       const ctx = completionContext(before);
       if (!ctx) return { suggestions: [] };
-      const K = monaco.languages.CompletionItemKind, snippet = monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet;
+      const K = monaco.languages.CompletionItemKind,
+        snippet = monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet;
       const start = position.column - ctx.partial.length;
-      const range = (from = start, extra = 0) => new monaco.Range(position.lineNumber, from, position.lineNumber, position.column + extra);
+      const range = (from = start, extra = 0) =>
+        new monaco.Range(position.lineNumber, from, position.lineNumber, position.column + extra);
       const files = projectFiles();
       if (ctx.kind === 'command') {
-        return { suggestions: COMMANDS.map(([name, body, detail]) => ({ label: `\\${name}`, filterText: `\\${name}`, kind: K.Function, detail, insertText: body, insertTextRules: snippet, range: range(start - 1) })) };
+        return {
+          suggestions: COMMANDS.map(([name, body, detail]) => ({
+            label: `\\${name}`,
+            filterText: `\\${name}`,
+            kind: K.Function,
+            detail,
+            insertText: body,
+            insertTextRules: snippet,
+            range: range(start - 1),
+          })),
+        };
       }
       if (ctx.kind === 'env') {
         // Typing "{" auto-closes it, so replace that "}" too; \begin also gets its matching \end.
-        const closes = after.startsWith('}') ? 1 : 0, opening = /\\begin\{[^}]*$/.test(before);
-        return { suggestions: ENVIRONMENTS.map(([name, body]) => ({ label: name, kind: K.Struct, detail: opening ? `\\begin{${name}} … \\end{${name}}` : 'Environment',
-          insertText: opening ? `${name}}\n${body}\n\\end{${name}}` : `${name}}`, insertTextRules: snippet, range: range(start, closes) })) };
+        const closes = after.startsWith('}') ? 1 : 0,
+          opening = /\\begin\{[^}]*$/.test(before);
+        return {
+          suggestions: ENVIRONMENTS.map(([name, body]) => ({
+            label: name,
+            kind: K.Struct,
+            detail: opening ? `\\begin{${name}} … \\end{${name}}` : 'Environment',
+            insertText: opening ? `${name}}\n${body}\n\\end{${name}}` : `${name}}`,
+            insertTextRules: snippet,
+            range: range(start, closes),
+          })),
+        };
       }
       // Picking a name also steps over the closing brace, so typing continues after the command.
       const close = after.startsWith('}') ? 1 : 0;
       const name = (value: string) => ({ insertText: `${value}}`, range: range(start, close) });
-      if (ctx.kind === 'ref') return { suggestions: collectLabels(files).map(l => ({ label: l.label, kind: K.Reference, detail: `${l.file}:${l.line}`, ...name(l.label) })) };
-      if (ctx.kind === 'cite') return { suggestions: collectCitations(files).map(c => ({ label: c.key, kind: K.Value, detail: c.detail, ...name(c.key) })) };
-      return { suggestions: projectPaths(files, ctx.kind).map(p => ({ label: p, kind: K.File, ...name(p) })) };
+      if (ctx.kind === 'ref')
+        return {
+          suggestions: collectLabels(files).map((l) => ({
+            label: l.label,
+            kind: K.Reference,
+            detail: `${l.file}:${l.line}`,
+            ...name(l.label),
+          })),
+        };
+      if (ctx.kind === 'cite')
+        return {
+          suggestions: collectCitations(files).map((c) => ({
+            label: c.key,
+            kind: K.Value,
+            detail: c.detail,
+            ...name(c.key),
+          })),
+        };
+      return { suggestions: projectPaths(files, ctx.kind).map((p) => ({ label: p, kind: K.File, ...name(p) })) };
     },
   });
 

@@ -7,8 +7,12 @@ export type FilePatch = { files: (PatchFile & { base?: string | null })[]; delet
  * version no longer matches the one it was edited from (`base`; null means “was new”) is a conflict, so
  * two people editing different files never overwrite each other. Returns the new list, or the conflicting names.
  */
-export function applyFilePatch(stored: PatchFile[], patch: FilePatch, hash: (content: string, encoding?: 'base64') => string) {
-  const byName = new Map(stored.map(f => [f.name, f]));
+export function applyFilePatch(
+  stored: PatchFile[],
+  patch: FilePatch,
+  hash: (content: string, encoding?: 'base64') => string,
+) {
+  const byName = new Map(stored.map((f) => [f.name, f]));
   const conflicts: string[] = [];
   for (const file of patch.files) {
     if (file.base === undefined) continue;
@@ -19,6 +23,7 @@ export function applyFilePatch(stored: PatchFile[], patch: FilePatch, hash: (con
   }
   if (conflicts.length) return { conflicts, files: stored };
   for (const name of patch.deleted ?? []) byName.delete(name);
-  for (const { name, content, encoding } of patch.files) byName.set(name, encoding ? { name, content, encoding } : { name, content });
+  for (const { name, content, encoding } of patch.files)
+    byName.set(name, encoding ? { name, content, encoding } : { name, content });
   return { conflicts, files: [...byName.values()] };
 }

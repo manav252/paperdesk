@@ -13,14 +13,19 @@ const errorsByPage = new WeakMap<Page, string[]>();
 
 async function open(page: Page, mainSource = main) {
   const project = {
-    id: `tools-${Date.now().toString(36)}`, name: 'Tools check', modified: Date.now(), mainFile: 'main.tex',
+    id: `tools-${Date.now().toString(36)}`,
+    name: 'Tools check',
+    modified: Date.now(),
+    mainFile: 'main.tex',
     files: [
       { name: 'main.tex', content: mainSource },
-      { name: 'chapters/', content: '' }, { name: 'chapters/results.tex', content: results },
-      { name: 'figures/', content: '' }, { name: 'figures/sample.png', content: png, encoding: 'base64' },
+      { name: 'chapters/', content: '' },
+      { name: 'chapters/results.tex', content: results },
+      { name: 'figures/', content: '' },
+      { name: 'figures/sample.png', content: png, encoding: 'base64' },
     ],
   };
-  await page.addInitScript(value => {
+  await page.addInitScript((value) => {
     if (sessionStorage.getItem('seeded')) return;
     sessionStorage.setItem('seeded', '1');
     localStorage.setItem('paperdesk-projects', JSON.stringify([value]));
@@ -32,21 +37,31 @@ async function open(page: Page, mainSource = main) {
   await expect(page.locator('.monaco-editor')).toBeVisible();
 }
 
-const editorText = (page: Page) => page.evaluate(() => JSON.parse(localStorage.getItem('paperdesk-projects')!)[0].files[0].content as string);
+const editorText = (page: Page) =>
+  page.evaluate(() => JSON.parse(localStorage.getItem('paperdesk-projects')!)[0].files[0].content as string);
 
 test.beforeEach(async ({ page }, info) => {
   test.skip(info.project.name !== 'desktop-light', 'Real API features run once; other profiles cover layout.');
   test.setTimeout(240_000);
-  await page.route('**/api/projects', route => route.request().method() === 'GET' ? route.fulfill({ json: [] }) : route.continue());
-  await page.route(/^https:\/\/fonts\.(googleapis|gstatic)\.com\//, route => route.fulfill({ status: 200, contentType: 'text/css', body: '' }));
+  await page.route('**/api/projects', (route) =>
+    route.request().method() === 'GET' ? route.fulfill({ json: [] }) : route.continue(),
+  );
+  await page.route(/^https:\/\/fonts\.(googleapis|gstatic)\.com\//, (route) =>
+    route.fulfill({ status: 200, contentType: 'text/css', body: '' }),
+  );
   const errors: string[] = [];
   errorsByPage.set(page, errors);
-  page.on('console', m => { if (m.type() === 'error') errors.push(m.text()); });
-  page.on('pageerror', e => errors.push(e.message));
+  page.on('console', (m) => {
+    if (m.type() === 'error') errors.push(m.text());
+  });
+  page.on('pageerror', (e) => errors.push(e.message));
 });
 
 test.afterEach(async ({ page, request }) => {
-  if (process.env.E2E_BASE_URL) { await page.waitForTimeout(800); await cleanExternalProjects(page, request); }
+  if (process.env.E2E_BASE_URL) {
+    await page.waitForTimeout(800);
+    await cleanExternalProjects(page, request);
+  }
   expect(errorsByPage.get(page) ?? []).toEqual([]);
 });
 
@@ -79,7 +94,10 @@ test('the symbol palette inserts commands at the cursor and can be searched', as
 test('Vim and Emacs key bindings switch on and off without reloading the editor', async ({ page }) => {
   await open(page, '\\documentclass{article}\n\\begin{document}\nHello world\n\\end{document}\n');
   const settings = async (value: string) => {
-    await page.getByRole('button', { name: 'Help and assistant' }).click().catch(() => undefined);
+    await page
+      .getByRole('button', { name: 'Help and assistant' })
+      .click()
+      .catch(() => undefined);
     await page.locator('.editor-menus .text-menu').filter({ hasText: 'Help' }).click();
     await page.getByRole('menuitem', { name: 'Project settings' }).click();
     await page.getByRole('combobox', { name: 'Key bindings' }).selectOption(value);
@@ -117,7 +135,10 @@ test('Vim and Emacs key bindings switch on and off without reloading the editor'
 });
 
 test('spell check marks prose only and offers suggestions on right-click', async ({ page }) => {
-  await open(page, '\\documentclass{article}\n\\begin{document}\nThis sentense cites \\cite{knwth} and $\\alpah$.\nA Paperdeskish word.\n\\end{document}\n');
+  await open(
+    page,
+    '\\documentclass{article}\n\\begin{document}\nThis sentense cites \\cite{knwth} and $\\alpah$.\nA Paperdeskish word.\n\\end{document}\n',
+  );
   const squiggles = page.locator('.monaco-editor .squiggly-warning');
   await expect(squiggles).toHaveCount(2, { timeout: 30_000 });
 
@@ -132,19 +153,29 @@ test('spell check marks prose only and offers suggestions on right-click', async
   await expect(squiggles).toHaveCount(1);
 
   await clickSquiggle(0);
-  await page.getByRole('menu', { name: 'Spelling suggestions for Paperdeskish' }).getByRole('menuitem', { name: /Add .Paperdeskish. to dictionary/ }).click();
+  await page
+    .getByRole('menu', { name: 'Spelling suggestions for Paperdeskish' })
+    .getByRole('menuitem', { name: /Add .Paperdeskish. to dictionary/ })
+    .click();
   await expect(squiggles).toHaveCount(0);
   expect(await page.evaluate(() => localStorage.getItem('paperdesk-dictionary'))).toContain('Paperdeskish');
 });
 
 test('PDF search finds text across pages with next and previous', async ({ page }) => {
   await open(page);
-  const compiled = page.waitForResponse(r => /\/compile$/.test(new URL(r.url()).pathname) && r.status() === 200, { timeout: 180_000 });
-  await page.getByRole('button', { name: /Recompile/ }).first().click();
+  const compiled = page.waitForResponse((r) => /\/compile$/.test(new URL(r.url()).pathname) && r.status() === 200, {
+    timeout: 180_000,
+  });
+  await page
+    .getByRole('button', { name: /Recompile/ })
+    .first()
+    .click();
   await compiled;
   await expect(page.locator('canvas[aria-label="PDF page 4"]')).toBeAttached();
   await page.getByRole('button', { name: 'Search the PDF' }).click();
-  const box = page.getByRole('searchbox', { name: 'Search the PDF' }).or(page.getByRole('textbox', { name: 'Search the PDF' }));
+  const box = page
+    .getByRole('searchbox', { name: 'Search the PDF' })
+    .or(page.getByRole('textbox', { name: 'Search the PDF' }));
   await box.fill('marker sentence');
   const count = page.locator('.pdf-search-count');
   await expect(count).toHaveText('1 of 4');
@@ -154,7 +185,13 @@ test('PDF search finds text across pages with next and previous', async ({ page 
   await page.getByRole('button', { name: 'Next match' }).click();
   await page.getByRole('button', { name: 'Next match' }).click();
   await expect(count).toHaveText('4 of 4');
-  await expect(page.locator('[aria-label="Selectable text on PDF page 3"] .pdf-search-hit.current, [aria-label="Selectable text on PDF page 4"] .pdf-search-hit.current').first()).toBeInViewport();
+  await expect(
+    page
+      .locator(
+        '[aria-label="Selectable text on PDF page 3"] .pdf-search-hit.current, [aria-label="Selectable text on PDF page 4"] .pdf-search-hit.current',
+      )
+      .first(),
+  ).toBeInViewport();
   await box.press('Shift+Enter');
   await expect(count).toHaveText('3 of 4');
   await box.fill('no such phrase here');

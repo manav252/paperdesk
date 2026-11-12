@@ -11,8 +11,13 @@ async function setup() {
   const auth = createAuth({ url: URL_, jwks: JSON.stringify({ keys: [jwk] }) });
   const sign = (claims: Record<string, unknown> = {}, { issuer = `${URL_}/auth/v1`, expires = '1h' } = {}) =>
     new SignJWT({ role: 'authenticated', email: 'ada@example.com', ...claims })
-      .setProtectedHeader({ alg: 'ES256', kid: 'test-key' }).setSubject(userId).setIssuer(issuer).setAudience('authenticated')
-      .setIssuedAt().setExpirationTime(expires).sign(privateKey);
+      .setProtectedHeader({ alg: 'ES256', kid: 'test-key' })
+      .setSubject(userId)
+      .setIssuer(issuer)
+      .setAudience('authenticated')
+      .setIssuedAt()
+      .setExpirationTime(expires)
+      .sign(privateKey);
   return { auth, sign };
 }
 

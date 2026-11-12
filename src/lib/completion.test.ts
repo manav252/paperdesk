@@ -2,9 +2,17 @@ import { describe, expect, it } from 'vitest';
 import { collectCitations, collectLabels, completionContext, projectPaths } from './completion';
 
 const files = [
-  { name: 'main.tex', content: '\\section{A}\\label{sec:intro}\n% \\label{commented}\n\\begin{equation}\\label{eq:euler}x\\end{equation}\n\\bibitem{knuth} Knuth, The TeXbook' },
+  {
+    name: 'main.tex',
+    content:
+      '\\section{A}\\label{sec:intro}\n% \\label{commented}\n\\begin{equation}\\label{eq:euler}x\\end{equation}\n\\bibitem{knuth} Knuth, The TeXbook',
+  },
   { name: 'chapters/two.tex', content: '\\label{fig:plot}' },
-  { name: 'refs.bib', content: '@article{shannon1948,\n  title = {A Mathematical Theory of Communication},\n}\n@book{lamport94, title="LaTeX"}\n@string{x = "y"}' },
+  {
+    name: 'refs.bib',
+    content:
+      '@article{shannon1948,\n  title = {A Mathematical Theory of Communication},\n}\n@book{lamport94, title="LaTeX"}\n@string{x = "y"}',
+  },
   { name: 'figures/', content: '' },
   { name: 'figures/plot.png', content: 'AA==', encoding: 'base64' as const },
   { name: 'notes.txt', content: '' },

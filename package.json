@@ -21,6 +21,8 @@
     "compiler:build": "docker build -t paperdesk-texlive:latest -f Dockerfile.compiler .",
     "build": "tsc -b && vite build",
     "preview": "vite preview --host 0.0.0.0",
+    "format": "prettier --write \"{src,server,scripts,test}/**/*.{ts,tsx,mjs,css}\" \"*.{ts,js}\"",
+    "format:check": "prettier --check \"{src,server,scripts,test}/**/*.{ts,tsx,mjs,css}\" \"*.{ts,js}\"",
     "lint": "eslint . --max-warnings=0",
     "typecheck": "tsc -b",
     "test": "vitest run",
@@ -29,7 +31,7 @@
     "test:templates": "node scripts/compile-fixtures.mjs templates",
     "templates:build": "node scripts/build-templates.mjs",
     "test:compile:api": "node scripts/test-api-image.mjs",
-    "check": "npm run lint && npm run typecheck && npm run test && npm run build && npm run test:e2e",
+    "check": "npm run format:check && npm run lint && npm run typecheck && npm run test && npm run build && npm run test:e2e",
     "test:e2e": "node scripts/run-e2e.mjs"
   },
   "dependencies": {
@@ -77,6 +79,7 @@
     "eslint-plugin-react-hooks": "^5.2.0",
     "globals": "^15.15.0",
     "postcss": "^8.4.49",
+    "prettier": "3.10.1",
     "tailwindcss": "^3.4.16",
     "typescript": "~5.6.2",
     "typescript-eslint": "^8.72.1",

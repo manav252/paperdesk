@@ -7,7 +7,7 @@ const stubStorage = (value: string | null) =>
 describe('readThemePref', () => {
   afterEach(() => vi.unstubAllGlobals());
 
-  it.each(['light', 'dark', 'auto'] as const)('returns the saved "%s" choice', v => {
+  it.each(['light', 'dark', 'auto'] as const)('returns the saved "%s" choice', (v) => {
     stubStorage(v);
     expect(readThemePref()).toBe(v);
   });
@@ -20,7 +20,11 @@ describe('readThemePref', () => {
   });
 
   it('falls back to auto when storage throws', () => {
-    vi.stubGlobal('localStorage', { getItem: () => { throw new Error('blocked'); } });
+    vi.stubGlobal('localStorage', {
+      getItem: () => {
+        throw new Error('blocked');
+      },
+    });
     expect(readThemePref()).toBe('auto');
   });
 });

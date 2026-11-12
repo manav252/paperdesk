@@ -4,18 +4,30 @@ import { cleanExternalProjects } from './external-api';
 
 // The broken line is 3: the closing brace of \textbf is missing.
 const source = '\\documentclass{article}\n\\begin{document}\n\\textbf{Hello\n\\end{document}\n';
-const project = () => ({ id: 'p1', name: 'E2E Assistant', modified: Date.now(), mainFile: 'main.tex', files: [{ name: 'main.tex', content: source }] });
+const project = () => ({
+  id: 'p1',
+  name: 'E2E Assistant',
+  modified: Date.now(),
+  mainFile: 'main.tex',
+  files: [{ name: 'main.tex', content: source }],
+});
 
 const browserErrors = new WeakMap<Page, string[]>();
 test.beforeEach(async ({ page, request }) => {
   await isolateProjects(page, request);
   // Tests must not depend on the network: answer Google Fonts requests locally (the system font fallback is used).
-  await page.route(/^https:\/\/fonts\.(googleapis|gstatic)\.com\//, route => route.fulfill({ status: 200, contentType: 'text/css', body: '' }));
+  await page.route(/^https:\/\/fonts\.(googleapis|gstatic)\.com\//, (route) =>
+    route.fulfill({ status: 200, contentType: 'text/css', body: '' }),
+  );
   const errors: string[] = [];
   browserErrors.set(page, errors);
-  page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
-  page.on('pageerror', error => errors.push(error.message));
-  page.on('response', r => { if (r.status() >= 400) errors.push(`${r.status()} ${r.request().method()} ${r.url()}`); });
+  page.on('console', (message) => {
+    if (message.type() === 'error') errors.push(message.text());
+  });
+  page.on('pageerror', (error) => errors.push(error.message));
+  page.on('response', (r) => {
+    if (r.status() >= 400) errors.push(`${r.status()} ${r.request().method()} ${r.url()}`);
+  });
 });
 test.afterEach(async ({ page, request }) => {
   await cleanExternalProjects(page, request);
@@ -23,12 +35,15 @@ test.afterEach(async ({ page, request }) => {
 });
 
 async function open(page: Page, { tourDone = true } = {}) {
-  await page.addInitScript(([value, done]) => {
-    if (sessionStorage.getItem('seeded')) return;
-    sessionStorage.setItem('seeded', '1');
-    localStorage.setItem('paperdesk-projects', JSON.stringify([value]));
-    if (done) localStorage.setItem('paperdesk-tour-done', '1');
-  }, [project(), tourDone] as const);
+  await page.addInitScript(
+    ([value, done]) => {
+      if (sessionStorage.getItem('seeded')) return;
+      sessionStorage.setItem('seeded', '1');
+      localStorage.setItem('paperdesk-projects', JSON.stringify([value]));
+      if (done) localStorage.setItem('paperdesk-tour-done', '1');
+    },
+    [project(), tourDone] as const,
+  );
   await page.goto('/#/paper/p1/');
   await expect(page.locator('.monaco-editor')).toBeVisible();
 }
@@ -36,21 +51,46 @@ async function open(page: Page, { tourDone = true } = {}) {
 /** Fakes a configured assistant, a failed compile and a streamed answer, so no Docker or API key is needed. */
 async function fakeBackend(page: Page, answer: string) {
   const requests: any[] = [];
-  await page.route('**/api/health', route => route.fulfill({ json: { ok: true, docker: true, image: true, compilerImage: 'test', assistant: { configured: true, model: 'test-model' } } }));
-  await page.route('**/api/projects/*/compile', route => route.fulfill({ json: {
-    success: false, durationMs: 400, log: './main.tex:3: Runaway argument?', warnings: [],
-    errors: [{ file: 'main.tex', line: 3, message: 'Runaway argument? — \\textbf{Hello' }],
-  } }));
-  await page.route('**/api/assistant', async route => {
+  await page.route('**/api/health', (route) =>
+    route.fulfill({
+      json: {
+        ok: true,
+        docker: true,
+        image: true,
+        compilerImage: 'test',
+        assistant: { configured: true, model: 'test-model' },
+      },
+    }),
+  );
+  await page.route('**/api/projects/*/compile', (route) =>
+    route.fulfill({
+      json: {
+        success: false,
+        durationMs: 400,
+        log: './main.tex:3: Runaway argument?',
+        warnings: [],
+        errors: [{ file: 'main.tex', line: 3, message: 'Runaway argument? — \\textbf{Hello' }],
+      },
+    }),
+  );
+  await page.route('**/api/assistant', async (route) => {
     requests.push(route.request().postDataJSON());
     const half = Math.floor(answer.length / 2);
-    const body = [{ type: 'text', text: answer.slice(0, half) }, { type: 'text', text: answer.slice(half) }, { type: 'done', stopReason: 'end_turn' }].map(e => JSON.stringify(e)).join('\n') + '\n';
+    const body =
+      [
+        { type: 'text', text: answer.slice(0, half) },
+        { type: 'text', text: answer.slice(half) },
+        { type: 'done', stopReason: 'end_turn' },
+      ]
+        .map((e) => JSON.stringify(e))
+        .join('\n') + '\n';
     await route.fulfill({ status: 200, contentType: 'application/x-ndjson', body });
   });
   return requests;
 }
 
-const editorText = (page: Page) => page.evaluate(() => JSON.parse(localStorage.getItem('paperdesk-projects')!)[0].files[0].content as string);
+const editorText = (page: Page) =>
+  page.evaluate(() => JSON.parse(localStorage.getItem('paperdesk-projects')!)[0].files[0].content as string);
 
 test('first-run tour can be skipped and reopened from Help', async ({ page }) => {
   await open(page, { tourDone: false });
@@ -69,7 +109,13 @@ test('first-run tour can be skipped and reopened from Help', async ({ page }) =>
   if ((page.viewportSize()?.width ?? 1440) <= 640) await page.getByRole('button', { name: 'Menu' }).click();
   else await page.locator('.editor-menus .text-menu').filter({ hasText: 'Help' }).click();
   await page.getByRole('menuitem', { name: 'Take the tour' }).click();
-  for (const title of ['Your project files', 'Write LaTeX here', 'Recompile to see your PDF', 'Your PDF', 'Logs explain problems']) {
+  for (const title of [
+    'Your project files',
+    'Write LaTeX here',
+    'Recompile to see your PDF',
+    'Your PDF',
+    'Logs explain problems',
+  ]) {
     await expect(tour.getByText(title)).toBeVisible();
     await tour.getByRole('button', { name: 'Next' }).click();
   }
@@ -88,13 +134,18 @@ test('panel says when the assistant is not configured', async ({ page }) => {
 });
 
 test('explain an error, review the diff, and apply the fix only on click', async ({ page }) => {
-  const answer = 'The `\\textbf` command on line 3 never closes its brace.\n\n```latex replace-lines 3-3\n\\textbf{Hello}\n```';
+  const answer =
+    'The `\\textbf` command on line 3 never closes its brace.\n\n```latex replace-lines 3-3\n\\textbf{Hello}\n```';
   const requests = await fakeBackend(page, answer);
   await open(page);
   if ((page.viewportSize()?.width ?? 1440) <= 860) {
     await page.getByRole('button', { name: 'Menu' }).click();
     await page.getByRole('menuitem', { name: 'Compile' }).click();
-  } else await page.getByRole('button', { name: /Recompile/ }).first().click();
+  } else
+    await page
+      .getByRole('button', { name: /Recompile/ })
+      .first()
+      .click();
   await page.getByRole('button', { name: 'View log' }).click();
   await page.getByRole('dialog', { name: 'Compile log' }).getByRole('button', { name: 'Explain this error' }).click();
 
@@ -120,7 +171,10 @@ test('explain an error, review the diff, and apply the fix only on click', async
 });
 
 test('quick prompts send visible context and code blocks insert at the cursor', async ({ page }) => {
-  const requests = await fakeBackend(page, 'Here is a table:\n```latex\n\\begin{tabular}{cc}\nA & B\n\\end{tabular}\n```');
+  const requests = await fakeBackend(
+    page,
+    'Here is a table:\n```latex\n\\begin{tabular}{cc}\nA & B\n\\end{tabular}\n```',
+  );
   await open(page);
   await page.getByRole('button', { name: 'Assistant', exact: true }).click();
   const panel = page.getByRole('complementary', { name: 'Assistant' });

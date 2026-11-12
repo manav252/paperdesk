@@ -9,7 +9,7 @@ const FIXTURE = path.resolve('test/fixtures/compile/synctex-sections');
 const main = readFileSync(path.join(FIXTURE, 'main.tex'), 'utf8');
 const results = readFileSync(path.join(FIXTURE, 'chapters/results.tex'), 'utf8');
 const png = readFileSync(path.join(FIXTURE, 'figures/sample.png')).toString('base64');
-const lineOf = (source: string, text: string) => source.split('\n').findIndex(line => line.includes(text)) + 1;
+const lineOf = (source: string, text: string) => source.split('\n').findIndex((line) => line.includes(text)) + 1;
 const errorsByPage = new WeakMap<Page, string[]>();
 const syncInFlight = new WeakMap<Page, { n: number }>();
 
@@ -17,7 +17,10 @@ test.beforeEach(async ({ page }, info) => {
   test.skip(info.project.name !== 'desktop-light', 'Real compiles run once; other profiles cover layout.');
   test.setTimeout(300_000);
   const project = {
-    id: `sync-${Date.now().toString(36)}`, name: 'Sync check', modified: Date.now(), mainFile: 'main.tex',
+    id: `sync-${Date.now().toString(36)}`,
+    name: 'Sync check',
+    modified: Date.now(),
+    mainFile: 'main.tex',
     files: [
       { name: 'main.tex', content: main },
       { name: 'chapters/', content: '' },
@@ -26,7 +29,7 @@ test.beforeEach(async ({ page }, info) => {
       { name: 'figures/sample.png', content: png, encoding: 'base64' },
     ],
   };
-  await page.addInitScript(value => {
+  await page.addInitScript((value) => {
     if (sessionStorage.getItem('seeded')) return;
     sessionStorage.setItem('seeded', '1');
     localStorage.setItem('paperdesk-projects', JSON.stringify([value]));
@@ -35,30 +38,51 @@ test.beforeEach(async ({ page }, info) => {
     localStorage.setItem('paperdesk-compile-prefs', JSON.stringify({ autoCompile: false }));
   }, project);
   // Never read or change the tester's own projects on a live site.
-  await page.route('**/api/projects', route => route.request().method() === 'GET' ? route.fulfill({ json: [] }) : route.continue());
-  await page.route(/^https:\/\/fonts\.(googleapis|gstatic)\.com\//, route => route.fulfill({ status: 200, contentType: 'text/css', body: '' }));
+  await page.route('**/api/projects', (route) =>
+    route.request().method() === 'GET' ? route.fulfill({ json: [] }) : route.continue(),
+  );
+  await page.route(/^https:\/\/fonts\.(googleapis|gstatic)\.com\//, (route) =>
+    route.fulfill({ status: 200, contentType: 'text/css', body: '' }),
+  );
   const errors: string[] = [];
   errorsByPage.set(page, errors);
-  page.on('console', m => { if (m.type() === 'error') errors.push(m.text()); });
-  page.on('pageerror', e => errors.push(e.message));
+  page.on('console', (m) => {
+    if (m.type() === 'error') errors.push(m.text());
+  });
+  page.on('pageerror', (e) => errors.push(e.message));
   const inFlight = { n: 0 };
   syncInFlight.set(page, inFlight);
-  page.on('request', r => { if (r.url().includes('/synctex')) inFlight.n++; });
-  for (const done of ['requestfinished', 'requestfailed'] as const) page.on(done, r => { if (r.url().includes('/synctex')) inFlight.n--; });
-  page.on('response', r => { if (r.url().includes('/synctex') && r.status() >= 400) errors.push(`${r.status()} ${r.url()}`); });
+  page.on('request', (r) => {
+    if (r.url().includes('/synctex')) inFlight.n++;
+  });
+  for (const done of ['requestfinished', 'requestfailed'] as const)
+    page.on(done, (r) => {
+      if (r.url().includes('/synctex')) inFlight.n--;
+    });
+  page.on('response', (r) => {
+    if (r.url().includes('/synctex') && r.status() >= 400) errors.push(`${r.status()} ${r.url()}`);
+  });
   await page.goto(`/#/paper/${project.id}/`);
   await expect(page.locator('.monaco-editor')).toBeVisible();
   await compile(page);
 });
 
 test.afterEach(async ({ page, request }) => {
-  if (process.env.E2E_BASE_URL) { await page.waitForTimeout(800); await cleanExternalProjects(page, request); }
+  if (process.env.E2E_BASE_URL) {
+    await page.waitForTimeout(800);
+    await cleanExternalProjects(page, request);
+  }
   expect(errorsByPage.get(page) ?? []).toEqual([]);
 });
 
 async function compile(page: Page) {
-  const done = page.waitForResponse(r => /\/compile$/.test(new URL(r.url()).pathname) && r.status() === 200, { timeout: 240_000 });
-  await page.getByRole('button', { name: /Recompile/ }).first().click();
+  const done = page.waitForResponse((r) => /\/compile$/.test(new URL(r.url()).pathname) && r.status() === 200, {
+    timeout: 240_000,
+  });
+  await page
+    .getByRole('button', { name: /Recompile/ })
+    .first()
+    .click();
   // The body can be lost if the connection resets after the answer; the PDF appearing below is the real check.
   const body = await (await done).json().catch(() => null);
   if (body) expect(body.success).toBe(true);
@@ -77,7 +101,8 @@ async function setZoom(page: Page, percent: number) {
   throw new Error(`Could not set zoom to ${percent}%`);
 }
 
-const textOn = (page: Page, pdfPage: number, text: RegExp) => page.locator(`[aria-label="Selectable text on PDF page ${pdfPage}"] span`).filter({ hasText: text }).first();
+const textOn = (page: Page, pdfPage: number, text: RegExp) =>
+  page.locator(`[aria-label="Selectable text on PDF page ${pdfPage}"] span`).filter({ hasText: text }).first();
 
 /** Double-clicks PDF text and returns the editor line the jump lands on (and checks the line is highlighted). */
 async function jumpFrom(page: Page, pdfPage: number, text: RegExp) {
@@ -86,13 +111,20 @@ async function jumpFrom(page: Page, pdfPage: number, text: RegExp) {
   // Let any lookup from the previous double-click (one per click and one for the selected word) finish first.
   const idle = () => expect.poll(() => syncInFlight.get(page)!.n, { timeout: 60_000 }).toBe(0);
   await idle();
-  const response = page.waitForResponse(r => r.url().includes('/synctex') && r.request().postDataJSON().mode === 'inverse' && r.request().postDataJSON().page === pdfPage);
+  const response = page.waitForResponse(
+    (r) =>
+      r.url().includes('/synctex') &&
+      r.request().postDataJSON().mode === 'inverse' &&
+      r.request().postDataJSON().page === pdfPage,
+  );
   await target.dblclick();
   const body = await (await response).json();
   await idle();
   expect(body.found).toBe(true);
   await expect(page.locator('.sync-source-highlight').first()).toBeVisible();
-  await expect.poll(async () => Number((await page.locator('.status-bar').textContent())?.match(/Ln (\d+)/)?.[1])).toBe(body.line);
+  await expect
+    .poll(async () => Number((await page.locator('.status-bar').textContent())?.match(/Ln (\d+)/)?.[1]))
+    .toBe(body.line);
   return body as { file: string; line: number };
 }
 
@@ -105,7 +137,8 @@ async function cursorTo(page: Page, line: number) {
   await expect(page.locator('.status-bar')).toContainText(`Ln ${line},`);
 }
 
-const near = (actual: number, expected: number) => expect(Math.abs(actual - expected), `line ${actual}, expected ${expected} ±1`).toBeLessThanOrEqual(1);
+const near = (actual: number, expected: number) =>
+  expect(Math.abs(actual - expected), `line ${actual}, expected ${expected} ±1`).toBeLessThanOrEqual(1);
 
 for (const zoom of [100, 150]) {
   test(`PDF text jumps to its source line at ${zoom}% zoom`, async ({ page }) => {
@@ -119,7 +152,9 @@ for (const zoom of [100, 150]) {
     near(first.line, lineOf(main, 'Opening marker sentence'));
 
     // A filler paragraph on a middle page names itself ("Method continued paragraph 3: …").
-    const label = (await textOn(page, 2, /paragraph \d+:/).textContent())!.match(/([A-Za-z ]+ paragraph \d+):/)![1]!.trim();
+    const label = (await textOn(page, 2, /paragraph \d+:/).textContent())!
+      .match(/([A-Za-z ]+ paragraph \d+):/)![1]!
+      .trim();
     const fromMiddle = await jumpFrom(page, 2, new RegExp(`${label}:`));
     near(fromMiddle.line, lineOf(fromMiddle.file === 'main.tex' ? main : results, `${label}:`));
 
@@ -135,7 +170,9 @@ for (const zoom of [100, 150]) {
 
   test(`the sync button scrolls the PDF to the cursor line at ${zoom}% zoom`, async ({ page }) => {
     await setZoom(page, zoom);
-    await page.locator('.pdf-scroll').evaluate(el => { el.scrollTop = 0; });
+    await page.locator('.pdf-scroll').evaluate((el) => {
+      el.scrollTop = 0;
+    });
     await cursorTo(page, lineOf(main, '\\section{Conclusion}'));
     await page.getByRole('button', { name: 'Sync source to PDF' }).click();
     const highlight = page.locator('.pdf-page').nth(2).getByTestId('sync-highlight');

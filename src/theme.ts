@@ -37,16 +37,25 @@ export function useTheme() {
     const onChange = () => setSystem(mq.matches ? 'dark' : 'light');
     mq.addEventListener('change', onChange);
     // Keep other open tabs in sync with the saved choice.
-    const onStorage = (e: StorageEvent) => { if (e.key === THEME_KEY) setPrefState(readThemePref()); };
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === THEME_KEY) setPrefState(readThemePref());
+    };
     window.addEventListener('storage', onStorage);
-    return () => { mq.removeEventListener('change', onChange); window.removeEventListener('storage', onStorage); };
+    return () => {
+      mq.removeEventListener('change', onChange);
+      window.removeEventListener('storage', onStorage);
+    };
   }, []);
 
   useEffect(() => applyTheme(resolved), [resolved]);
 
   const setPref = (next: ThemePref) => {
     setPrefState(next);
-    try { localStorage.setItem(THEME_KEY, next); } catch { /* storage unavailable: choice lasts for this visit */ }
+    try {
+      localStorage.setItem(THEME_KEY, next);
+    } catch {
+      /* storage unavailable: choice lasts for this visit */
+    }
   };
 
   return { pref, resolved, setPref };

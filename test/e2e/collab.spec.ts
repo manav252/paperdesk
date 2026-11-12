@@ -4,7 +4,8 @@ import { importJWK, SignJWT } from 'jose';
 
 // Real-time co-editing between signed-in people. Needs Postgres and object storage like sharing.spec.ts:
 // run with E2E_CLOUD_STORAGE=1 and DATABASE_URL/R2_* pointing at local test services.
-const SUPABASE = 'http://127.0.0.1:54399', API = 'http://127.0.0.1:3002';
+const SUPABASE = 'http://127.0.0.1:54399',
+  API = 'http://127.0.0.1:3002';
 const people = {
   owner: { id: '11111111-1111-4111-8111-111111111111', email: 'owner@example.com' },
   editor: { id: '22222222-2222-4222-8222-222222222222', email: 'editor@example.com' },
@@ -15,8 +16,14 @@ const source = '\\documentclass{article}\n\\begin{document}\nHello\n\nSecond lin
 
 async function tokenFor(person: Person) {
   const key = await importJWK(JSON.parse(readFileSync('test/fixtures/auth/test-signing-key.json', 'utf8')), 'ES256');
-  return new SignJWT({ role: 'authenticated', email: people[person].email }).setProtectedHeader({ alg: 'ES256', kid: 'paperdesk-test' }).setSubject(people[person].id)
-    .setIssuer(`${SUPABASE}/auth/v1`).setAudience('authenticated').setIssuedAt().setExpirationTime('1h').sign(key);
+  return new SignJWT({ role: 'authenticated', email: people[person].email })
+    .setProtectedHeader({ alg: 'ES256', kid: 'paperdesk-test' })
+    .setSubject(people[person].id)
+    .setIssuer(`${SUPABASE}/auth/v1`)
+    .setAudience('authenticated')
+    .setIssuedAt()
+    .setExpirationTime('1h')
+    .sign(key);
 }
 const api = (request: APIRequestContext, token: string) => {
   const headers = { Authorization: `Bearer ${token}` };
@@ -30,36 +37,75 @@ const api = (request: APIRequestContext, token: string) => {
 };
 async function open(browser: Browser, person: Person, projectId: string) {
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
-  const access_token = await tokenFor(person), page = await context.newPage();
+  const access_token = await tokenFor(person),
+    page = await context.newPage();
   const errors: string[] = [];
-  page.on('pageerror', e => errors.push(e.message));
-  page.on('console', m => { if (m.type() === 'error') errors.push(m.text()); });
-  await page.route(/^https:\/\/fonts\.(googleapis|gstatic)\.com\//, route => route.fulfill({ status: 200, contentType: 'text/css', body: '' }));
-  await page.addInitScript(([session]) => {
-    localStorage.setItem('paperdesk-auth', session as string);
-    localStorage.setItem('paperdesk-tour-done', '1');
-    localStorage.setItem('paperdesk-help-seen', '1');
-    localStorage.setItem('paperdesk-compile-prefs', JSON.stringify({ autoCompile: false }));
-    localStorage.setItem('paperdesk-layout', JSON.stringify({ spellcheck: false }));
-  }, [JSON.stringify({ access_token, refresh_token: 'test', token_type: 'bearer', expires_in: 3600, expires_at: Math.floor(Date.now() / 1000) + 3600, user: { id: people[person].id, aud: 'authenticated', role: 'authenticated', email: people[person].email, app_metadata: {}, user_metadata: {}, created_at: new Date().toISOString() } })]);
+  page.on('pageerror', (e) => errors.push(e.message));
+  page.on('console', (m) => {
+    if (m.type() === 'error') errors.push(m.text());
+  });
+  await page.route(/^https:\/\/fonts\.(googleapis|gstatic)\.com\//, (route) =>
+    route.fulfill({ status: 200, contentType: 'text/css', body: '' }),
+  );
+  await page.addInitScript(
+    ([session]) => {
+      localStorage.setItem('paperdesk-auth', session as string);
+      localStorage.setItem('paperdesk-tour-done', '1');
+      localStorage.setItem('paperdesk-help-seen', '1');
+      localStorage.setItem('paperdesk-compile-prefs', JSON.stringify({ autoCompile: false }));
+      localStorage.setItem('paperdesk-layout', JSON.stringify({ spellcheck: false }));
+    },
+    [
+      JSON.stringify({
+        access_token,
+        refresh_token: 'test',
+        token_type: 'bearer',
+        expires_in: 3600,
+        expires_at: Math.floor(Date.now() / 1000) + 3600,
+        user: {
+          id: people[person].id,
+          aud: 'authenticated',
+          role: 'authenticated',
+          email: people[person].email,
+          app_metadata: {},
+          user_metadata: {},
+          created_at: new Date().toISOString(),
+        },
+      }),
+    ],
+  );
   await page.goto(`/#/paper/${projectId}/`);
   await expect(page.locator('.monaco-editor')).toBeVisible();
   await expect(page.getByTestId('live-badge')).toBeVisible();
   return { page, errors, context };
 }
-const line = (page: import('@playwright/test').Page, text: string | RegExp) => page.locator('.view-line').filter({ hasText: text });
+const line = (page: import('@playwright/test').Page, text: string | RegExp) =>
+  page.locator('.view-line').filter({ hasText: text });
 
-test('two people edit the same file live; a viewer watches; everything is saved', async ({ browser, request }, info) => {
-  test.skip(!process.env.E2E_CLOUD_STORAGE || info.project.name !== 'desktop-light', 'Needs local Postgres and object storage.');
+test('two people edit the same file live; a viewer watches; everything is saved', async ({
+  browser,
+  request,
+}, info) => {
+  test.skip(
+    !process.env.E2E_CLOUD_STORAGE || info.project.name !== 'desktop-light',
+    'Needs local Postgres and object storage.',
+  );
   test.setTimeout(120_000);
-  const owner = api(request, await tokenFor('owner')), id = `collab-${Date.now().toString(36)}`;
-  await owner.put(`/${id}`, { name: 'Live project', mainFile: 'main.tex', files: [{ name: 'main.tex', content: source }] });
+  const owner = api(request, await tokenFor('owner')),
+    id = `collab-${Date.now().toString(36)}`;
+  await owner.put(`/${id}`, {
+    name: 'Live project',
+    mainFile: 'main.tex',
+    files: [{ name: 'main.tex', content: source }],
+  });
   const editLink = (await (await owner.post(`/${id}/invites`, { role: 'editor' })).json()).token;
   const viewLink = (await (await owner.post(`/${id}/invites`, { role: 'viewer' })).json()).token;
   const alias = (await (await api(request, await tokenFor('editor')).accept(editLink)).json()).id as string;
   await api(request, await tokenFor('viewer')).accept(viewLink);
 
-  const a = await open(browser, 'owner', id), b = await open(browser, 'editor', alias), v = await open(browser, 'viewer', alias);
+  const a = await open(browser, 'owner', id),
+    b = await open(browser, 'editor', alias),
+    v = await open(browser, 'viewer', alias);
   await expect(a.page.getByTestId('live-badge')).toContainText('3');
 
   // Each person types on a different line; everyone sees both edits.
@@ -92,11 +138,18 @@ test('two people edit the same file live; a viewer watches; everything is saved'
   await expect(line(a.page, 'tampered')).toHaveCount(0);
 
   // A file added through the API appears for everyone, with live text.
-  await owner.put(`/${id}`, { patch: { files: [{ name: 'extra.tex', content: 'Extra file', base: null }], deleted: [] } });
+  await owner.put(`/${id}`, {
+    patch: { files: [{ name: 'extra.tex', content: 'Extra file', base: null }], deleted: [] },
+  });
   await expect(b.page.getByText('extra.tex').first()).toBeVisible();
 
   // The server saves the live text a few seconds after typing stops, with history by author.
-  await expect.poll(async () => (await (await owner.get(`/${id}`)).json()).files.find((f: { name: string }) => f.name === 'main.tex').content, { timeout: 30_000 })
+  await expect
+    .poll(
+      async () =>
+        (await (await owner.get(`/${id}`)).json()).files.find((f: { name: string }) => f.name === 'main.tex').content,
+      { timeout: 30_000 },
+    )
     .toBe(source.replace('Hello', 'AAA Hello from the owner BBB').replace('Second line', 'Second line by the editor'));
   const authors = (await (await owner.get(`/${id}/history`)).json()).versions.map((x: { author: string }) => x.author);
   expect(authors.some((x: string) => x.includes('editor@example.com'))).toBe(true);
@@ -107,31 +160,55 @@ test('two people edit the same file live; a viewer watches; everything is saved'
 });
 
 /** Pastes a small generated PNG into the focused editor, the way the browser would. */
-const pasteImage = (page: import('@playwright/test').Page, colour: string) => page.evaluate(async fill => {
-  const canvas = document.createElement('canvas');
-  canvas.width = 90; canvas.height = 60;
-  const context = canvas.getContext('2d')!;
-  context.fillStyle = fill; context.fillRect(0, 0, 90, 60);
-  const blob = await new Promise<Blob>(resolve => canvas.toBlob(b => resolve(b!), 'image/png'));
-  const data = new DataTransfer();
-  data.items.add(new File([blob], 'image.png', { type: 'image/png' }));
-  document.querySelector('.monaco-editor textarea, .monaco-editor .native-edit-context')!.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
-}, colour);
+const pasteImage = (page: import('@playwright/test').Page, colour: string) =>
+  page.evaluate(async (fill) => {
+    const canvas = document.createElement('canvas');
+    canvas.width = 90;
+    canvas.height = 60;
+    const context = canvas.getContext('2d')!;
+    context.fillStyle = fill;
+    context.fillRect(0, 0, 90, 60);
+    const blob = await new Promise<Blob>((resolve) => canvas.toBlob((b) => resolve(b!), 'image/png'));
+    const data = new DataTransfer();
+    data.items.add(new File([blob], 'image.png', { type: 'image/png' }));
+    document
+      .querySelector('.monaco-editor textarea, .monaco-editor .native-edit-context')!
+      .dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
+  }, colour);
 
-test('an image pasted by one person appears for the other, as text and as a file', async ({ browser, request }, info) => {
-  test.skip(!process.env.E2E_CLOUD_STORAGE || info.project.name !== 'desktop-light', 'Needs local Postgres and object storage.');
+test('an image pasted by one person appears for the other, as text and as a file', async ({
+  browser,
+  request,
+}, info) => {
+  test.skip(
+    !process.env.E2E_CLOUD_STORAGE || info.project.name !== 'desktop-light',
+    'Needs local Postgres and object storage.',
+  );
   test.setTimeout(120_000);
-  const owner = api(request, await tokenFor('owner')), id = `figs-${Date.now().toString(36)}`;
+  const owner = api(request, await tokenFor('owner')),
+    id = `figs-${Date.now().toString(36)}`;
   const withGraphics = source.replace('\\begin{document}', '\\usepackage{graphicx}\n\\begin{document}');
-  await owner.put(`/${id}`, { name: 'Live figures', mainFile: 'main.tex', files: [{ name: 'main.tex', content: withGraphics }] });
-  const alias = (await (await api(request, await tokenFor('editor')).accept((await (await owner.post(`/${id}/invites`, { role: 'editor' })).json()).token)).json()).id as string;
-  const a = await open(browser, 'owner', id), b = await open(browser, 'editor', alias);
+  await owner.put(`/${id}`, {
+    name: 'Live figures',
+    mainFile: 'main.tex',
+    files: [{ name: 'main.tex', content: withGraphics }],
+  });
+  const alias = (
+    await (
+      await api(request, await tokenFor('editor')).accept(
+        (await (await owner.post(`/${id}/invites`, { role: 'editor' })).json()).token,
+      )
+    ).json()
+  ).id as string;
+  const a = await open(browser, 'owner', id),
+    b = await open(browser, 'editor', alias);
   await expect(a.page.getByTestId('live-badge')).toContainText('2');
   type Stored = { name: string; content: string; encoding?: string };
   const stored = async () => (await (await owner.get(`/${id}`)).json()).files as Stored[];
-  const figures = async () => (await stored()).filter(f => /^figures\/.+\.png$/.test(f.name));
+  const figures = async () => (await stored()).filter((f) => /^figures\/.+\.png$/.test(f.name));
 
-  const treeImages = async (page: import('@playwright/test').Page) => ((await page.locator('.file-tree').innerText()).match(/pasted-\d{8}-\d{6}(-\d)?\.png/g) ?? []).length;
+  const treeImages = async (page: import('@playwright/test').Page) =>
+    ((await page.locator('.file-tree').innerText()).match(/pasted-\d{8}-\d{6}(-\d)?\.png/g) ?? []).length;
   // The owner pastes an image after "Hello": the editor sees the block, the caption being typed, and the file.
   await line(a.page, 'Hello').click();
   await a.page.keyboard.press('End');
@@ -154,7 +231,7 @@ test('an image pasted by one person appears for the other, as text and as a file
   await expect.poll(() => treeImages(b.page)).toBe(2);
   await expect.poll(async () => (await figures()).length, { timeout: 30_000 }).toBe(2);
   // The server saves the live text a few seconds after typing stops.
-  const savedMain = async () => (await stored()).find(f => f.name === 'main.tex')!.content;
+  const savedMain = async () => (await stored()).find((f) => f.name === 'main.tex')!.content;
   await expect.poll(savedMain, { timeout: 30_000 }).toContain('\\caption{From the editor}');
   const main = await savedMain();
   for (const figure of await figures()) {
@@ -164,7 +241,13 @@ test('an image pasted by one person appears for the other, as text and as a file
   }
   expect(main.match(/\\begin\{figure\}/g)).toHaveLength(2);
   // Both people still show the same text.
-  const text = (page: import('@playwright/test').Page) => page.evaluate(() => (window as unknown as { monaco?: { editor: { getModels(): { getValue(): string }[] } } }).monaco?.editor.getModels()[0]?.getValue() ?? null);
+  const text = (page: import('@playwright/test').Page) =>
+    page.evaluate(
+      () =>
+        (window as unknown as { monaco?: { editor: { getModels(): { getValue(): string }[] } } }).monaco?.editor
+          .getModels()[0]
+          ?.getValue() ?? null,
+    );
   expect(await text(a.page)).toBe(await text(b.page));
 
   expect([...a.errors, ...b.errors]).toEqual([]);

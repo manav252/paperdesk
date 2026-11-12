@@ -17,22 +17,34 @@ ctx.onmessage = async (event: MessageEvent<Request>) => {
   const message = event.data;
   if (message.type === 'init') {
     ready = (async () => {
-      const [aff, dic] = await Promise.all([fetch(message.aff).then(r => r.text()), fetch(message.dic).then(r => r.text())]);
+      const [aff, dic] = await Promise.all([
+        fetch(message.aff).then((r) => r.text()),
+        fetch(message.dic).then((r) => r.text()),
+      ]);
       speller = nspell(aff, dic);
       for (const word of message.personal) speller.add(word);
     })();
-    ready.catch(error => ctx.postMessage({ type: 'error', message: String(error) }));
+    ready.catch((error) => ctx.postMessage({ type: 'error', message: String(error) }));
     return;
   }
   await ready;
   if (!speller) return;
-  if (message.type === 'add') { speller.add(message.word); return; }
-  if (message.type === 'suggest') { ctx.postMessage({ type: 'suggest', id: message.id, suggestions: speller.suggest(message.word).slice(0, 6) }); return; }
+  if (message.type === 'add') {
+    speller.add(message.word);
+    return;
+  }
+  if (message.type === 'suggest') {
+    ctx.postMessage({ type: 'suggest', id: message.id, suggestions: speller.suggest(message.word).slice(0, 6) });
+    return;
+  }
   const cache = new Map<string, boolean>();
   const wrong = proseWords(message.text).filter(({ word }) => {
     let ok = cache.get(word);
     // Accept a capitalised form of a known word (sentence starts) and all-caps acronyms.
-    if (ok === undefined) { ok = word === word.toUpperCase() || speller!.correct(word) || speller!.correct(word.toLowerCase()); cache.set(word, ok); }
+    if (ok === undefined) {
+      ok = word === word.toUpperCase() || speller!.correct(word) || speller!.correct(word.toLowerCase());
+      cache.set(word, ok);
+    }
     return !ok;
   });
   ctx.postMessage({ type: 'check', id: message.id, words: wrong });

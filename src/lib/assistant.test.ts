@@ -1,5 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { applyFix, findFix, fixStillApplies, inlineTokens, numberedFile, parseAnswer, readEvents, recentMessages, type StreamEvent } from './assistant';
+import {
+  applyFix,
+  findFix,
+  fixStillApplies,
+  inlineTokens,
+  numberedFile,
+  parseAnswer,
+  readEvents,
+  recentMessages,
+  type StreamEvent,
+} from './assistant';
 
 const doc = '\\documentclass{article}\n\\begin{document}\n\\textbf{Hi\n\\end{document}';
 
@@ -29,7 +39,10 @@ describe('parseAnswer', () => {
   });
 
   it('keeps a code block that is still streaming', () => {
-    expect(parseAnswer('Try:\n```latex\n\\begin{tab')).toEqual([{ type: 'text', text: 'Try:\n' }, { type: 'code', lang: 'latex', code: '\\begin{tab', open: true }]);
+    expect(parseAnswer('Try:\n```latex\n\\begin{tab')).toEqual([
+      { type: 'text', text: 'Try:\n' },
+      { type: 'code', lang: 'latex', code: '\\begin{tab', open: true },
+    ]);
   });
 
   it('recognises replace-lines fix blocks', () => {
@@ -48,7 +61,11 @@ describe('fixes', () => {
   });
 
   it('can replace one line with several', () => {
-    const fix = findFix('```latex replace-lines 1-1\n\\documentclass{article}\n\\usepackage{graphicx}\n```', 'main.tex', doc)!;
+    const fix = findFix(
+      '```latex replace-lines 1-1\n\\documentclass{article}\n\\usepackage{graphicx}\n```',
+      'main.tex',
+      doc,
+    )!;
     expect(applyFix(doc, fix).split('\n')).toHaveLength(5);
   });
 
@@ -67,21 +84,30 @@ describe('fixes', () => {
 
   it('keeps Windows line endings', () => {
     const crlf = doc.replaceAll('\n', '\r\n');
-    expect(applyFix(crlf, findFix(answer, 'main.tex', crlf)!)).toBe('\\documentclass{article}\r\n\\begin{document}\r\n\\textbf{Hi}\r\n\\end{document}');
+    expect(applyFix(crlf, findFix(answer, 'main.tex', crlf)!)).toBe(
+      '\\documentclass{article}\r\n\\begin{document}\r\n\\textbf{Hi}\r\n\\end{document}',
+    );
   });
 });
 
 describe('inlineTokens', () => {
   it('finds inline code and bold text', () => {
     expect(inlineTokens('Add **graphicx** with `\\usepackage{graphicx}`.')).toEqual([
-      { type: 'text', text: 'Add ' }, { type: 'bold', text: 'graphicx' }, { type: 'text', text: ' with ' }, { type: 'code', text: '\\usepackage{graphicx}' }, { type: 'text', text: '.' },
+      { type: 'text', text: 'Add ' },
+      { type: 'bold', text: 'graphicx' },
+      { type: 'text', text: ' with ' },
+      { type: 'code', text: '\\usepackage{graphicx}' },
+      { type: 'text', text: '.' },
     ]);
   });
 });
 
 describe('recentMessages', () => {
   it('keeps the newest turns and starts with a question', () => {
-    const many = Array.from({ length: 25 }, (_, i) => ({ role: (i % 2 ? 'assistant' : 'user') as 'user' | 'assistant', content: String(i) }));
+    const many = Array.from({ length: 25 }, (_, i) => ({
+      role: (i % 2 ? 'assistant' : 'user') as 'user' | 'assistant',
+      content: String(i),
+    }));
     const r = recentMessages(many);
     expect(r.length).toBeLessThanOrEqual(20);
     expect(r[0].role).toBe('user');
@@ -91,10 +117,23 @@ describe('recentMessages', () => {
 
 describe('readEvents', () => {
   it('parses NDJSON split across chunks', async () => {
-    const chunks = ['{"type":"text","te', 'xt":"Hel"}\n{"type":"text","text":"lo"}\n', '{"type":"done","stopReason":"end_turn"}'];
-    const body = new ReadableStream<Uint8Array>({ start(c) { for (const s of chunks) c.enqueue(new TextEncoder().encode(s)); c.close(); } });
+    const chunks = [
+      '{"type":"text","te',
+      'xt":"Hel"}\n{"type":"text","text":"lo"}\n',
+      '{"type":"done","stopReason":"end_turn"}',
+    ];
+    const body = new ReadableStream<Uint8Array>({
+      start(c) {
+        for (const s of chunks) c.enqueue(new TextEncoder().encode(s));
+        c.close();
+      },
+    });
     const events: StreamEvent[] = [];
-    await readEvents(body, e => events.push(e));
-    expect(events).toEqual([{ type: 'text', text: 'Hel' }, { type: 'text', text: 'lo' }, { type: 'done', stopReason: 'end_turn' }]);
+    await readEvents(body, (e) => events.push(e));
+    expect(events).toEqual([
+      { type: 'text', text: 'Hel' },
+      { type: 'text', text: 'lo' },
+      { type: 'done', stopReason: 'end_turn' },
+    ]);
   });
 });

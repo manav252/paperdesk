@@ -23,16 +23,21 @@ export function createAuth(config: Partial<AuthConfig> = {}) {
   const secret = config.jwtSecret ? new TextEncoder().encode(config.jwtSecret) : null;
   const keys: JWTVerifyGetKey = config.jwks
     ? createLocalJWKSet(JSON.parse(config.jwks))
-    : createRemoteJWKSet(new URL(`${issuer}/.well-known/jwks.json`), { cooldownDuration: 30_000, cacheMaxAge: 10 * 60_000 });
+    : createRemoteJWKSet(new URL(`${issuer}/.well-known/jwks.json`), {
+        cooldownDuration: 30_000,
+        cacheMaxAge: 10 * 60_000,
+      });
   return {
     configured: true as const,
     async verify(token: string): Promise<AuthUser | null> {
       try {
         const options = { issuer, audience: 'authenticated' };
-        const { payload } = secret && /"alg"\s*:\s*"HS256"/.test(Buffer.from(token.split('.')[0] ?? '', 'base64url').toString())
-          ? await jwtVerify(token, secret, options)
-          : await jwtVerify(token, keys, options);
-        if (typeof payload.sub !== 'string' || !/^[0-9a-f-]{36}$/i.test(payload.sub) || payload.role === 'anon') return null;
+        const { payload } =
+          secret && /"alg"\s*:\s*"HS256"/.test(Buffer.from(token.split('.')[0] ?? '', 'base64url').toString())
+            ? await jwtVerify(token, secret, options)
+            : await jwtVerify(token, keys, options);
+        if (typeof payload.sub !== 'string' || !/^[0-9a-f-]{36}$/i.test(payload.sub) || payload.role === 'anon')
+          return null;
         return { id: payload.sub, email: typeof payload.email === 'string' ? payload.email : undefined };
       } catch {
         return null;

@@ -10,58 +10,110 @@ test.beforeEach(async ({ page }) => {
   test.skip(!!process.env.E2E_BASE_URL, 'Runs against the local build.');
   const errors: string[] = [];
   errorsByPage.set(page, errors);
-  page.on('console', m => { if (m.type() === 'error') errors.push(m.text()); });
-  page.on('pageerror', e => errors.push(e.message));
-  await page.route(/^https:\/\/fonts\.(googleapis|gstatic)\.com\//, route => route.fulfill({ status: 200, contentType: 'text/css', body: '' }));
-  await page.route('**/api/projects', route => route.request().method() === 'GET' ? route.fulfill({ json: [] }) : route.continue());
-  await page.addInitScript(main => {
+  page.on('console', (m) => {
+    if (m.type() === 'error') errors.push(m.text());
+  });
+  page.on('pageerror', (e) => errors.push(e.message));
+  await page.route(/^https:\/\/fonts\.(googleapis|gstatic)\.com\//, (route) =>
+    route.fulfill({ status: 200, contentType: 'text/css', body: '' }),
+  );
+  await page.route('**/api/projects', (route) =>
+    route.request().method() === 'GET' ? route.fulfill({ json: [] }) : route.continue(),
+  );
+  await page.addInitScript((main) => {
     if (sessionStorage.getItem('seeded')) return;
     sessionStorage.setItem('seeded', '1');
-    localStorage.setItem('paperdesk-projects', JSON.stringify([{ id: `fig-${Date.now().toString(36)}`, name: 'Figures', modified: Date.now(), mainFile: 'main.tex', files: [{ name: 'main.tex', content: main }] }]));
+    localStorage.setItem(
+      'paperdesk-projects',
+      JSON.stringify([
+        {
+          id: `fig-${Date.now().toString(36)}`,
+          name: 'Figures',
+          modified: Date.now(),
+          mainFile: 'main.tex',
+          files: [{ name: 'main.tex', content: main }],
+        },
+      ]),
+    );
     localStorage.setItem('paperdesk-tour-done', '1');
     localStorage.setItem('paperdesk-help-seen', '1');
     localStorage.setItem('paperdesk-compile-prefs', JSON.stringify({ autoCompile: false }));
   }, tex);
   await page.goto('/');
-  await page.getByRole('button', { name: /Figures/ }).first().click();
+  await page
+    .getByRole('button', { name: /Figures/ })
+    .first()
+    .click();
   await expect(page.locator('.monaco-editor')).toBeVisible();
 });
-test.afterEach(async ({ page }) => { expect(errorsByPage.get(page) ?? []).toEqual([]); });
+test.afterEach(async ({ page }) => {
+  expect(errorsByPage.get(page) ?? []).toEqual([]);
+});
 
 type Stored = { name: string; content: string; encoding?: string };
-const files = (page: Page) => page.evaluate(() => JSON.parse(localStorage.getItem('paperdesk-projects')!)[0].files as Stored[]);
-const mainTex = async (page: Page) => (await files(page)).find(f => f.name === 'main.tex')!.content;
-const figureNames = async (page: Page) => (await files(page)).map(f => f.name).filter(n => n.startsWith('figures/') && n !== 'figures/');
+const files = (page: Page) =>
+  page.evaluate(() => JSON.parse(localStorage.getItem('paperdesk-projects')!)[0].files as Stored[]);
+const mainTex = async (page: Page) => (await files(page)).find((f) => f.name === 'main.tex')!.content;
+const figureNames = async (page: Page) =>
+  (await files(page)).map((f) => f.name).filter((n) => n.startsWith('figures/') && n !== 'figures/');
 
 /** Makes an image in the page and delivers it as a paste or a drop, the way the browser would. */
-async function deliver(page: Page, how: 'paste' | 'drop' | 'tree', image: { name: string; type: string; width: number; height: number } | { name: string; type: string; bytes: number } | { name: string; type: string; base64: string }) {
-  await page.evaluate(async ([kind, spec]) => {
-    let blob: Blob;
-    if ('base64' in spec) blob = new Blob([Uint8Array.from(atob(spec.base64), c => c.charCodeAt(0))], { type: spec.type });
-    else if ('bytes' in spec) blob = new Blob([new Uint8Array(spec.bytes)], { type: spec.type });
-    else {
-      const canvas = document.createElement('canvas');
-      canvas.width = spec.width; canvas.height = spec.height;
-      const context = canvas.getContext('2d')!;
-      context.fillStyle = '#2d9d6f'; context.fillRect(0, 0, spec.width, spec.height);
-      blob = await new Promise<Blob>(resolve => canvas.toBlob(b => resolve(b!), spec.type));
-    }
-    const data = new DataTransfer();
-    data.items.add(new File([blob], spec.name, { type: spec.type }));
-    if (kind === 'paste') document.querySelector('.monaco-editor textarea, .monaco-editor .native-edit-context')!.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
-    else {
-      const target = document.querySelector(kind === 'drop' ? '.editor-canvas .view-lines' : '.file-tree')!;
-      const box = target.getBoundingClientRect();
-      target.dispatchEvent(new DragEvent('drop', { dataTransfer: data, bubbles: true, cancelable: true, clientX: box.left + 80, clientY: box.top + 54 }));
-    }
-  }, [how, image] as const);
+async function deliver(
+  page: Page,
+  how: 'paste' | 'drop' | 'tree',
+  image:
+    | { name: string; type: string; width: number; height: number }
+    | { name: string; type: string; bytes: number }
+    | { name: string; type: string; base64: string },
+) {
+  await page.evaluate(
+    async ([kind, spec]) => {
+      let blob: Blob;
+      if ('base64' in spec)
+        blob = new Blob([Uint8Array.from(atob(spec.base64), (c) => c.charCodeAt(0))], { type: spec.type });
+      else if ('bytes' in spec) blob = new Blob([new Uint8Array(spec.bytes)], { type: spec.type });
+      else {
+        const canvas = document.createElement('canvas');
+        canvas.width = spec.width;
+        canvas.height = spec.height;
+        const context = canvas.getContext('2d')!;
+        context.fillStyle = '#2d9d6f';
+        context.fillRect(0, 0, spec.width, spec.height);
+        blob = await new Promise<Blob>((resolve) => canvas.toBlob((b) => resolve(b!), spec.type));
+      }
+      const data = new DataTransfer();
+      data.items.add(new File([blob], spec.name, { type: spec.type }));
+      if (kind === 'paste')
+        document
+          .querySelector('.monaco-editor textarea, .monaco-editor .native-edit-context')!
+          .dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
+      else {
+        const target = document.querySelector(kind === 'drop' ? '.editor-canvas .view-lines' : '.file-tree')!;
+        const box = target.getBoundingClientRect();
+        target.dispatchEvent(
+          new DragEvent('drop', {
+            dataTransfer: data,
+            bubbles: true,
+            cancelable: true,
+            clientX: box.left + 80,
+            clientY: box.top + 54,
+          }),
+        );
+      }
+    },
+    [how, image] as const,
+  );
 }
 const undo = async (page: Page) => {
-  if ((page.viewportSize()?.width ?? 1440) <= 860) { await page.getByRole('button', { name: 'Menu' }).click(); await page.getByRole('menuitem', { name: 'Undo' }).click(); }
-  else await page.getByRole('button', { name: 'Undo' }).click();
+  if ((page.viewportSize()?.width ?? 1440) <= 860) {
+    await page.getByRole('button', { name: 'Menu' }).click();
+    await page.getByRole('menuitem', { name: 'Undo' }).click();
+  } else await page.getByRole('button', { name: 'Undo' }).click();
 };
 
-test('a pasted image becomes a figure at the cursor, graphicx is offered, and undo removes the image', async ({ page }) => {
+test('a pasted image becomes a figure at the cursor, graphicx is offered, and undo removes the image', async ({
+  page,
+}) => {
   await page.locator('.view-line').filter({ hasText: 'Intro text.' }).click();
   await page.keyboard.press('End');
   await deliver(page, 'paste', { name: 'image.png', type: 'image/png', width: 120, height: 80 });
@@ -73,12 +125,19 @@ test('a pasted image becomes a figure at the cursor, graphicx is offered, and un
   await expect.poll(() => mainTex(page)).toContain('\\caption{}');
   await expect.poll(() => page.evaluate(() => !!document.activeElement?.closest('.editor-canvas'))).toBe(true);
   await page.keyboard.type('My caption');
-  await expect.poll(() => mainTex(page)).toContain(`Intro text.\n\\begin{figure}[ht]\n  \\centering\n  \\includegraphics[width=\\linewidth]{${name}}\n  \\caption{My caption}\n  \\label{fig:${name!.slice(8, -4)}}\n\\end{figure}\n`);
+  await expect
+    .poll(() => mainTex(page))
+    .toContain(
+      `Intro text.\n\\begin{figure}[ht]\n  \\centering\n  \\includegraphics[width=\\linewidth]{${name}}\n  \\caption{My caption}\n  \\label{fig:${name!.slice(8, -4)}}\n\\end{figure}\n`,
+    );
   expect(await mainTex(page)).toContain('\\documentclass{article}\n\\usepackage{graphicx}\n');
-  expect((await files(page)).find(f => f.name === name)!.encoding).toBe('base64');
+  expect((await files(page)).find((f) => f.name === name)!.encoding).toBe('base64');
 
   // Undo until the figure block is gone: the uploaded file goes with it.
-  for (let i = 0; i < 12 && (await figureNames(page)).length; i++) { await undo(page); await page.waitForTimeout(150); }
+  for (let i = 0; i < 12 && (await figureNames(page)).length; i++) {
+    await undo(page);
+    await page.waitForTimeout(150);
+  }
   expect(await figureNames(page)).toEqual([]);
   expect(await mainTex(page)).not.toContain('\\includegraphics');
 });
@@ -90,7 +149,9 @@ test('dropped images are converted, scaled down and size-limited; a tree drop on
   await page.getByRole('dialog', { name: 'Add the graphicx package?' }).getByRole('button', { name: 'Cancel' }).click();
   await expect.poll(() => figureNames(page)).toEqual(['figures/wide-chart.png']);
   const size = await page.evaluate(async () => {
-    const stored = (JSON.parse(localStorage.getItem('paperdesk-projects')!)[0].files as { name: string; content: string }[]).find(f => f.name === 'figures/wide-chart.png')!;
+    const stored = (
+      JSON.parse(localStorage.getItem('paperdesk-projects')!)[0].files as { name: string; content: string }[]
+    ).find((f) => f.name === 'figures/wide-chart.png')!;
     const bitmap = await createImageBitmap(await (await fetch(`data:image/png;base64,${stored.content}`)).blob());
     return [bitmap.width, bitmap.height];
   });
@@ -120,13 +181,22 @@ test('a HEIC photo is converted to PNG; a broken one is refused with the reason'
   await page.getByRole('dialog', { name: 'Add the graphicx package?' }).getByRole('button', { name: 'Cancel' }).click();
   await expect.poll(() => figureNames(page), { timeout: 30_000 }).toEqual(['figures/img_0042.png']);
   const decoded = await page.evaluate(async () => {
-    const stored = (JSON.parse(localStorage.getItem('paperdesk-projects')!)[0].files as { name: string; content: string }[]).find(f => f.name === 'figures/img_0042.png')!;
+    const stored = (
+      JSON.parse(localStorage.getItem('paperdesk-projects')!)[0].files as { name: string; content: string }[]
+    ).find((f) => f.name === 'figures/img_0042.png')!;
     const blob = await (await fetch(`data:image/png;base64,${stored.content}`)).blob();
-    const bitmap = await createImageBitmap(blob), canvas = document.createElement('canvas');
-    canvas.width = bitmap.width; canvas.height = bitmap.height;
+    const bitmap = await createImageBitmap(blob),
+      canvas = document.createElement('canvas');
+    canvas.width = bitmap.width;
+    canvas.height = bitmap.height;
     const context = canvas.getContext('2d')!;
     context.drawImage(bitmap, 0, 0);
-    return { type: blob.type, size: [bitmap.width, bitmap.height], pixel: Array.from(context.getImageData(32, 20, 1, 1).data), png: stored.content.startsWith('iVBORw0KGgo') };
+    return {
+      type: blob.type,
+      size: [bitmap.width, bitmap.height],
+      pixel: Array.from(context.getImageData(32, 20, 1, 1).data),
+      png: stored.content.startsWith('iVBORw0KGgo'),
+    };
   });
   expect(decoded.png).toBe(true);
   expect(decoded.size).toEqual([64, 40]);

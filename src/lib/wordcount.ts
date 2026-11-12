@@ -1,14 +1,26 @@
 /** Totals reported by `texcount -inc -total -sum` for a document and the files it includes. */
 export type WordCount = {
-  total: number; text: number; headers: number; captions: number;
-  headerCount: number; floats: number; mathInline: number; mathDisplay: number; files: number;
+  total: number;
+  text: number;
+  headers: number;
+  captions: number;
+  headerCount: number;
+  floats: number;
+  mathInline: number;
+  mathDisplay: number;
+  files: number;
 };
 
 const FIELDS: [keyof WordCount, string][] = [
-  ['total', 'Sum count'], ['text', 'Words in text'], ['headers', 'Words in headers'],
-  ['captions', 'Words outside text (captions, etc.)'], ['headerCount', 'Number of headers'],
-  ['floats', 'Number of floats/tables/figures'], ['mathInline', 'Number of math inlines'],
-  ['mathDisplay', 'Number of math displayed'], ['files', 'Files'],
+  ['total', 'Sum count'],
+  ['text', 'Words in text'],
+  ['headers', 'Words in headers'],
+  ['captions', 'Words outside text (captions, etc.)'],
+  ['headerCount', 'Number of headers'],
+  ['floats', 'Number of floats/tables/figures'],
+  ['mathInline', 'Number of math inlines'],
+  ['mathDisplay', 'Number of math displayed'],
+  ['files', 'Files'],
 ];
 
 /** Parses texcount's summary; returns null when the output has no word totals (for example, an error). */

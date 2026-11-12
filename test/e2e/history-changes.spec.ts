@@ -3,8 +3,13 @@ import { isolateProjects } from './isolate-projects';
 import { cleanExternalProjects } from './external-api';
 
 const project = () => ({
-  id: 'p1', name: 'E2E Change Review', modified: Date.now(), mainFile: 'main.tex',
-  files: [{ name: 'main.tex', content: '\\documentclass{article}\n\\begin{document}\nOriginal line\n\\end{document}\n' }],
+  id: 'p1',
+  name: 'E2E Change Review',
+  modified: Date.now(),
+  mainFile: 'main.tex',
+  files: [
+    { name: 'main.tex', content: '\\documentclass{article}\n\\begin{document}\nOriginal line\n\\end{document}\n' },
+  ],
 });
 
 const browserErrors = new WeakMap<Page, string[]>();
@@ -12,11 +17,15 @@ const browserErrors = new WeakMap<Page, string[]>();
 test.beforeEach(async ({ page, request }) => {
   await isolateProjects(page, request);
   // Tests must not depend on the network: answer Google Fonts requests locally (the system font fallback is used).
-  await page.route(/^https:\/\/fonts\.(googleapis|gstatic)\.com\//, route => route.fulfill({ status: 200, contentType: 'text/css', body: '' }));
+  await page.route(/^https:\/\/fonts\.(googleapis|gstatic)\.com\//, (route) =>
+    route.fulfill({ status: 200, contentType: 'text/css', body: '' }),
+  );
   const errors: string[] = [];
   browserErrors.set(page, errors);
-  page.on('console', message => { if (message.type() === 'error') errors.push(message.text()); });
-  page.on('pageerror', error => errors.push(error.message));
+  page.on('console', (message) => {
+    if (message.type() === 'error') errors.push(message.text());
+  });
+  page.on('pageerror', (error) => errors.push(error.message));
 });
 test.afterEach(async ({ page, request }) => {
   await cleanExternalProjects(page, request);
@@ -24,14 +33,20 @@ test.afterEach(async ({ page, request }) => {
 });
 
 async function openFresh(page: Page) {
-  await page.addInitScript(value => { localStorage.setItem('paperdesk-projects', JSON.stringify([value])); localStorage.setItem('paperdesk-tour-done', '1'); localStorage.setItem('paperdesk-compile-prefs', JSON.stringify({ trackChanges: false })); }, project());
+  await page.addInitScript((value) => {
+    localStorage.setItem('paperdesk-projects', JSON.stringify([value]));
+    localStorage.setItem('paperdesk-tour-done', '1');
+    localStorage.setItem('paperdesk-compile-prefs', JSON.stringify({ trackChanges: false }));
+  }, project());
   await page.goto('/#/paper/p1/');
   await expect(page.locator('.monaco-editor')).toBeVisible();
 }
 
 async function typeAtEnd(page: Page, value: string) {
   const input = page.getByRole('textbox', { name: 'Editor content' });
-  const content = await page.evaluate(() => JSON.parse(localStorage.getItem('paperdesk-projects') ?? '[]')[0]?.files?.[0]?.content as string);
+  const content = await page.evaluate(
+    () => JSON.parse(localStorage.getItem('paperdesk-projects') ?? '[]')[0]?.files?.[0]?.content as string,
+  );
   await input.fill(`${content}${value}`);
 }
 
@@ -80,13 +95,31 @@ test('tracked change can be rejected individually', async ({ page }) => {
   await expect(review.locator('.tracked-change')).toContainText('tracked');
   await review.getByRole('button', { name: 'Reject change in main.tex' }).first().click();
   await expect(review.getByText('No pending tracked changes.')).toBeVisible();
-  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('paperdesk-projects') ?? '[]')[0]?.files?.[0]?.content as string)).not.toContain('tracked');
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => JSON.parse(localStorage.getItem('paperdesk-projects') ?? '[]')[0]?.files?.[0]?.content as string,
+      ),
+    )
+    .not.toContain('tracked');
   await review.getByRole('button', { name: 'Close' }).last().click();
   await typeAtEnd(page, ' accepted');
   await openMenuItem(page, 'Edit', /Review changes/);
-  await page.getByRole('dialog', { name: 'Track changes' }).getByRole('button', { name: 'Accept change in main.tex' }).first().click();
-  await expect.poll(() => page.evaluate(() => JSON.parse(localStorage.getItem('paperdesk-projects') ?? '[]')[0]?.files?.[0]?.content as string)).toContain('accepted');
-  await expect(page.getByRole('dialog', { name: 'Track changes' }).getByText('No pending tracked changes.')).toBeVisible();
+  await page
+    .getByRole('dialog', { name: 'Track changes' })
+    .getByRole('button', { name: 'Accept change in main.tex' })
+    .first()
+    .click();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        () => JSON.parse(localStorage.getItem('paperdesk-projects') ?? '[]')[0]?.files?.[0]?.content as string,
+      ),
+    )
+    .toContain('accepted');
+  await expect(
+    page.getByRole('dialog', { name: 'Track changes' }).getByText('No pending tracked changes.'),
+  ).toBeVisible();
 });
 
 test('tracked changes can be accepted all or rejected all', async ({ page }) => {

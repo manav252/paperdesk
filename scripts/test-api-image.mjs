@@ -13,17 +13,44 @@ function run(command, args, options = {}) {
 }
 
 try {
-  execFileSync('docker', ['build', '-f', 'Dockerfile.api', '-t', image, '.'], { stdio: 'inherit', env: { ...process.env, BUILDX_GIT_INFO: '0' } });
-  execFileSync('docker', [
-    'run', '--detach', '--name', container, '--memory=512m', '--cpus=1', '-p', `127.0.0.1:${port}:10000`,
-    '-e', 'NODE_ENV=test', '-e', 'PORT=10000', '-e', 'COMPILE_MODE=native', '-e', 'PAPERDESK_DATA=/tmp/paperdesk-api-test',
-    '-e', 'MAX_COMPILE_TIMEOUT_MS=120000', '-e', 'COMPILE_MEMORY_MB=448', image,
-  ], { stdio: 'inherit' });
+  execFileSync('docker', ['build', '-f', 'Dockerfile.api', '-t', image, '.'], {
+    stdio: 'inherit',
+    env: { ...process.env, BUILDX_GIT_INFO: '0' },
+  });
+  execFileSync(
+    'docker',
+    [
+      'run',
+      '--detach',
+      '--name',
+      container,
+      '--memory=512m',
+      '--cpus=1',
+      '-p',
+      `127.0.0.1:${port}:10000`,
+      '-e',
+      'NODE_ENV=test',
+      '-e',
+      'PORT=10000',
+      '-e',
+      'COMPILE_MODE=native',
+      '-e',
+      'PAPERDESK_DATA=/tmp/paperdesk-api-test',
+      '-e',
+      'MAX_COMPILE_TIMEOUT_MS=120000',
+      '-e',
+      'COMPILE_MEMORY_MB=448',
+      image,
+    ],
+    { stdio: 'inherit' },
+  );
   started = true;
 
   let ready = false;
   for (let i = 0; i < 120; i++) {
-    ready = await fetch(`http://127.0.0.1:${port}/api/health`).then(async response => response.ok && (await response.json()).compilerReady).catch(() => false);
+    ready = await fetch(`http://127.0.0.1:${port}/api/health`)
+      .then(async (response) => response.ok && (await response.json()).compilerReady)
+      .catch(() => false);
     if (ready) break;
     await delay(1_000);
   }
@@ -33,12 +60,24 @@ try {
   }
 
   try {
-    run('node', ['scripts/compile-fixtures.mjs', ...process.argv.slice(2)], { env: { ...process.env, FIXTURE_API_URL: `http://127.0.0.1:${port}` } });
+    run('node', ['scripts/compile-fixtures.mjs', ...process.argv.slice(2)], {
+      env: { ...process.env, FIXTURE_API_URL: `http://127.0.0.1:${port}` },
+    });
   } catch (error) {
     execFileSync('docker', ['logs', container], { stdio: 'inherit' });
     throw error;
   }
 } finally {
-  if (started) { try { execFileSync('docker', ['rm', '-f', container], { stdio: 'ignore' }); } catch { /* already exited */ } }
-  try { execFileSync('docker', ['image', 'rm', image], { stdio: 'ignore' }); } catch { /* build did not create an image */ }
+  if (started) {
+    try {
+      execFileSync('docker', ['rm', '-f', container], { stdio: 'ignore' });
+    } catch {
+      /* already exited */
+    }
+  }
+  try {
+    execFileSync('docker', ['image', 'rm', image], { stdio: 'ignore' });
+  } catch {
+    /* build did not create an image */
+  }
 }

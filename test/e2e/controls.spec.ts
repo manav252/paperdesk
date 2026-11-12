@@ -9,35 +9,91 @@ let compiles = 0;
 let compileFails = false;
 
 test.beforeEach(async ({ page, request }, info) => {
-  test.skip(info.project.name !== 'desktop-light', 'Control coverage runs once; layout profiles are covered elsewhere.');
+  test.skip(
+    info.project.name !== 'desktop-light',
+    'Control coverage runs once; layout profiles are covered elsewhere.',
+  );
   if (!process.env.E2E_BASE_URL) {
     const response = await request.get('/api/projects');
-    if (response.ok()) await Promise.all((await response.json() as { id: string }[]).map(project => request.delete(`/api/projects/${project.id}`)));
+    if (response.ok())
+      await Promise.all(
+        ((await response.json()) as { id: string }[]).map((project) => request.delete(`/api/projects/${project.id}`)),
+      );
   }
   compiles = 0;
   compileFails = false;
   await page.addInitScript(() => {
     if (sessionStorage.getItem('seeded')) return;
     sessionStorage.setItem('seeded', '1');
-    localStorage.setItem('paperdesk-projects', JSON.stringify([{ id: `controls-${Date.now()}`, name: 'Controls', modified: Date.now(), mainFile: 'main.tex', files: [
-      { name: 'main.tex', content: '\\documentclass{article}\n\\begin{document}\n\\section{Intro}\\label{sec:intro}\nHello world\n\\end{document}\n' },
-      { name: 'refs.bib', content: '@article{knuth84,\n  title = {Literate Programming},\n}\n' },
-    ] }]));
+    localStorage.setItem(
+      'paperdesk-projects',
+      JSON.stringify([
+        {
+          id: `controls-${Date.now()}`,
+          name: 'Controls',
+          modified: Date.now(),
+          mainFile: 'main.tex',
+          files: [
+            {
+              name: 'main.tex',
+              content:
+                '\\documentclass{article}\n\\begin{document}\n\\section{Intro}\\label{sec:intro}\nHello world\n\\end{document}\n',
+            },
+            { name: 'refs.bib', content: '@article{knuth84,\n  title = {Literate Programming},\n}\n' },
+          ],
+        },
+      ]),
+    );
     localStorage.setItem('paperdesk-tour-done', '1');
     localStorage.setItem('paperdesk-compile-prefs', JSON.stringify({ autoCompile: false }));
   });
-  await page.route(/^https:\/\/fonts\.(googleapis|gstatic)\.com\//, route => route.fulfill({ status: 200, contentType: 'text/css', body: '' }));
-  await page.route('**/api/projects/*/compile', route => { compiles++; return route.fulfill({ json: compileFails ? { success: false, log: '! Package x Error: broken source.', errors: [{ file: 'main.tex', line: 2, message: 'broken source' }], warnings: [], durationMs: 50 } : { success: true, log: 'ok', errors: [], warnings: [], durationMs: 50, session: 's', pdf: twoPagePdf().toString('base64') } }); });
-  await page.route('**/api/projects/*/pdf*', route => route.fulfill({ status: 200, contentType: 'application/pdf', body: twoPagePdf() }));
+  await page.route(/^https:\/\/fonts\.(googleapis|gstatic)\.com\//, (route) =>
+    route.fulfill({ status: 200, contentType: 'text/css', body: '' }),
+  );
+  await page.route('**/api/projects/*/compile', (route) => {
+    compiles++;
+    return route.fulfill({
+      json: compileFails
+        ? {
+            success: false,
+            log: '! Package x Error: broken source.',
+            errors: [{ file: 'main.tex', line: 2, message: 'broken source' }],
+            warnings: [],
+            durationMs: 50,
+          }
+        : {
+            success: true,
+            log: 'ok',
+            errors: [],
+            warnings: [],
+            durationMs: 50,
+            session: 's',
+            pdf: twoPagePdf().toString('base64'),
+          },
+    });
+  });
+  await page.route('**/api/projects/*/pdf*', (route) =>
+    route.fulfill({ status: 200, contentType: 'application/pdf', body: twoPagePdf() }),
+  );
   const errors: string[] = [];
   errorsByPage.set(page, errors);
-  page.on('console', m => { if (m.type() === 'error') errors.push(m.text()); });
-  page.on('pageerror', e => errors.push(e.message));
+  page.on('console', (m) => {
+    if (m.type() === 'error') errors.push(m.text());
+  });
+  page.on('pageerror', (e) => errors.push(e.message));
 });
 
-test.afterEach(async ({ page }) => { expect(errorsByPage.get(page) ?? []).toEqual([]); });
+test.afterEach(async ({ page }) => {
+  expect(errorsByPage.get(page) ?? []).toEqual([]);
+});
 
-const source = (page: Page) => page.evaluate(() => JSON.parse(localStorage.getItem('paperdesk-projects')!)[0].files.find((f: { name: string }) => f.name === 'main.tex').content as string);
+const source = (page: Page) =>
+  page.evaluate(
+    () =>
+      JSON.parse(localStorage.getItem('paperdesk-projects')!)[0].files.find(
+        (f: { name: string }) => f.name === 'main.tex',
+      ).content as string,
+  );
 
 async function openControls(page: Page) {
   await page.goto('/');
@@ -79,7 +135,9 @@ test('dashboard controls', async ({ page }) => {
 test('auto compile is off until someone turns it on', async ({ page }) => {
   // Typing must not start a compile unless the person turned auto compile on themselves.
   // Older versions saved "on" for everyone without being asked; that saved value must not turn it back on.
-  await page.addInitScript(() => localStorage.setItem('paperdesk-compile-prefs', JSON.stringify({ autoCompile: true, stopOnFirstError: true })));
+  await page.addInitScript(() =>
+    localStorage.setItem('paperdesk-compile-prefs', JSON.stringify({ autoCompile: true, stopOnFirstError: true })),
+  );
   await openControls(page);
   const before = compiles;
   await page.locator('.view-line').filter({ hasText: 'Hello world' }).click();
@@ -115,18 +173,25 @@ test('a failed recompile keeps the previous PDF and marks it out of date', async
 });
 
 test('a project created while the first sync is still loading is kept', async ({ page }) => {
-  await page.route('**/api/projects', async route => {
+  await page.route('**/api/projects', async (route) => {
     if (route.request().method() !== 'GET') return route.continue();
-    await new Promise(r => setTimeout(r, 2500));
+    await new Promise((r) => setTimeout(r, 2500));
     await route.fulfill({ json: [] });
   });
   await page.goto('/');
   await page.getByRole('button', { name: 'Templates' }).click();
-  await page.getByRole('button', { name: /Article/ }).first().click();
+  await page
+    .getByRole('button', { name: /Article/ })
+    .first()
+    .click();
   await expect(page.getByTitle('Rename project')).toContainText('Article');
   await page.waitForTimeout(3500);
   await expect(page.getByTitle('Rename project')).toContainText('Article');
-  expect(await page.evaluate(() => JSON.parse(localStorage.getItem('paperdesk-projects')!).some((p: { name: string }) => /Article/.test(p.name)))).toBe(true);
+  expect(
+    await page.evaluate(() =>
+      JSON.parse(localStorage.getItem('paperdesk-projects')!).some((p: { name: string }) => /Article/.test(p.name)),
+    ),
+  ).toBe(true);
 });
 
 test('editor header, menus, panels and dialogs', async ({ page }) => {
@@ -188,9 +253,13 @@ test('editor header, menus, panels and dialogs', async ({ page }) => {
   const other = await page.context().browser()!.newContext();
   const visitor = await other.newPage();
   // A new visitor has no projects yet (the first-visit path that once dropped the ?copy= link).
-  await visitor.route('**/api/projects', route => route.request().method() === 'GET' ? route.fulfill({ json: [] }) : route.continue());
+  await visitor.route('**/api/projects', (route) =>
+    route.request().method() === 'GET' ? route.fulfill({ json: [] }) : route.continue(),
+  );
   await visitor.addInitScript(() => localStorage.setItem('paperdesk-tour-done', '1'));
-  await visitor.route(/^https:\/\/fonts\.(googleapis|gstatic)\.com\//, route => route.fulfill({ status: 200, contentType: 'text/css', body: '' }));
+  await visitor.route(/^https:\/\/fonts\.(googleapis|gstatic)\.com\//, (route) =>
+    route.fulfill({ status: 200, contentType: 'text/css', body: '' }),
+  );
   await visitor.goto(link.replace(/^https?:\/\/[^/]+/, ''));
   await expect(visitor.getByTitle('Rename project')).toContainText('Controls (copy)');
   await other.close();
@@ -222,11 +291,18 @@ test('file tree, toolbar, autocomplete, compile and PDF controls', async ({ page
   await expect.poll(() => source(page)).toMatch(/\\textbf\{(Hello|world)\}/);
   await page.getByRole('button', { name: 'Undo' }).click();
   await expect.poll(() => source(page)).not.toContain('\\textbf');
-  for (const name of ['Italic', 'Table', 'Equation', 'Bulleted list']) await page.getByRole('button', { name, exact: true }).click();
+  for (const name of ['Italic', 'Table', 'Equation', 'Bulleted list'])
+    await page.getByRole('button', { name, exact: true }).click();
   await expect.poll(() => source(page)).toContain('\\begin{tabular}');
   const imageChooser = page.waitForEvent('filechooser');
   await page.getByRole('button', { name: 'Insert image' }).click();
-  await (await imageChooser).setFiles({ name: 'User attachment.png', mimeType: 'image/png', buffer: readFileSync(path.resolve('test/fixtures/compile/image-space-upload/user-attachment.png')) });
+  await (
+    await imageChooser
+  ).setFiles({
+    name: 'User attachment.png',
+    mimeType: 'image/png',
+    buffer: readFileSync(path.resolve('test/fixtures/compile/image-space-upload/user-attachment.png')),
+  });
   await expect(page.locator('.file-label').getByText('user-attachment.png', { exact: true })).toBeVisible();
   await expect.poll(() => source(page)).toContain('\\includegraphics[width=\\linewidth]{figures/user-attachment.png}');
   // The starter document doesn't load graphicx yet: the editor offers to add it.
@@ -277,14 +353,28 @@ test('file tree, toolbar, autocomplete, compile and PDF controls', async ({ page
 
 /** A two-page PDF with a line of text on each page. */
 function twoPagePdf() {
-  const pageObj = (n: number, content: number) => `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents ${content} 0 R /Resources << /Font << /F1 3 0 R >> >> >>`;
-  const text = (s: string) => { const body = `BT /F1 16 Tf 72 720 Td (${s}) Tj ET`; return `<< /Length ${body.length} >>\nstream\n${body}\nendstream`; };
-  const objects = ['<< /Type /Catalog /Pages 2 0 R >>', '<< /Type /Pages /Kids [4 0 R 6 0 R] /Count 2 >>', '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
-    pageObj(1, 5), text('Page one'), pageObj(2, 7), text('Page two')];
+  const pageObj = (n: number, content: number) =>
+    `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents ${content} 0 R /Resources << /Font << /F1 3 0 R >> >> >>`;
+  const text = (s: string) => {
+    const body = `BT /F1 16 Tf 72 720 Td (${s}) Tj ET`;
+    return `<< /Length ${body.length} >>\nstream\n${body}\nendstream`;
+  };
+  const objects = [
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Kids [4 0 R 6 0 R] /Count 2 >>',
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+    pageObj(1, 5),
+    text('Page one'),
+    pageObj(2, 7),
+    text('Page two'),
+  ];
   let pdf = '%PDF-1.4\n';
   const offsets: number[] = [];
-  objects.forEach((o, i) => { offsets.push(pdf.length); pdf += `${i + 1} 0 obj\n${o}\nendobj\n`; });
+  objects.forEach((o, i) => {
+    offsets.push(pdf.length);
+    pdf += `${i + 1} 0 obj\n${o}\nendobj\n`;
+  });
   const xref = pdf.length;
-  pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets.map(o => `${String(o).padStart(10, '0')} 00000 n \n`).join('')}trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF`;
+  pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets.map((o) => `${String(o).padStart(10, '0')} 00000 n \n`).join('')}trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF`;
   return Buffer.from(pdf, 'binary');
 }

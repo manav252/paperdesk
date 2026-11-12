@@ -103,7 +103,8 @@ compiled into the public web app.
 ## Tests
 
 ```sh
-npm run check            # lint, typecheck, unit tests, production build and browser tests
+npm run check            # format check, lint, typecheck, unit tests, production build and browser tests
+npm run format           # format the code with Prettier (format:check only reports)
 npm run lint
 npm run typecheck
 npm test                 # unit tests

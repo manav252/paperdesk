@@ -22,12 +22,16 @@ No pages of output.
 describe('parseLatexLog', () => {
   it('reports file:line errors from -file-line-error output with the offending code', () => {
     const { errors } = parseLatexLog(undefinedCs);
-    expect(errors[0]).toEqual({ file: 'sections/results.tex', line: 5, message: 'Undefined control sequence. — \\thisCommandDoesNotExist{oops}' });
+    expect(errors[0]).toEqual({
+      file: 'sections/results.tex',
+      line: 5,
+      message: 'Undefined control sequence. — \\thisCommandDoesNotExist{oops}',
+    });
   });
 
   it('keeps the follow-on emergency stop separate from the cause', () => {
     const { errors } = parseLatexLog(undefinedCs);
-    expect(errors.map(e => e.message.split(' —')[0])).toEqual(['Undefined control sequence.', 'Emergency stop.']);
+    expect(errors.map((e) => e.message.split(' —')[0])).toEqual(['Undefined control sequence.', 'Emergency stop.']);
   });
 
   it('parses "!"-style errors and finds the l.<n> line', () => {
@@ -36,32 +40,42 @@ describe('parseLatexLog', () => {
   });
 
   it('makes missing image errors actionable and keeps their source line', () => {
-    const log = "(./main.tex\n! LaTeX Error: File `missing-image.png' not found.\nl.18 \\includegraphics{missing-image.png}\n";
-    expect(parseLatexLog(log).errors[0]).toEqual({ file: 'main.tex', line: 18, message: 'Image or file “missing-image.png” was not found. Check the path on this line.' });
+    const log =
+      "(./main.tex\n! LaTeX Error: File `missing-image.png' not found.\nl.18 \\includegraphics{missing-image.png}\n";
+    expect(parseLatexLog(log).errors[0]).toEqual({
+      file: 'main.tex',
+      line: 18,
+      message: 'Image or file “missing-image.png” was not found. Check the path on this line.',
+    });
   });
 
   it('attributes warnings to the file being read', () => {
     const log = [
       '(./main.tex (./chapters/intro.tex',
-      'LaTeX Warning: Citation `knuth84\' on page 1 undefined on input line 3.',
+      "LaTeX Warning: Citation `knuth84' on page 1 undefined on input line 3.",
       '',
       ') (./chapters/methods.tex',
       'Package hyperref Warning: Token not allowed in a PDF string (Unicode):',
-      '(hyperref)                removing `math shift\' on input line 7.',
+      "(hyperref)                removing `math shift' on input line 7.",
       '',
       '))',
       'LaTeX Warning: There were undefined references.',
     ].join('\n');
     const { warnings } = parseLatexLog(log);
     expect(warnings).toEqual([
-      { file: 'chapters/intro.tex', line: 3, message: 'Citation `knuth84\' on page 1 undefined' },
-      { file: 'chapters/methods.tex', line: 7, message: 'hyperref: Token not allowed in a PDF string (Unicode): removing `math shift\'' },
+      { file: 'chapters/intro.tex', line: 3, message: "Citation `knuth84' on page 1 undefined" },
+      {
+        file: 'chapters/methods.tex',
+        line: 7,
+        message: "hyperref: Token not allowed in a PDF string (Unicode): removing `math shift'",
+      },
       { file: 'main.tex', line: null, message: 'There were undefined references.' },
     ]);
   });
 
   it('ignores files from the TeX distribution when attributing messages', () => {
-    const log = '(./main.tex (/usr/local/texlive/tex/latex/foo.sty\nLaTeX Warning: Something happened on input line 9.\n';
+    const log =
+      '(./main.tex (/usr/local/texlive/tex/latex/foo.sty\nLaTeX Warning: Something happened on input line 9.\n';
     expect(parseLatexLog(log).warnings[0].file).toBe('main.tex');
   });
 
@@ -95,7 +109,9 @@ describe('parseBibtexLog', () => {
     ].join('\n');
     const { errors, warnings } = parseBibtexLog(blg);
     expect(errors).toEqual([{ file: 'refs.bib', line: 7, message: "BibTeX: I was expecting a `,' or a `}'" }]);
-    expect(warnings).toEqual([{ file: null, line: null, message: 'BibTeX: I didn\'t find a database entry for "missing2020"' }]);
+    expect(warnings).toEqual([
+      { file: null, line: null, message: 'BibTeX: I didn\'t find a database entry for "missing2020"' },
+    ]);
   });
 
   it('is merged into parseLatexLog results', () => {
@@ -106,7 +122,8 @@ describe('parseBibtexLog', () => {
 
 describe('image hints', () => {
   it('explains SVG and missing image errors', () => {
-    const log = '(./main.tex\n./main.tex:9: LaTeX Error: Unknown graphics extension: .svg.\n./main.tex:12: LaTeX Error: File `figures/plot.png\' not found.\n';
+    const log =
+      "(./main.tex\n./main.tex:9: LaTeX Error: Unknown graphics extension: .svg.\n./main.tex:12: LaTeX Error: File `figures/plot.png' not found.\n";
     const [svg, missing] = parseLatexLog(log).errors;
     expect(svg.message).toContain('LaTeX can’t include SVG files');
     expect(missing).toMatchObject({ file: 'main.tex', line: 12 });
@@ -116,21 +133,30 @@ describe('image hints', () => {
 
 describe('bibliography hints', () => {
   it('explains an empty reference list, but not a list missing an \\item in the document', () => {
-    const log = "(./main.tex (./main.bbl\n./main.bbl:24: LaTeX Error: Something's wrong--perhaps a missing \\item.\n\nSee the LaTeX manual or LaTeX Companion for explanation.\nl.24 \\end{thebibliography}\n)\n./main.tex:30: LaTeX Error: Something's wrong--perhaps a missing \\item.\n\nl.30 \\end{itemize}\n";
+    const log =
+      "(./main.tex (./main.bbl\n./main.bbl:24: LaTeX Error: Something's wrong--perhaps a missing \\item.\n\nSee the LaTeX manual or LaTeX Companion for explanation.\nl.24 \\end{thebibliography}\n)\n./main.tex:30: LaTeX Error: Something's wrong--perhaps a missing \\item.\n\nl.30 \\end{itemize}\n";
     const [bibliography, list] = parseLatexLog(log).errors;
     expect(bibliography).toMatchObject({ file: 'main.bbl', line: 24 });
-    expect(bibliography!.message).toContain('The reference list is empty: none of the keys you \\cite are in your .bib file.');
+    expect(bibliography!.message).toContain(
+      'The reference list is empty: none of the keys you \\cite are in your .bib file.',
+    );
     expect(list).toMatchObject({ file: 'main.tex', line: 30 });
     expect(list!.message).not.toContain('reference list');
   });
 });
 
 describe('missing file suggestions', () => {
-  const error = (name: string) => ({ file: 'main.tex', line: 28, message: `Package pdftex.def Error: File \`${name}' not found: using draft setting.` });
+  const error = (name: string) => ({
+    file: 'main.tex',
+    line: 28,
+    message: `Package pdftex.def Error: File \`${name}' not found: using draft setting.`,
+  });
   const files = ['main.tex', 'wadrobe.png', 'figures/', 'figures/Plot-Final.png', 'notes.txt'];
   it('names a file that differs by a typo, by capitals or by folder', () => {
     expect(withFileSuggestion(error('wardrobe.png'), files).message).toContain('Did you mean “wadrobe.png”?');
-    expect(withFileSuggestion(error('plot-final.png'), files).message).toContain('Did you mean “figures/Plot-Final.png”?');
+    expect(withFileSuggestion(error('plot-final.png'), files).message).toContain(
+      'Did you mean “figures/Plot-Final.png”?',
+    );
     expect(withFileSuggestion(error('wardrobe'), files).message).toContain('Did you mean “wadrobe.png”?');
   });
   it('stays quiet when nothing is close, for other errors, and when already suggested', () => {

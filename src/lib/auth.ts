@@ -20,10 +20,18 @@ export const currentAccount = () => account;
 
 let clientPromise: Promise<SupabaseClient> | null = null;
 function client() {
-  clientPromise ??= import('@supabase/supabase-js').then(({ createClient }) => createClient(SUPABASE_URL, SUPABASE_KEY, {
-    // PKCE returns ?code=… instead of a #token fragment, which would clash with the #/paper/… routes.
-    auth: { flowType: 'pkce', detectSessionInUrl: true, persistSession: true, autoRefreshToken: true, storageKey: 'paperdesk-auth' },
-  }));
+  clientPromise ??= import('@supabase/supabase-js').then(({ createClient }) =>
+    createClient(SUPABASE_URL, SUPABASE_KEY, {
+      // PKCE returns ?code=… instead of a #token fragment, which would clash with the #/paper/… routes.
+      auth: {
+        flowType: 'pkce',
+        detectSessionInUrl: true,
+        persistSession: true,
+        autoRefreshToken: true,
+        storageKey: 'paperdesk-auth',
+      },
+    }),
+  );
   return clientPromise;
 }
 
@@ -31,30 +39,56 @@ const toAccount = (session: Session | null): Account | null => {
   const user = session?.user;
   if (!user) return null;
   const meta = (user.user_metadata ?? {}) as Record<string, unknown>;
-  return { id: user.id, email: user.email, name: typeof meta.full_name === 'string' ? meta.full_name : typeof meta.name === 'string' ? meta.name : undefined, avatar: typeof meta.avatar_url === 'string' ? meta.avatar_url : undefined };
+  return {
+    id: user.id,
+    email: user.email,
+    name: typeof meta.full_name === 'string' ? meta.full_name : typeof meta.name === 'string' ? meta.name : undefined,
+    avatar: typeof meta.avatar_url === 'string' ? meta.avatar_url : undefined,
+  };
 };
 function setSession(session: Session | null) {
   accessToken = session?.access_token ?? null;
   const next = toAccount(session);
   const changed = next?.id !== account?.id;
   account = next;
-  if (changed) listeners.forEach(listener => listener(account));
+  if (changed) listeners.forEach((listener) => listener(account));
 }
 
 export function onAccountChange(listener: (account: Account | null) => void) {
   listeners.add(listener);
-  return () => { listeners.delete(listener); };
+  return () => {
+    listeners.delete(listener);
+  };
 }
 
 /** Moves this browser's anonymous projects to the signed-in account, once per anonymous key. */
 async function claimAnonymousProjects(apiBase: string): Promise<Moved> {
   let anonymous: string | null = null;
-  try { anonymous = localStorage.getItem(OWNER_KEY); } catch { return []; }
+  try {
+    anonymous = localStorage.getItem(OWNER_KEY);
+  } catch {
+    return [];
+  }
   if (!anonymous || !accessToken) return [];
-  try { if (localStorage.getItem(CLAIMED_KEY) === `${anonymous}:${account?.id}`) return []; } catch { /* claim anyway */ }
-  const response = await fetch(`${apiBase}/api/account/claim`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` }, body: JSON.stringify({ anonymousId: anonymous }) });
-  if (!response.ok) throw new Error((await response.json().catch(() => ({}))).error ?? 'Your projects could not be moved to your account.');
-  try { localStorage.setItem(CLAIMED_KEY, `${anonymous}:${account?.id}`); } catch { /* moving again finds nothing */ }
+  try {
+    if (localStorage.getItem(CLAIMED_KEY) === `${anonymous}:${account?.id}`) return [];
+  } catch {
+    /* claim anyway */
+  }
+  const response = await fetch(`${apiBase}/api/account/claim`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${accessToken}` },
+    body: JSON.stringify({ anonymousId: anonymous }),
+  });
+  if (!response.ok)
+    throw new Error(
+      (await response.json().catch(() => ({}))).error ?? 'Your projects could not be moved to your account.',
+    );
+  try {
+    localStorage.setItem(CLAIMED_KEY, `${anonymous}:${account?.id}`);
+  } catch {
+    /* moving again finds nothing */
+  }
   return ((await response.json()).moved ?? []) as Moved;
 }
 
@@ -73,7 +107,10 @@ export function authReady(apiBase = String(import.meta.env.VITE_API_URL ?? '').r
       supabase.auth.onAuthStateChange((_event, session) => setSession(session));
       // Drop the one-time ?code=… from the address bar after the redirect.
       const url = new URL(location.href);
-      if (url.searchParams.has('code')) { url.searchParams.delete('code'); history.replaceState(history.state, '', url.pathname + url.search + url.hash); }
+      if (url.searchParams.has('code')) {
+        url.searchParams.delete('code');
+        history.replaceState(history.state, '', url.pathname + url.search + url.hash);
+      }
       const moved = data.session ? await claimAnonymousProjects(apiBase) : [];
       return { moved };
     } catch (error) {
@@ -87,8 +124,8 @@ let providersPromise: Promise<{ google: boolean }> | null = null;
 /** Which sign-in methods the Supabase project has switched on (so a disabled one isn't offered). */
 export function enabledProviders() {
   providersPromise ??= fetch(`${SUPABASE_URL}/auth/v1/settings`, { headers: { apikey: SUPABASE_KEY } })
-    .then(r => r.ok ? r.json() : null)
-    .then(settings => ({ google: settings?.external?.google === true }))
+    .then((r) => (r.ok ? r.json() : null))
+    .then((settings) => ({ google: settings?.external?.google === true }))
     .catch(() => ({ google: false }));
   return providersPromise;
 }
@@ -96,12 +133,16 @@ export function enabledProviders() {
 const redirectTo = () => `${location.origin}${location.pathname}`;
 
 export async function signInWithGoogle() {
-  const { error } = await (await client()).auth.signInWithOAuth({ provider: 'google', options: { redirectTo: redirectTo() } });
+  const { error } = await (
+    await client()
+  ).auth.signInWithOAuth({ provider: 'google', options: { redirectTo: redirectTo() } });
   if (error) throw error;
 }
 
 export async function sendSignInLink(email: string) {
-  const { error } = await (await client()).auth.signInWithOtp({ email, options: { emailRedirectTo: redirectTo(), shouldCreateUser: true } });
+  const { error } = await (
+    await client()
+  ).auth.signInWithOtp({ email, options: { emailRedirectTo: redirectTo(), shouldCreateUser: true } });
   if (error) throw error;
 }
 
@@ -112,6 +153,8 @@ export async function signOut() {
     localStorage.removeItem('paperdesk-projects');
     localStorage.removeItem(OWNER_KEY);
     localStorage.removeItem(CLAIMED_KEY);
-  } catch { /* storage unavailable: nothing kept */ }
+  } catch {
+    /* storage unavailable: nothing kept */
+  }
   location.assign(redirectTo());
 }

@@ -27,14 +27,22 @@ import { ProjectPersistence, type ProjectData, type StoredFile } from './persist
 import { contentHash, syncWorkspace, Workspaces, type SourceFile, type Workspace } from './workspace';
 
 // Local settings and secrets come from an untracked .env (see .env.example); real environment variables win.
-try { process.loadEnvFile(); } catch { /* no .env file */ }
+try {
+  process.loadEnvFile();
+} catch {
+  /* no .env file */
+}
 
 const exec = promisify(execFile);
 const app = express();
 const http = createServer(app);
-const allowedOrigins = (process.env.PAPERDESK_CORS_ORIGINS ?? '').split(',').map(origin => origin.trim()).filter(Boolean);
+const allowedOrigins = (process.env.PAPERDESK_CORS_ORIGINS ?? '')
+  .split(',')
+  .map((origin) => origin.trim())
+  .filter(Boolean);
 const localOrigin = (origin: string) => /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin);
-const originAllowed = (origin?: string) => !origin || allowedOrigins.includes(origin) || (process.env.NODE_ENV !== 'production' && localOrigin(origin));
+const originAllowed = (origin?: string) =>
+  !origin || allowedOrigins.includes(origin) || (process.env.NODE_ENV !== 'production' && localOrigin(origin));
 const io = new Server(http, { cors: { origin: (origin, callback) => callback(null, originAllowed(origin)) } });
 const PORT = Number(process.env.PORT ?? 3001);
 const DATA = path.resolve(process.env.PAPERDESK_DATA ?? './backend/storage');
@@ -46,8 +54,12 @@ const COMPILE_TIMEOUT_MS = Number(process.env.COMPILE_TIMEOUT_MS ?? 120_000);
 const MAX_COMPILE_TIMEOUT_MS = Number(process.env.MAX_COMPILE_TIMEOUT_MS ?? 600_000);
 const COMPILE_MEMORY_MB = Number(process.env.COMPILE_MEMORY_MB ?? 384);
 const MAX_PROJECT_BYTES = Number(process.env.MAX_PROJECT_BYTES ?? 25 * 1024 * 1024);
-if (process.env.NODE_ENV === 'production' && persistence.mode === 'local') throw new Error('Production requires Neon and R2 storage environment variables.');
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: Math.min(MAX_PROJECT_BYTES, 25 * 1024 * 1024) } });
+if (process.env.NODE_ENV === 'production' && persistence.mode === 'local')
+  throw new Error('Production requires Neon and R2 storage environment variables.');
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: Math.min(MAX_PROJECT_BYTES, 25 * 1024 * 1024) },
+});
 /** latexmk flag per engine. Bare `-pdflatex` is not a valid latexmk switch. */
 const ENGINES: Record<string, string> = { pdflatex: '-pdf', xelatex: '-xelatex', lualatex: '-lualatex' };
 /** Files returned to the client as base64; everything else is UTF-8 text. */
@@ -60,11 +72,18 @@ const SYNCTEX_TIMEOUT_MS = 25_000;
 /** SyncTeX lookups per project run one after another; a second lookup waits instead of being refused. */
 const SYNCING = new Map<string, Promise<void>>();
 let nativeCompilerReady = COMPILE_MODE !== 'native';
-const resultKey = (id: string, owner: string) => persistence.mode === 'neon-r2' ? `${owner}/${id}` : id;
+const resultKey = (id: string, owner: string) => (persistence.mode === 'neon-r2' ? `${owner}/${id}` : id);
 
 // Behind a proxy (Render), set TRUST_PROXY=1 so rate limits see the client's IP rather than the proxy's.
-if (process.env.TRUST_PROXY) app.set('trust proxy', /^\d+$/.test(process.env.TRUST_PROXY) ? Number(process.env.TRUST_PROXY) : process.env.TRUST_PROXY);
-app.use('/api', (_req, res, next) => { res.setHeader('Cache-Control', 'no-store'); next(); });
+if (process.env.TRUST_PROXY)
+  app.set(
+    'trust proxy',
+    /^\d+$/.test(process.env.TRUST_PROXY) ? Number(process.env.TRUST_PROXY) : process.env.TRUST_PROXY,
+  );
+app.use('/api', (_req, res, next) => {
+  res.setHeader('Cache-Control', 'no-store');
+  next();
+});
 app.use('/api', (req, res, next) => {
   const origin = req.headers.origin;
   if (!origin) return next();
@@ -81,11 +100,20 @@ const kv = new Kv(persistence.database);
 /** Simple per-client request budget: `limit` calls per minute. */
 const budgets = new Map<string, { count: number; reset: number }>();
 function overBudget(key: string, limit: number) {
-  const now = Date.now(), entry = budgets.get(key);
-  if (!entry || entry.reset < now) { if (budgets.size > 5000) budgets.clear(); budgets.set(key, { count: 1, reset: now + 60_000 }); return false; }
+  const now = Date.now(),
+    entry = budgets.get(key);
+  if (!entry || entry.reset < now) {
+    if (budgets.size > 5000) budgets.clear();
+    budgets.set(key, { count: 1, reset: now + 60_000 });
+    return false;
+  }
   return ++entry.count > limit;
 }
-const auth = createAuth({ url: process.env.SUPABASE_URL, jwks: process.env.SUPABASE_JWKS, jwtSecret: process.env.SUPABASE_JWT_SECRET });
+const auth = createAuth({
+  url: process.env.SUPABASE_URL,
+  jwks: process.env.SUPABASE_JWKS,
+  jwtSecret: process.env.SUPABASE_JWT_SECRET,
+});
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const bearerToken = (req: express.Request) => /^Bearer\s+(\S+)$/i.exec(req.header('Authorization') ?? '')?.[1];
 
@@ -107,15 +135,27 @@ app.use('/api/projects', async (req, res, next) => {
       const access = await sharing?.resolve(alias, user.id);
       if (!access) return void send(res, 404, 'Project not found');
       // Removing a shared project from your list means leaving it; the project itself stays.
-      if (req.method === 'DELETE' && !sub && access.role !== 'owner') { await sharing!.leave(alias, user.id); return void res.status(204).end(); }
-      if (!roleAllows(access.role, req.method, sub)) return void send(res, 403, access.role === 'viewer' ? 'You have view-only access to this project.' : 'Only the project owner can do that.');
+      if (req.method === 'DELETE' && !sub && access.role !== 'owner') {
+        await sharing!.leave(alias, user.id);
+        return void res.status(204).end();
+      }
+      if (!roleAllows(access.role, req.method, sub))
+        return void send(
+          res,
+          403,
+          access.role === 'viewer'
+            ? 'You have view-only access to this project.'
+            : 'Only the project owner can do that.',
+        );
       res.locals.projectOwner = access.ownerId;
       res.locals.role = access.role;
       req.url = req.url.replace(`/${alias}`, `/${access.projectId}`);
       const json = res.json.bind(res);
       res.json = (body: any) => json(body && body.id === access.projectId ? { ...body, id: alias } : body);
       return next();
-    } catch (e) { return void send(res, 500, e); }
+    } catch (e) {
+      return void send(res, 500, e);
+    }
   }
   if (req.path.startsWith('/s-')) return void send(res, 401, 'Sign in to open this shared project.');
   if (persistence.mode !== 'neon-r2') return next();
@@ -130,7 +170,15 @@ app.use(express.json({ limit: '36mb' }));
 
 const safeName = (name: string) => {
   const normalized = path.posix.normalize(name.replaceAll('\\', '/'));
-  if (!normalized || normalized === '.' || normalized.startsWith('/') || normalized === '..' || normalized.startsWith('../') || normalized.includes('/../')) throw new Error('Invalid file path');
+  if (
+    !normalized ||
+    normalized === '.' ||
+    normalized.startsWith('/') ||
+    normalized === '..' ||
+    normalized.startsWith('../') ||
+    normalized.includes('/../')
+  )
+    throw new Error('Invalid file path');
   return normalized;
 };
 
@@ -140,14 +188,22 @@ const projectPath = (id: string) => {
 };
 
 const utf8 = new TextDecoder('utf-8', { fatal: true });
-const decodeUtf8 = (buf: Buffer) => { try { return utf8.decode(buf); } catch { return null; } };
-const toBuffer = (f: StoredFile) => (f.encoding === 'base64' ? Buffer.from(f.content ?? '', 'base64') : Buffer.from(String(f.content ?? ''), 'utf8'));
+const decodeUtf8 = (buf: Buffer) => {
+  try {
+    return utf8.decode(buf);
+  } catch {
+    return null;
+  }
+};
+const toBuffer = (f: StoredFile) =>
+  f.encoding === 'base64' ? Buffer.from(f.content ?? '', 'base64') : Buffer.from(String(f.content ?? ''), 'utf8');
 function validateFiles(files: StoredFile[]) {
   let size = 0;
   for (const file of files) {
     safeName(String(file.name));
     size += toBuffer(file).length;
-    if (size > MAX_PROJECT_BYTES) throw new Error(`Project files exceed the ${Math.floor(MAX_PROJECT_BYTES / 1024 / 1024)} MB limit.`);
+    if (size > MAX_PROJECT_BYTES)
+      throw new Error(`Project files exceed the ${Math.floor(MAX_PROJECT_BYTES / 1024 / 1024)} MB limit.`);
   }
 }
 
@@ -157,12 +213,27 @@ async function readProject(id: string, owner = '') {
   const dir = projectPath(id);
   const meta = JSON.parse(await fs.readFile(path.join(dir, 'project.json'), 'utf8'));
   const files = await walkFiles(path.join(dir, 'files'));
-  return { ...meta, files } as { id: string; name: string; modified: number; files: StoredFile[]; mainFile?: string; archived?: boolean; settings?: unknown; versions?: unknown[]; comments?: unknown[]; changes?: unknown[] };
+  return { ...meta, files } as {
+    id: string;
+    name: string;
+    modified: number;
+    files: StoredFile[];
+    mainFile?: string;
+    archived?: boolean;
+    settings?: unknown;
+    versions?: unknown[];
+    comments?: unknown[];
+    changes?: unknown[];
+  };
 }
 
 async function walkFiles(root: string, relative = ''): Promise<StoredFile[]> {
   let entries;
-  try { entries = await fs.readdir(path.join(root, relative), { withFileTypes: true }); } catch { return []; }
+  try {
+    entries = await fs.readdir(path.join(root, relative), { withFileTypes: true });
+  } catch {
+    return [];
+  }
   const out: StoredFile[] = [];
   for (const e of entries.sort((a, b) => a.name.localeCompare(b.name))) {
     const rel = path.posix.join(relative, e.name);
@@ -172,14 +243,27 @@ async function walkFiles(root: string, relative = ''): Promise<StoredFile[]> {
       const buf = await fs.readFile(path.join(root, rel));
       // Text that isn't valid UTF-8 (e.g. Latin-1 .bst files) is sent as base64 so it round-trips byte for byte.
       const text = BINARY.test(rel) ? null : decodeUtf8(buf);
-      out.push(text === null ? { name: rel, content: buf.toString('base64'), encoding: 'base64' } : { name: rel, content: text });
+      out.push(
+        text === null
+          ? { name: rel, content: buf.toString('base64'), encoding: 'base64' }
+          : { name: rel, content: text },
+      );
     }
   }
   return out;
 }
 
 /** Writes the given files. With `replace`, files and folders not in the list are removed so deletes and renames stick. */
-type ProjectUpdate = { name?: string; files?: StoredFile[]; mainFile?: string; archived?: boolean; settings?: unknown; versions?: unknown[]; comments?: unknown[]; changes?: unknown[] };
+type ProjectUpdate = {
+  name?: string;
+  files?: StoredFile[];
+  mainFile?: string;
+  archived?: boolean;
+  settings?: unknown;
+  versions?: unknown[];
+  comments?: unknown[];
+  changes?: unknown[];
+};
 /** Writes to one project run one at a time: overlapping saves (initial sync and autosave) used to read a half-written project.json. */
 const projectLocks = new Map<string, Promise<unknown>>();
 /**
@@ -191,7 +275,11 @@ function lockProject<T>(id: string, owner: string, task: () => Promise<T>): Prom
   const lockId = persistence.mode === 'neon-r2' ? `${owner}/${id}` : id;
   const run = (projectLocks.get(lockId) ?? Promise.resolve()).catch(() => undefined).then(task);
   projectLocks.set(lockId, run);
-  run.finally(() => { if (projectLocks.get(lockId) === run) projectLocks.delete(lockId); }).catch(() => undefined);
+  run
+    .finally(() => {
+      if (projectLocks.get(lockId) === run) projectLocks.delete(lockId);
+    })
+    .catch(() => undefined);
   return run;
 }
 function writeProject(id: string, p: ProjectUpdate, options: { replace?: boolean } = {}, owner = '') {
@@ -224,8 +312,21 @@ async function writeProjectNow(id: string, p: ProjectUpdate, { replace = false }
   }
   if (replace) await prune(root, '', keep);
   const metaPath = path.join(dir, 'project.json');
-  const previous: Record<string, unknown> = await fs.readFile(metaPath, 'utf8').then(x => JSON.parse(x) as Record<string, unknown>).catch(() => ({} as Record<string, unknown>));
-  const meta = { ...previous, id, name: p.name ?? previous.name ?? 'Untitled Project', modified: Date.now(), ...Object.fromEntries(['mainFile', 'archived', 'settings', 'versions', 'comments', 'changes'].filter(k => p[k as keyof typeof p] !== undefined).map(k => [k, p[k as keyof typeof p]])) };
+  const previous: Record<string, unknown> = await fs
+    .readFile(metaPath, 'utf8')
+    .then((x) => JSON.parse(x) as Record<string, unknown>)
+    .catch(() => ({}) as Record<string, unknown>);
+  const meta = {
+    ...previous,
+    id,
+    name: p.name ?? previous.name ?? 'Untitled Project',
+    modified: Date.now(),
+    ...Object.fromEntries(
+      ['mainFile', 'archived', 'settings', 'versions', 'comments', 'changes']
+        .filter((k) => p[k as keyof typeof p] !== undefined)
+        .map((k) => [k, p[k as keyof typeof p]]),
+    ),
+  };
   // Write-then-rename so readers never see a partial file.
   const tmp = `${metaPath}.${process.pid}.${crypto.randomUUID()}.tmp`;
   await fs.writeFile(tmp, JSON.stringify(meta));
@@ -238,13 +339,23 @@ async function listProjects(owner = '') {
   await fs.mkdir(PROJECTS, { recursive: true });
   const ids = await fs.readdir(PROJECTS);
   const records: ProjectData[] = [];
-  for (const id of ids) { try { records.push(await readProject(id)); } catch { /* skip unreadable project folders */ } }
+  for (const id of ids) {
+    try {
+      records.push(await readProject(id));
+    } catch {
+      /* skip unreadable project folders */
+    }
+  }
   return records;
 }
 
 async function prune(root: string, relative: string, keep: Set<string>) {
   let entries;
-  try { entries = await fs.readdir(path.join(root, relative), { withFileTypes: true }); } catch { return; }
+  try {
+    entries = await fs.readdir(path.join(root, relative), { withFileTypes: true });
+  } catch {
+    return;
+  }
   for (const e of entries) {
     const rel = path.posix.join(relative, e.name);
     if (!keep.has(rel)) await fs.rm(path.join(root, rel), { recursive: true, force: true });
@@ -262,7 +373,8 @@ async function giveCompileFilesToSandboxUser(root: string): Promise<void> {
   await fs.chown(root, 65534, 65534);
 }
 
-const send = (res: express.Response, status: number, error: unknown) => res.status(status).json({ error: error instanceof Error ? error.message : String(error) });
+const send = (res: express.Response, status: number, error: unknown) =>
+  res.status(status).json({ error: error instanceof Error ? error.message : String(error) });
 const projectOwner = (res: express.Response) => String(res.locals.projectOwner ?? '');
 
 async function dockerStatus() {
@@ -284,15 +396,37 @@ async function dockerStatus() {
 // every graphicx document otherwise logs. Arbitrary commands (\write18 with anything else) stay disabled.
 function latexmkArgs(engine: string, mainFile: string, stopOnFirstError: boolean, draft: boolean, format?: string) {
   const fmt = format ? ` -fmt=${format}` : '';
-  const command = engine === 'pdflatex' ? `$pdflatex = "pdflatex -shell-restricted${fmt} %O %S";`
-    : engine === 'xelatex' ? '$xelatex = "xelatex -shell-restricted %O %S";'
-      : '$lualatex = "lualatex -shell-restricted %O %S";';
-  return [ENGINES[engine]!, '-e', command, '-synctex=1', '-interaction=nonstopmode', '-file-line-error', ...(stopOnFirstError ? ['-halt-on-error'] : []), ...(draft ? ['-draftmode'] : []), '-norc', mainFile];
+  const command =
+    engine === 'pdflatex'
+      ? `$pdflatex = "pdflatex -shell-restricted${fmt} %O %S";`
+      : engine === 'xelatex'
+        ? '$xelatex = "xelatex -shell-restricted %O %S";'
+        : '$lualatex = "lualatex -shell-restricted %O %S";';
+  return [
+    ENGINES[engine]!,
+    '-e',
+    command,
+    '-synctex=1',
+    '-interaction=nonstopmode',
+    '-file-line-error',
+    ...(stopOnFirstError ? ['-halt-on-error'] : []),
+    ...(draft ? ['-draftmode'] : []),
+    '-norc',
+    mainFile,
+  ];
 }
 
 /** One engine pass without latexmk, whose startup alone costs most of a second on a small instance. */
 function directArgs(engine: string, mainFile: string, stopOnFirstError: boolean, format?: string) {
-  return ['-shell-restricted', ...(format ? [`-fmt=${format}`] : []), '-synctex=1', '-interaction=nonstopmode', '-file-line-error', ...(stopOnFirstError ? ['-halt-on-error'] : []), mainFile];
+  return [
+    '-shell-restricted',
+    ...(format ? [`-fmt=${format}`] : []),
+    '-synctex=1',
+    '-interaction=nonstopmode',
+    '-file-line-error',
+    ...(stopOnFirstError ? ['-halt-on-error'] : []),
+    mainFile,
+  ];
 }
 
 /** Name of the cached preamble format (pdfLaTeX only; see buildPreambleFormat). */
@@ -300,44 +434,115 @@ const PREAMBLE_FORMAT = 'pd-preamble';
 /** Identifies the preamble: its text plus local style files and files it \\inputs. A change means rebuilding the format. */
 function preambleKey(ws: Workspace, source: string) {
   const preamble = source.split(/\\begin\s*\{document\}/)[0] ?? source;
-  const inputs = [...preamble.matchAll(/\\(?:input|include|usepackage|documentclass|RequirePackage)(?:\[[^\]]*\])?\{([^}]+)\}/g)].flatMap(m => m[1].split(',').map(n => n.trim()));
-  const deps = [...ws.hashes].filter(([name]) => /\.(sty|cls|cfg|def|clo|ldf|fd)$/i.test(name) || inputs.some(i => name === i || name === `${i}.tex`)).sort().map(([n, h]) => `${n}:${h}`);
+  const inputs = [
+    ...preamble.matchAll(/\\(?:input|include|usepackage|documentclass|RequirePackage)(?:\[[^\]]*\])?\{([^}]+)\}/g),
+  ].flatMap((m) => m[1].split(',').map((n) => n.trim()));
+  const deps = [...ws.hashes]
+    .filter(
+      ([name]) =>
+        /\.(sty|cls|cfg|def|clo|ldf|fd)$/i.test(name) || inputs.some((i) => name === i || name === `${i}.tex`),
+    )
+    .sort()
+    .map(([n, h]) => `${n}:${h}`);
   return crypto.createHash('sha256').update(preamble).update(deps.join('|')).digest('hex').slice(0, 24);
 }
 
 /** Starts a process group so timeout cleanup also kills TeX and bibliography children. */
 function runNativeCompiler(cwd: string, argv: string[], timeoutMs: number, onStart?: (kill: () => void) => void) {
-  return new Promise<{ stdout: string; stderr: string; killed: boolean; reason?: 'timeout' | 'output_limit'; code: number | null }>((resolve, reject) => {
+  return new Promise<{
+    stdout: string;
+    stderr: string;
+    killed: boolean;
+    reason?: 'timeout' | 'output_limit';
+    code: number | null;
+  }>((resolve, reject) => {
     const memoryBytes = Math.max(192, COMPILE_MEMORY_MB) * 1024 * 1024;
     const safeEnv = {
       PATH: process.env.PATH ?? '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
-      LANG: 'C.UTF-8', LC_ALL: 'C.UTF-8', HOME: cwd, TMPDIR: path.join(cwd, 'tmp'),
-      TEXMFVAR: path.join(cwd, 'texmf-var'), TEXMFCONFIG: path.join(cwd, 'texmf-config'),
+      LANG: 'C.UTF-8',
+      LC_ALL: 'C.UTF-8',
+      HOME: cwd,
+      TMPDIR: path.join(cwd, 'tmp'),
+      TEXMFVAR: path.join(cwd, 'texmf-var'),
+      TEXMFCONFIG: path.join(cwd, 'texmf-config'),
       FONTCONFIG_CACHE: path.join(cwd, 'font-cache'),
     };
-    const child = spawn('setpriv', ['--reuid=65534', '--regid=65534', '--clear-groups', '--bounding-set=-all', '--', 'prlimit', `--as=${memoryBytes}`, '--cpu=120', '--nproc=64', '--fsize=52428800', '--nofile=128', '--', ...argv], {
-      cwd, env: safeEnv,
-      detached: true, stdio: ['ignore', 'pipe', 'pipe'],
+    const child = spawn(
+      'setpriv',
+      [
+        '--reuid=65534',
+        '--regid=65534',
+        '--clear-groups',
+        '--bounding-set=-all',
+        '--',
+        'prlimit',
+        `--as=${memoryBytes}`,
+        '--cpu=120',
+        '--nproc=64',
+        '--fsize=52428800',
+        '--nofile=128',
+        '--',
+        ...argv,
+      ],
+      {
+        cwd,
+        env: safeEnv,
+        detached: true,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      },
+    );
+    onStart?.(() => {
+      killed = true;
+      if (child.pid) {
+        try {
+          process.kill(-child.pid, 'SIGKILL');
+        } catch {
+          child.kill('SIGKILL');
+        }
+      }
     });
-    onStart?.(() => { killed = true; if (child.pid) { try { process.kill(-child.pid, 'SIGKILL'); } catch { child.kill('SIGKILL'); } } });
-    let stdout = '', stderr = '', killed = false, reason: 'timeout' | 'output_limit' | undefined, settled = false;
+    let stdout = '',
+      stderr = '',
+      killed = false,
+      reason: 'timeout' | 'output_limit' | undefined,
+      settled = false;
     const limitOutput = 4 * 1024 * 1024;
     const collect = (target: 'stdout' | 'stderr') => (chunk: Buffer) => {
       if (stdout.length + stderr.length + chunk.length > limitOutput) {
-        killed = true; reason = 'output_limit';
-        if (child.pid) { try { process.kill(-child.pid, 'SIGKILL'); } catch { child.kill('SIGKILL'); } }
+        killed = true;
+        reason = 'output_limit';
+        if (child.pid) {
+          try {
+            process.kill(-child.pid, 'SIGKILL');
+          } catch {
+            child.kill('SIGKILL');
+          }
+        }
         return;
       }
-      if (target === 'stdout') stdout += chunk.toString(); else stderr += chunk.toString();
+      if (target === 'stdout') stdout += chunk.toString();
+      else stderr += chunk.toString();
     };
     child.stdout.on('data', collect('stdout'));
     child.stderr.on('data', collect('stderr'));
     const timer = setTimeout(() => {
-      killed = true; reason = 'timeout';
-      if (child.pid) { try { process.kill(-child.pid, 'SIGKILL'); } catch { child.kill('SIGKILL'); } }
+      killed = true;
+      reason = 'timeout';
+      if (child.pid) {
+        try {
+          process.kill(-child.pid, 'SIGKILL');
+        } catch {
+          child.kill('SIGKILL');
+        }
+      }
     }, timeoutMs);
-    child.once('error', error => { if (settled) return; settled = true; clearTimeout(timer); reject(error); });
-    child.once('close', code => {
+    child.once('error', (error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.once('close', (code) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
@@ -349,7 +554,17 @@ function runNativeCompiler(cwd: string, argv: string[], timeoutMs: number, onSta
 app.get('/api/health', async (_req, res) => {
   const status = COMPILE_MODE === 'native' ? { docker: false, image: false } : await dockerStatus();
   const compilerReady = COMPILE_MODE === 'native' ? nativeCompilerReady : status.docker && status.image;
-  res.status(compilerReady ? 200 : 503).json({ ok: compilerReady, ...status, compilerMode: COMPILE_MODE, compilerReady, maxCompileTimeoutMs: MAX_COMPILE_TIMEOUT_MS, storage: { mode: persistence.mode, ready: persistence.ready || persistence.mode === 'neon-r2' }, compilerImage: IMAGE, assistant: { configured: assistantConfigured(), model: assistantModel() }, auth: { configured: auth.configured } });
+  res.status(compilerReady ? 200 : 503).json({
+    ok: compilerReady,
+    ...status,
+    compilerMode: COMPILE_MODE,
+    compilerReady,
+    maxCompileTimeoutMs: MAX_COMPILE_TIMEOUT_MS,
+    storage: { mode: persistence.mode, ready: persistence.ready || persistence.mode === 'neon-r2' },
+    compilerImage: IMAGE,
+    assistant: { configured: assistantConfigured(), model: assistantModel() },
+    auth: { configured: auth.configured },
+  });
 });
 
 /** On first sign-in, moves the projects of the browser's anonymous key to the account. */
@@ -362,34 +577,48 @@ app.post('/api/account/claim', async (req, res) => {
     if (!UUID.test(anonymous)) return void send(res, 400, 'A valid anonymous project key is required.');
     // Local development storage keeps one shared project folder, so there is nothing to move.
     if (persistence.mode !== 'neon-r2') return void res.json({ moved: [] });
-    const moved = await persistence.claim(anonymous, userOwnerId(user), id => `${id.slice(0, 40)}-${crypto.randomUUID().slice(0, 6)}`);
+    const moved = await persistence.claim(
+      anonymous,
+      userOwnerId(user),
+      (id) => `${id.slice(0, 40)}-${crypto.randomUUID().slice(0, 6)}`,
+    );
     res.json({ moved });
-  } catch (e) { send(res, 500, e); }
+  } catch (e) {
+    send(res, 500, e);
+  }
 });
 
 /** Citation metadata for DOIs and arXiv ids, as BibTeX. Several ids may be sent at once. */
 const lookupCitation = createCitationLookup(kv);
 app.post('/api/citations/lookup', async (req, res) => {
   try {
-    const ids = (Array.isArray(req.body?.ids) ? req.body.ids : []).map((x: unknown) => String(x).trim()).filter(Boolean).slice(0, 25) as string[];
+    const ids = (Array.isArray(req.body?.ids) ? req.body.ids : [])
+      .map((x: unknown) => String(x).trim())
+      .filter(Boolean)
+      .slice(0, 25) as string[];
     if (!ids.length) return void send(res, 400, 'Enter a DOI, a doi.org link or an arXiv ID.');
     if (overBudget(`cite:${req.ip}`, 40)) return void send(res, 429, 'Too many lookups. Wait a minute and try again.');
     const results = [];
     for (const id of ids) results.push(await lookupCitation(id));
     res.json({ results });
-  } catch (e) { send(res, 500, e); }
+  } catch (e) {
+    send(res, 500, e);
+  }
 });
 
 /** Joins a project from an invite or link token. */
 /** Names the project an invitation is for. The token is the only credential, as it is for accepting. */
 app.get('/api/invites/:token', async (req, res) => {
   try {
-    if (overBudget(`invite:${req.ip}`, 30)) return void send(res, 429, 'Too many requests. Wait a minute and try again.');
+    if (overBudget(`invite:${req.ip}`, 30))
+      return void send(res, 429, 'Too many requests. Wait a minute and try again.');
     if (!sharing) return void send(res, 501, 'Sharing needs the production database.');
     const invitation = await sharing.invitation(String(req.params.token));
     if (!invitation) return void send(res, 404, 'This invitation is no longer valid.');
     res.json(invitation);
-  } catch (e) { send(res, 500, e); }
+  } catch (e) {
+    send(res, 500, e);
+  }
 });
 
 app.post('/api/invites/:token/accept', async (req, res) => {
@@ -398,10 +627,16 @@ app.post('/api/invites/:token/accept', async (req, res) => {
     const user = token ? await auth.verify(token) : null;
     if (!user) return void send(res, 401, 'Sign in to accept this invitation.');
     if (!sharing) return void send(res, 501, 'Sharing needs the production database.');
-    const result = await sharing.accept(String(req.params.token), { id: user.id, ownerId: userOwnerId(user), email: user.email });
+    const result = await sharing.accept(String(req.params.token), {
+      id: user.id,
+      ownerId: userOwnerId(user),
+      email: user.email,
+    });
     if ('error' in result) return void send(res, result.status!, result.error);
     res.json(result);
-  } catch (e) { send(res, 500, e); }
+  } catch (e) {
+    send(res, 500, e);
+  }
 });
 
 app.get('/api/projects', async (_req, res) => {
@@ -411,22 +646,49 @@ app.get('/api/projects', async (_req, res) => {
     const user = res.locals.user as AuthUser | undefined;
     if (!sharing || !user) return void res.json(own);
     const [mine, memberships] = await Promise.all([sharing.sharedIds(owner), sharing.memberships(user.id)]);
-    const joined = await Promise.all(memberships.map(m => persistence.read(m.projectId, m.ownerId).then(p => ({ ...p, id: m.alias, role: m.role }), () => null)));
-    res.json([...own.map(p => mine.has(p.id) ? { ...p, role: 'owner', shared: true } : p), ...joined.filter(Boolean)]);
-  } catch (e) { send(res, 500, e); }
+    const joined = await Promise.all(
+      memberships.map((m) =>
+        persistence.read(m.projectId, m.ownerId).then(
+          (p) => ({ ...p, id: m.alias, role: m.role }),
+          () => null,
+        ),
+      ),
+    );
+    res.json([
+      ...own.map((p) => (mine.has(p.id) ? { ...p, role: 'owner', shared: true } : p)),
+      ...joined.filter(Boolean),
+    ]);
+  } catch (e) {
+    send(res, 500, e);
+  }
 });
 
 app.post('/api/projects', async (req, res) => {
   try {
     const id = typeof req.body.id === 'string' && /^[\w-]+$/.test(req.body.id) ? req.body.id : crypto.randomUUID();
-    const files = Array.isArray(req.body.files) ? req.body.files as StoredFile[] : [];
+    const files = Array.isArray(req.body.files) ? (req.body.files as StoredFile[]) : [];
     validateFiles(files);
-    res.status(201).json(await writeProject(id, { name: String(req.body.name ?? 'Untitled Project'), files }, { replace: true }, projectOwner(res)));
-  } catch (e) { send(res, 400, e); }
+    res
+      .status(201)
+      .json(
+        await writeProject(
+          id,
+          { name: String(req.body.name ?? 'Untitled Project'), files },
+          { replace: true },
+          projectOwner(res),
+        ),
+      );
+  } catch (e) {
+    send(res, 400, e);
+  }
 });
 
 app.get('/api/projects/:id', async (req, res) => {
-  try { res.json(await readProject(req.params.id, projectOwner(res))); } catch { send(res, 404, 'Project not found'); }
+  try {
+    res.json(await readProject(req.params.id, projectOwner(res)));
+  } catch {
+    send(res, 404, 'Project not found');
+  }
 });
 
 /** Saves a project; creates it if it doesn't exist yet. A `files` list replaces the stored files. */
@@ -439,75 +701,151 @@ app.put('/api/projects/:id', async (req, res) => {
     const patch = req.body.patch as FilePatch | undefined;
     // Reading, merging and writing happen under one lock, so two saves at once can't drop each other's files.
     const saved = await lockProject(req.params.id, projectOwner(res), async () => {
-    if (patch && Array.isArray(patch.files)) {
-      // The project may be gone from the server (deleted elsewhere): the browser then sends everything again.
-      const stored = await readProject(req.params.id, projectOwner(res)).catch(() => null);
-      if (!stored) return void res.json({ missing: true });
-      const result = applyFilePatch(stored.files.map(f => ({ name: f.name, content: String(f.content ?? ''), encoding: f.encoding })), { files: patch.files, deleted: Array.isArray(patch.deleted) ? patch.deleted : [] }, contentHash);
-      if (result.conflicts.length) return void res.status(409).json({ error: `Someone else changed ${result.conflicts.join(', ')}. Reload to get their version.`, conflict: true, files: result.conflicts });
-      files = result.files;
-      changed = patch.files;
-    }
-    // Shared projects: refuse a save based on an older version instead of overwriting someone's work.
-    const base = Number(req.body.baseModified);
-    if (base && persistence.mode === 'neon-r2') {
-      const stored = await persistence.read(req.params.id, projectOwner(res)).catch(() => null);
-      if (stored && stored.modified > base) return void res.status(409).json({ error: 'Someone else changed this project. Reload to get their version.', conflict: true });
-    }
-    return writeProjectNow(req.params.id, { name: req.body.name, files, mainFile: req.body.mainFile, archived: req.body.archived, settings: req.body.settings, versions: req.body.versions, comments: req.body.comments, changes: req.body.changes }, { replace: !!files }, projectOwner(res));
+      if (patch && Array.isArray(patch.files)) {
+        // The project may be gone from the server (deleted elsewhere): the browser then sends everything again.
+        const stored = await readProject(req.params.id, projectOwner(res)).catch(() => null);
+        if (!stored) return void res.json({ missing: true });
+        const result = applyFilePatch(
+          stored.files.map((f) => ({ name: f.name, content: String(f.content ?? ''), encoding: f.encoding })),
+          { files: patch.files, deleted: Array.isArray(patch.deleted) ? patch.deleted : [] },
+          contentHash,
+        );
+        if (result.conflicts.length)
+          return void res.status(409).json({
+            error: `Someone else changed ${result.conflicts.join(', ')}. Reload to get their version.`,
+            conflict: true,
+            files: result.conflicts,
+          });
+        files = result.files;
+        changed = patch.files;
+      }
+      // Shared projects: refuse a save based on an older version instead of overwriting someone's work.
+      const base = Number(req.body.baseModified);
+      if (base && persistence.mode === 'neon-r2') {
+        const stored = await persistence.read(req.params.id, projectOwner(res)).catch(() => null);
+        if (stored && stored.modified > base)
+          return void res
+            .status(409)
+            .json({ error: 'Someone else changed this project. Reload to get their version.', conflict: true });
+      }
+      return writeProjectNow(
+        req.params.id,
+        {
+          name: req.body.name,
+          files,
+          mainFile: req.body.mainFile,
+          archived: req.body.archived,
+          settings: req.body.settings,
+          versions: req.body.versions,
+          comments: req.body.comments,
+          changes: req.body.changes,
+        },
+        { replace: !!files },
+        projectOwner(res),
+      );
     });
     if (!saved) return; // already answered: gone from the server, or a conflict
     // The browser already has the files it just sent; echoing them back would double the transfer.
-    if (changed) mirrorToLiveRoom(resultKey(req.params.id, projectOwner(res)), changed, patch && Array.isArray(patch.deleted) ? patch.deleted : [], Array.isArray(req.body.files) ? files : undefined);
-    if (changed && sharing) await sharing.record(projectOwner(res), req.params.id, changed, res.locals.author ?? null).catch(e => console.error('Saving file history failed:', e));
+    if (changed)
+      mirrorToLiveRoom(
+        resultKey(req.params.id, projectOwner(res)),
+        changed,
+        patch && Array.isArray(patch.deleted) ? patch.deleted : [],
+        Array.isArray(req.body.files) ? files : undefined,
+      );
+    if (changed && sharing)
+      await sharing
+        .record(projectOwner(res), req.params.id, changed, res.locals.author ?? null)
+        .catch((e) => console.error('Saving file history failed:', e));
     res.json({ ...saved, files: files ? undefined : saved.files });
-  } catch (e) { send(res, e instanceof Error && /not found/i.test(e.message) ? 404 : 400, e); }
+  } catch (e) {
+    send(res, e instanceof Error && /not found/i.test(e.message) ? 404 : 400, e);
+  }
 });
 
 app.delete('/api/projects/:id', async (req, res) => {
   try {
     projectPath(req.params.id);
-    if (persistence.mode === 'neon-r2') { await sharing?.dropProject(projectOwner(res), req.params.id); await persistence.delete(req.params.id, projectOwner(res)); }
-    else await fs.rm(projectPath(req.params.id), { recursive: true, force: true });
+    if (persistence.mode === 'neon-r2') {
+      await sharing?.dropProject(projectOwner(res), req.params.id);
+      await persistence.delete(req.params.id, projectOwner(res));
+    } else await fs.rm(projectPath(req.params.id), { recursive: true, force: true });
     const key = resultKey(req.params.id, projectOwner(res));
-    RESULTS.delete(key); ARTIFACTS.delete(key); await workspaces.dropProject(`${key}:`);
+    RESULTS.delete(key);
+    ARTIFACTS.delete(key);
+    await workspaces.dropProject(`${key}:`);
     res.status(204).end();
-  } catch (e) { send(res, 400, e); }
+  } catch (e) {
+    send(res, 400, e);
+  }
 });
 
 app.get('/api/projects/:id/files', async (req, res) => {
-  try { res.json((await readProject(req.params.id, projectOwner(res))).files); } catch { send(res, 404, 'Project not found'); }
+  try {
+    res.json((await readProject(req.params.id, projectOwner(res))).files);
+  } catch {
+    send(res, 404, 'Project not found');
+  }
 });
 
 app.post('/api/projects/:id/files', async (req, res) => {
   try {
     const p = await readProject(req.params.id, projectOwner(res));
     const name = safeName(String(req.body.name ?? ''));
-    if (p.files.some(f => f.name === name)) return void send(res, 409, 'File already exists');
-    const file = { name, content: req.body.content ?? '', encoding: req.body.encoding === 'base64' ? 'base64' as const : undefined };
-    const result = await writeProject(req.params.id, { ...p, files: [...p.files, file] }, { replace: true }, projectOwner(res));
-    res.status(201).json(result.files.find(f => f.name === name));
-  } catch (e) { send(res, 400, e); }
+    if (p.files.some((f) => f.name === name)) return void send(res, 409, 'File already exists');
+    const file = {
+      name,
+      content: req.body.content ?? '',
+      encoding: req.body.encoding === 'base64' ? ('base64' as const) : undefined,
+    };
+    const result = await writeProject(
+      req.params.id,
+      { ...p, files: [...p.files, file] },
+      { replace: true },
+      projectOwner(res),
+    );
+    res.status(201).json(result.files.find((f) => f.name === name));
+  } catch (e) {
+    send(res, 400, e);
+  }
 });
 
 app.put('/api/projects/:id/files/:fileId', async (req, res) => {
   try {
     const p = await readProject(req.params.id, projectOwner(res));
     const name = safeName(decodeURIComponent(req.params.fileId));
-    if (!p.files.some(f => f.name === name)) return void send(res, 404, 'File not found');
-    const file = { name, content: req.body.content ?? '', encoding: req.body.encoding === 'base64' ? 'base64' as const : undefined };
-    await writeProject(req.params.id, { ...p, files: p.files.map(f => f.name === name ? file : f) }, { replace: true }, projectOwner(res));
+    if (!p.files.some((f) => f.name === name)) return void send(res, 404, 'File not found');
+    const file = {
+      name,
+      content: req.body.content ?? '',
+      encoding: req.body.encoding === 'base64' ? ('base64' as const) : undefined,
+    };
+    await writeProject(
+      req.params.id,
+      { ...p, files: p.files.map((f) => (f.name === name ? file : f)) },
+      { replace: true },
+      projectOwner(res),
+    );
     res.json({ name });
-  } catch (e) { send(res, 400, e); }
+  } catch (e) {
+    send(res, 400, e);
+  }
 });
 
 app.delete('/api/projects/:id/files/:fileId', async (req, res) => {
   try {
     const p = await readProject(req.params.id, projectOwner(res));
     const name = safeName(decodeURIComponent(req.params.fileId));
-    await writeProject(req.params.id, { ...p, files: p.files.filter(file => file.name !== name && !file.name.startsWith(`${name}/`)) }, { replace: true }, projectOwner(res));
+    await writeProject(
+      req.params.id,
+      { ...p, files: p.files.filter((file) => file.name !== name && !file.name.startsWith(`${name}/`)) },
+      { replace: true },
+      projectOwner(res),
+    );
     res.status(204).end();
-  } catch (e) { send(res, 400, e); }
+  } catch (e) {
+    send(res, 400, e);
+  }
 });
 
 app.post('/api/projects/:id/upload', upload.single('file'), async (req, res) => {
@@ -529,18 +867,30 @@ app.post('/api/projects/:id/upload', upload.single('file'), async (req, res) => 
       const rel = String(entry.path).slice(prefix.length);
       if (!rel) continue;
       const name = safeName(rel);
-      if (entry.type === 'Directory') { imported.push({ name: name.endsWith('/') ? name : `${name}/`, content: '' }); continue; }
+      if (entry.type === 'Directory') {
+        imported.push({ name: name.endsWith('/') ? name : `${name}/`, content: '' });
+        continue;
+      }
       const content = await entry.buffer();
       expandedBytes += content.length;
-      if (expandedBytes > MAX_PROJECT_BYTES) return void send(res, 413, `ZIP expands beyond the ${Math.floor(MAX_PROJECT_BYTES / 1024 / 1024)} MB project limit.`);
+      if (expandedBytes > MAX_PROJECT_BYTES)
+        return void send(
+          res,
+          413,
+          `ZIP expands beyond the ${Math.floor(MAX_PROJECT_BYTES / 1024 / 1024)} MB project limit.`,
+        );
       const text = BINARY.test(name) ? null : decodeUtf8(content);
-      imported.push(text === null ? { name, content: content.toString('base64'), encoding: 'base64' } : { name, content: text });
+      imported.push(
+        text === null ? { name, content: content.toString('base64'), encoding: 'base64' } : { name, content: text },
+      );
     }
     validateFiles(imported);
     const current = await readProject(projectId, owner);
     const updated = await writeProject(projectId, { ...current, files: imported }, { replace: true }, owner);
     res.json(updated);
-  } catch (e) { send(res, 400, `Unable to import ZIP: ${e instanceof Error ? e.message : String(e)}`); }
+  } catch (e) {
+    send(res, 400, `Unable to import ZIP: ${e instanceof Error ? e.message : String(e)}`);
+  }
 });
 
 /**
@@ -550,23 +900,40 @@ app.post('/api/projects/:id/upload', upload.single('file'), async (req, res) => 
 app.post('/api/projects/:id/share', async (req, res) => {
   try {
     projectPath(String(req.params.id));
-    const files = Array.isArray(req.body.files) ? req.body.files as StoredFile[] : (await readProject(String(req.params.id), projectOwner(res))).files;
+    const files = Array.isArray(req.body.files)
+      ? (req.body.files as StoredFile[])
+      : (await readProject(String(req.params.id), projectOwner(res))).files;
     validateFiles(files);
-    const snapshot = { name: String(req.body.name ?? 'Shared project').slice(0, 200), mainFile: typeof req.body.mainFile === 'string' ? safeName(req.body.mainFile) : 'main.tex', files, created: Date.now() };
+    const snapshot = {
+      name: String(req.body.name ?? 'Shared project').slice(0, 200),
+      mainFile: typeof req.body.mainFile === 'string' ? safeName(req.body.mainFile) : 'main.tex',
+      files,
+      created: Date.now(),
+    };
     const shareId = crypto.randomUUID();
     if (persistence.mode === 'neon-r2') await persistence.putShare(shareId, snapshot);
-    else { await fs.mkdir(path.join(DATA, 'shares'), { recursive: true }); await fs.writeFile(path.join(DATA, 'shares', `${shareId}.json`), JSON.stringify(snapshot)); }
+    else {
+      await fs.mkdir(path.join(DATA, 'shares'), { recursive: true });
+      await fs.writeFile(path.join(DATA, 'shares', `${shareId}.json`), JSON.stringify(snapshot));
+    }
     res.status(201).json({ id: shareId });
-  } catch (e) { send(res, 400, e); }
+  } catch (e) {
+    send(res, 400, e);
+  }
 });
 
 app.get('/api/shares/:shareId', async (req, res) => {
   try {
     const shareId = String(req.params.shareId);
     if (!/^[0-9a-f-]{36}$/i.test(shareId)) return void send(res, 404, 'This link is invalid.');
-    const snapshot = persistence.mode === 'neon-r2' ? await persistence.getShare(shareId) : JSON.parse(await fs.readFile(path.join(DATA, 'shares', `${shareId}.json`), 'utf8'));
+    const snapshot =
+      persistence.mode === 'neon-r2'
+        ? await persistence.getShare(shareId)
+        : JSON.parse(await fs.readFile(path.join(DATA, 'shares', `${shareId}.json`), 'utf8'));
     res.json(snapshot);
-  } catch { send(res, 404, 'This shared project no longer exists.'); }
+  } catch {
+    send(res, 404, 'This shared project no longer exists.');
+  }
 });
 
 app.get('/api/projects/:id/download', async (req, res) => {
@@ -583,7 +950,9 @@ app.get('/api/projects/:id/download', async (req, res) => {
       else archive.append(toBuffer(file), { name });
     }
     await archive.finalize();
-  } catch (e) { send(res, 404, e); }
+  } catch (e) {
+    send(res, 404, e);
+  }
 });
 
 /** One compile at a time on the server (Render's free instance has 512 MB); others wait their turn. */
@@ -591,14 +960,35 @@ const compileQueue: (() => void)[] = [];
 let compileBusy = false;
 function compileSlot(signal: AbortSignal, waitMs = 90_000) {
   return new Promise<() => void>((resolve, reject) => {
-    const release = () => { compileBusy = false; compileQueue.shift()?.(); };
+    const release = () => {
+      compileBusy = false;
+      compileQueue.shift()?.();
+    };
     // A request the browser already abandoned must not take a turn (and delay everyone behind it).
     if (signal.aborted) return reject(new Error('cancelled'));
-    if (!compileBusy) { compileBusy = true; return resolve(release); }
-    const timer = setTimeout(() => { remove(); reject(new Error('The compile server is busy. Try again in a moment.')); }, waitMs);
-    const start = () => { clearTimeout(timer); signal.removeEventListener('abort', cancel); compileBusy = true; resolve(release); };
-    const remove = () => { const i = compileQueue.indexOf(start); if (i >= 0) compileQueue.splice(i, 1); };
-    const cancel = () => { clearTimeout(timer); remove(); reject(new Error('cancelled')); };
+    if (!compileBusy) {
+      compileBusy = true;
+      return resolve(release);
+    }
+    const timer = setTimeout(() => {
+      remove();
+      reject(new Error('The compile server is busy. Try again in a moment.'));
+    }, waitMs);
+    const start = () => {
+      clearTimeout(timer);
+      signal.removeEventListener('abort', cancel);
+      compileBusy = true;
+      resolve(release);
+    };
+    const remove = () => {
+      const i = compileQueue.indexOf(start);
+      if (i >= 0) compileQueue.splice(i, 1);
+    };
+    const cancel = () => {
+      clearTimeout(timer);
+      remove();
+      reject(new Error('cancelled'));
+    };
     signal.addEventListener('abort', cancel, { once: true });
     compileQueue.push(start);
   });
@@ -624,7 +1014,11 @@ async function chownForSandbox(root: string, names: string[]) {
   const seen = new Set<string>();
   for (const name of names) {
     let rel = name.replace(/\/$/, '');
-    while (rel && rel !== '.' && !seen.has(rel)) { seen.add(rel); await fs.chown(path.join(root, rel), 65534, 65534).catch(() => undefined); rel = path.posix.dirname(rel); }
+    while (rel && rel !== '.' && !seen.has(rel)) {
+      seen.add(rel);
+      await fs.chown(path.join(root, rel), 65534, 65534).catch(() => undefined);
+      rel = path.posix.dirname(rel);
+    }
   }
 }
 
@@ -637,9 +1031,13 @@ async function chownForSandbox(root: string, names: string[]) {
 app.post('/api/projects/:id/compile', async (req, res) => {
   const started = Date.now();
   const timings: Record<string, number> = {};
-  const mark = (name: string, since: number) => { timings[name] = Date.now() - since; };
+  const mark = (name: string, since: number) => {
+    timings[name] = Date.now() - since;
+  };
   const closed = new AbortController();
-  res.on('close', () => { if (!res.writableFinished) closed.abort(); });
+  res.on('close', () => {
+    if (!res.writableFinished) closed.abort();
+  });
   let release: (() => void) | null = null;
   let key = '';
   let finished: () => void = () => undefined;
@@ -652,24 +1050,43 @@ app.post('/api/projects/:id/compile', async (req, res) => {
     projectPath(id);
     key = resultKey(id, owner);
     // Viewers compile the saved project: files they send are ignored, so they can't change the shared PDF.
-    const files: SourceFile[] = Array.isArray(req.body.files) && res.locals.role !== 'viewer' ? req.body.files : (await readProject(id, owner)).files;
-    validateFiles(files.filter(f => f.content !== undefined) as StoredFile[]);
+    const files: SourceFile[] =
+      Array.isArray(req.body.files) && res.locals.role !== 'viewer'
+        ? req.body.files
+        : (await readProject(id, owner)).files;
+    validateFiles(files.filter((f) => f.content !== undefined) as StoredFile[]);
     const engine = String(req.body.engine ?? 'pdflatex');
     if (!ENGINES[engine]) return void send(res, 400, 'Unsupported compiler');
     const mainFile = safeName(String(req.body.mainFile ?? 'main.tex'));
-    const timeoutMs = Math.max(5_000, Math.min(MAX_COMPILE_TIMEOUT_MS, Number(req.body.timeoutMs) || COMPILE_TIMEOUT_MS));
+    const timeoutMs = Math.max(
+      5_000,
+      Math.min(MAX_COMPILE_TIMEOUT_MS, Number(req.body.timeoutMs) || COMPILE_TIMEOUT_MS),
+    );
     const draft = Boolean(req.body.draft);
     const stopOnFirstError = req.body.stopOnFirstError !== false;
     if (!mainFile.endsWith('.tex')) return void send(res, 400, 'Main file must be a .tex file');
-    if (!files.some(f => f.name === mainFile)) return void send(res, 400, `Main file “${mainFile}” not found in the project`);
+    if (!files.some((f) => f.name === mainFile))
+      return void send(res, 400, `Main file “${mainFile}” not found in the project`);
 
     // A newer compile of the same project replaces a stale one that is still running or waiting.
     const previous = RUNNING.get(key);
-    if (previous) { previous.cancel(); await previous.done.catch(() => undefined); }
+    if (previous) {
+      previous.cancel();
+      await previous.done.catch(() => undefined);
+    }
     if (closed.signal.aborted) return; // abandoned while the stale compile was stopping
     let cancelRun: () => void = () => undefined;
-    const done = new Promise<void>(resolve => { finished = resolve; });
-    entry = { cancel: () => { superseded = true; closed.abort(); cancelRun(); }, done };
+    const done = new Promise<void>((resolve) => {
+      finished = resolve;
+    });
+    entry = {
+      cancel: () => {
+        superseded = true;
+        closed.abort();
+        cancelRun();
+      },
+      done,
+    };
     RUNNING.set(key, entry);
 
     let t = Date.now();
@@ -680,8 +1097,12 @@ app.post('/api/projects/:id/compile', async (req, res) => {
     t = Date.now();
     const ws = await workspaces.acquire(`${key}:${engine}`);
     const sync = await syncWorkspace(ws, files, safeName);
-    if (sync.missing.length) return void res.status(409).json({ error: 'Some files need to be sent again.', missing: sync.missing, session: BOOT_ID });
-    for (const dir of ['tmp', 'texmf-var', 'texmf-config', 'font-cache']) await fs.mkdir(path.join(ws.dir, dir), { recursive: true });
+    if (sync.missing.length)
+      return void res
+        .status(409)
+        .json({ error: 'Some files need to be sent again.', missing: sync.missing, session: BOOT_ID });
+    for (const dir of ['tmp', 'texmf-var', 'texmf-config', 'font-cache'])
+      await fs.mkdir(path.join(ws.dir, dir), { recursive: true });
     if (COMPILE_MODE === 'native') {
       if (ws.fresh) await giveCompileFilesToSandboxUser(ws.dir);
       else await chownForSandbox(ws.dir, sync.written);
@@ -689,15 +1110,28 @@ app.post('/api/projects/:id/compile', async (req, res) => {
     mark('sync', t);
 
     const base = mainFile.replace(/\.tex$/i, '');
-    const runTex = (argv: string[]) => runTool(ws.dir, argv, timeoutMs, kill => { cancelRun = kill; });
+    const runTex = (argv: string[]) =>
+      runTool(ws.dir, argv, timeoutMs, (kill) => {
+        cancelRun = kill;
+      });
     const mainSource = await fs.readFile(path.join(ws.dir, mainFile), 'utf8').catch(() => '');
     const fmtKey = engine === 'pdflatex' && !draft ? preambleKey(ws, mainSource) : '';
     let format = fmtKey && ws.format?.key === fmtKey && ws.format.ok ? PREAMBLE_FORMAT : undefined;
     // Fast path: in a warm folder whose last compile succeeded, one direct engine pass is usually enough. Fall back
     // to latexmk when references, the table of contents or the bibliography may need more passes.
-    const bibChanged = [...sync.written, ...sync.removed].some(n => /\.(bib|bst|bbx|cbx|bcf)$/i.test(n));
+    const bibChanged = [...sync.written, ...sync.removed].some((n) => /\.(bib|bst|bbx|cbx|bcf)$/i.test(n));
     const fast = !ws.fresh && !draft && !bibChanged && ws.last?.ok === true && ws.last.mainFile === mainFile;
-    const auxState = async () => (await Promise.all(['aux', 'toc', 'lof', 'lot', 'out', 'nav', 'snm'].map(ext => fs.readFile(path.join(ws.dir, `${base}.${ext}`)).then(b => crypto.createHash('sha1').update(b).digest('hex'), () => '-')))).join(',');
+    const auxState = async () =>
+      (
+        await Promise.all(
+          ['aux', 'toc', 'lof', 'lot', 'out', 'nav', 'snm'].map((ext) =>
+            fs.readFile(path.join(ws.dir, `${base}.${ext}`)).then(
+              (b) => crypto.createHash('sha1').update(b).digest('hex'),
+              () => '-',
+            ),
+          ),
+        )
+      ).join(',');
     let output = '';
     let exitError: any = null;
     let passes = '';
@@ -709,9 +1143,19 @@ app.post('/api/projects/:id/compile', async (req, res) => {
         r = await runTex([engine, ...directArgs(engine, mainFile, stopOnFirstError, format)]);
         passes = 'direct';
         const log = await fs.readFile(path.join(ws.dir, base + '.log'), 'utf8').catch(() => '');
-        const more = r.code === 0 && !r.killed && (before !== await auxState() || /Rerun to get|Label\(s\) may have changed|Please \(re\)run|run BibTeX|run Biber|Rerun LaTeX/i.test(log));
-        if (more && !closed.signal.aborted) { r = await runTex(['latexmk', ...latexmkArgs(engine, mainFile, stopOnFirstError, draft, format)]); passes += '+latexmk'; }
-      } else { r = await runTex(['latexmk', ...latexmkArgs(engine, mainFile, stopOnFirstError, draft, format)]); passes = 'latexmk'; }
+        const more =
+          r.code === 0 &&
+          !r.killed &&
+          (before !== (await auxState()) ||
+            /Rerun to get|Label\(s\) may have changed|Please \(re\)run|run BibTeX|run Biber|Rerun LaTeX/i.test(log));
+        if (more && !closed.signal.aborted) {
+          r = await runTex(['latexmk', ...latexmkArgs(engine, mainFile, stopOnFirstError, draft, format)]);
+          passes += '+latexmk';
+        }
+      } else {
+        r = await runTex(['latexmk', ...latexmkArgs(engine, mainFile, stopOnFirstError, draft, format)]);
+        passes = 'latexmk';
+      }
       // A cached preamble that the document disagrees with must never cost a working compile: retry without it.
       if (format && (r.code !== 0 || r.killed) && !r.killed && !closed.signal.aborted) {
         ws.format = { key: fmtKey, ok: false };
@@ -720,9 +1164,17 @@ app.post('/api/projects/:id/compile', async (req, res) => {
         passes += '+retry';
       }
       output = r.stdout + '\n' + r.stderr;
-      if (r.code !== 0 || r.killed) exitError = { code: r.code, killed: r.killed, reason: r.reason, stdout: r.stdout, stderr: r.stderr };
+      if (r.code !== 0 || r.killed)
+        exitError = { code: r.code, killed: r.killed, reason: r.reason, stdout: r.stdout, stderr: r.stderr };
     } catch (e: any) {
-      if (e?.code === 'ENOENT') return void send(res, COMPILE_MODE === 'docker' ? 503 : 503, COMPILE_MODE === 'docker' ? 'Docker isn’t running. Start Docker Desktop, then recompile.' : 'The LaTeX tools are not installed in this service.');
+      if (e?.code === 'ENOENT')
+        return void send(
+          res,
+          COMPILE_MODE === 'docker' ? 503 : 503,
+          COMPILE_MODE === 'docker'
+            ? 'Docker isn’t running. Start Docker Desktop, then recompile.'
+            : 'The LaTeX tools are not installed in this service.',
+        );
       throw e;
     }
     ws.last = { ok: !exitError, mainFile };
@@ -735,16 +1187,26 @@ app.post('/api/projects/:id/compile', async (req, res) => {
     if (closed.signal.aborted) return; // superseded or the browser left; answered in finally
 
     const stderr = String(exitError?.stderr ?? '');
-    if (COMPILE_MODE === 'docker' && exitError && (/Cannot connect to the Docker daemon|failed to connect to the docker API|docker.sock/i.test(stderr) || exitError.code === 'ENOENT')) {
+    if (
+      COMPILE_MODE === 'docker' &&
+      exitError &&
+      (/Cannot connect to the Docker daemon|failed to connect to the docker API|docker.sock/i.test(stderr) ||
+        exitError.code === 'ENOENT')
+    ) {
       return void send(res, 503, 'Docker isn’t running. Start Docker Desktop, then recompile.');
     }
     if (exitError && /Unable to find image|No such image|pull access denied/i.test(stderr)) {
-      return void send(res, 503, `The LaTeX compiler image (${IMAGE}) isn’t built. Run “npm run compiler:build” once, then recompile.`);
+      return void send(
+        res,
+        503,
+        `The LaTeX compiler image (${IMAGE}) isn’t built. Run “npm run compiler:build” once, then recompile.`,
+      );
     }
     if (exitError?.killed) {
-      output += exitError.reason === 'output_limit'
-        ? '\nCompilation stopped because the output exceeded the 4 MB limit.'
-        : `\nCompilation timed out after ${Math.round(timeoutMs / 1000)} seconds.`;
+      output +=
+        exitError.reason === 'output_limit'
+          ? '\nCompilation stopped because the output exceeded the 4 MB limit.'
+          : `\nCompilation timed out after ${Math.round(timeoutMs / 1000)} seconds.`;
       // A run killed half way can leave broken auxiliary files; start clean next time.
       await workspaces.drop(ws.key);
     }
@@ -756,18 +1218,50 @@ app.post('/api/projects/:id/compile', async (req, res) => {
     const pdf = exitError?.killed ? null : await fs.readFile(path.join(ws.dir, base + '.pdf')).catch(() => null);
     const success = !exitError && !!pdf;
     if (!success && !parsed.errors.length) {
-      parsed.errors.push({ file: mainFile, line: null, message: exitError?.reason === 'output_limit' ? 'Compiler output exceeded the 4 MB limit.' : exitError?.killed ? 'Compilation timed out.' : 'Compilation failed. See the full log for details.' });
+      parsed.errors.push({
+        file: mainFile,
+        line: null,
+        message:
+          exitError?.reason === 'output_limit'
+            ? 'Compiler output exceeded the 4 MB limit.'
+            : exitError?.killed
+              ? 'Compilation timed out.'
+              : 'Compilation failed. See the full log for details.',
+      });
     }
-    const log = [texLog || output, blg && `\n──── BibTeX (${base}.blg) ────\n${blg}`, texLog && `\n──── latexmk ────\n${output}`].filter(Boolean).join('\n');
-    const result: CompileResult = { success, log, errors: parsed.errors, warnings: parsed.warnings, durationMs: Date.now() - started };
+    const log = [
+      texLog || output,
+      blg && `\n──── BibTeX (${base}.blg) ────\n${blg}`,
+      texLog && `\n──── latexmk ────\n${output}`,
+    ]
+      .filter(Boolean)
+      .join('\n');
+    const result: CompileResult = {
+      success,
+      log,
+      errors: parsed.errors,
+      warnings: parsed.warnings,
+      durationMs: Date.now() - started,
+    };
     RESULTS.set(key, result);
-    const synctex = success && !draft ? await fs.readFile(path.join(ws.dir, base + '.synctex.gz')).catch(() => null) : null;
+    const synctex =
+      success && !draft ? await fs.readFile(path.join(ws.dir, base + '.synctex.gz')).catch(() => null) : null;
     if (pdf && success && !draft) rememberArtifacts(key, { pdf, synctex, workspace: ws.key });
     mark('read', t);
     timings.total = Date.now() - started;
-    res.setHeader('Server-Timing', Object.entries(timings).map(([name, ms]) => `${name};dur=${ms}`).join(', '));
+    res.setHeader(
+      'Server-Timing',
+      Object.entries(timings)
+        .map(([name, ms]) => `${name};dur=${ms}`)
+        .join(', '),
+    );
     // The PDF travels with the result so the preview needs no second request.
-    res.json({ ...result, session: BOOT_ID, timings, ...(pdf && success && pdf.length <= 8 * 1024 * 1024 ? { pdf: pdf.toString('base64') } : {}) });
+    res.json({
+      ...result,
+      session: BOOT_ID,
+      timings,
+      ...(pdf && success && pdf.length <= 8 * 1024 * 1024 ? { pdf: pdf.toString('base64') } : {}),
+    });
     io.to(resultKey(id, owner)).emit('compile:complete', { success });
     io.to(collabChannel(resultKey(id, owner))).emit('collab:compiled', { success });
 
@@ -775,25 +1269,48 @@ app.post('/api/projects/:id/compile', async (req, res) => {
     // compile on Render. SyncTeX normally reads the warm folder; when it has to rebuild from storage (after a
     // process restart) it first waits for a save still in flight for this project (see PERSISTING).
     if (pdf && success && !draft) {
-      const sources = files.every(file => file.content !== undefined) ? files : null;
+      const sources = files.every((file) => file.content !== undefined) ? files : null;
       const saving = (async () => {
         // A new browser project can compile before its debounced autosave reaches the API. Keep the exact
         // successful source snapshot with the PDF so a cold instance can reconstruct a SyncTeX workspace.
-        if (sources) await writeProject(id, { name: String(req.body.name ?? 'Untitled Project'), mainFile, files: sources.map(file => ({ name: file.name, content: file.content ?? '', ...(file.encoding ? { encoding: file.encoding } : {}) })) }, { replace: true }, owner);
+        if (sources)
+          await writeProject(
+            id,
+            {
+              name: String(req.body.name ?? 'Untitled Project'),
+              mainFile,
+              files: sources.map((file) => ({
+                name: file.name,
+                content: file.content ?? '',
+                ...(file.encoding ? { encoding: file.encoding } : {}),
+              })),
+            },
+            { replace: true },
+            owner,
+          );
         await storeArtifacts(id, owner, pdf, synctex);
-      })().catch(error => console.error('Saving the compile source, PDF and SyncTeX files failed:', error));
+      })().catch((error) => console.error('Saving the compile source, PDF and SyncTeX files failed:', error));
       PERSISTING.set(key, saving);
-      void saving.finally(() => { if (PERSISTING.get(key) === saving) PERSISTING.delete(key); });
+      void saving.finally(() => {
+        if (PERSISTING.get(key) === saving) PERSISTING.delete(key);
+      });
     }
 
-    if (success && fmtKey && ws.format?.key !== fmtKey) void buildPreambleFormat(ws, mainFile, fmtKey).catch(error => console.error('Building the preamble format failed:', error));
+    if (success && fmtKey && ws.format?.key !== fmtKey)
+      void buildPreambleFormat(ws, mainFile, fmtKey).catch((error) =>
+        console.error('Building the preamble format failed:', error),
+      );
   } catch (e) {
     if (closed.signal.aborted || (e instanceof Error && e.message === 'cancelled')) return; // answered in finally
     send(res, e instanceof Error && /busy/.test(e.message) ? 429 : 400, e);
   } finally {
-    if (killedWorkspace) { await clearBuildProducts(killedWorkspace).catch(() => undefined); killedWorkspace.last = undefined; }
+    if (killedWorkspace) {
+      await clearBuildProducts(killedWorkspace).catch(() => undefined);
+      killedWorkspace.last = undefined;
+    }
     // A compile replaced by a newer one still gets an answer, so the request doesn't hang until the proxy times out.
-    if (superseded && !res.headersSent && !res.writableEnded) res.status(410).json({ error: 'Replaced by a newer compile.', superseded: true });
+    if (superseded && !res.headersSent && !res.writableEnded)
+      res.status(410).json({ error: 'Replaced by a newer compile.', superseded: true });
     release?.();
     finished();
     // Only clear our own entry; a newer compile may already have replaced it.
@@ -803,38 +1320,89 @@ app.post('/api/projects/:id/compile', async (req, res) => {
 
 /** Removes auxiliary build files (not sources, the PDF or the cached preamble) from a warm folder. */
 async function clearBuildProducts(ws: Workspace) {
-  const AUX = /\.(aux|toc|lof|lot|out|nav|snm|vrb|fls|fdb_latexmk|bbl|blg|bcf|run\.xml|log|synctex\.gz|synctex\(busy\))$/i;
+  const AUX =
+    /\.(aux|toc|lof|lot|out|nav|snm|vrb|fls|fdb_latexmk|bbl|blg|bcf|run\.xml|log|synctex\.gz|synctex\(busy\))$/i;
   const walk = async (rel: string): Promise<void> => {
     for (const entry of await fs.readdir(path.join(ws.dir, rel), { withFileTypes: true }).catch(() => [])) {
       const name = path.posix.join(rel, entry.name);
-      if (entry.isDirectory()) { if (!['tmp', 'texmf-var', 'texmf-config', 'font-cache'].includes(name)) await walk(name); }
-      else if (AUX.test(entry.name) && !ws.hashes.has(name)) await fs.rm(path.join(ws.dir, name), { force: true });
+      if (entry.isDirectory()) {
+        if (!['tmp', 'texmf-var', 'texmf-config', 'font-cache'].includes(name)) await walk(name);
+      } else if (AUX.test(entry.name) && !ws.hashes.has(name)) await fs.rm(path.join(ws.dir, name), { force: true });
     }
   };
   await walk('');
 }
 
-type TexRun = { stdout: string; stderr: string; killed: boolean; reason?: 'timeout' | 'output_limit'; code: number | null };
+type TexRun = {
+  stdout: string;
+  stderr: string;
+  killed: boolean;
+  reason?: 'timeout' | 'output_limit';
+  code: number | null;
+};
 
 /** Runs a TeX tool in the build folder: as the sandbox user natively, or in a throwaway container with Docker. */
-async function runTool(dir: string, argv: string[], timeoutMs: number, onStart?: (kill: () => void) => void): Promise<TexRun> {
+async function runTool(
+  dir: string,
+  argv: string[],
+  timeoutMs: number,
+  onStart?: (kill: () => void) => void,
+): Promise<TexRun> {
   if (COMPILE_MODE === 'native') return runNativeCompiler(dir, argv, timeoutMs, onStart);
   const container = `paperdesk-compile-${crypto.randomUUID()}`;
-  const args = ['run', '--rm', '--name', container, '--network=none', '--memory=1g', '--cpus=2', '--pids-limit=256',
-    '--security-opt=no-new-privileges', '--read-only', '--tmpfs', '/tmp:rw,nosuid,exec,size=256m',
+  const args = [
+    'run',
+    '--rm',
+    '--name',
+    container,
+    '--network=none',
+    '--memory=1g',
+    '--cpus=2',
+    '--pids-limit=256',
+    '--security-opt=no-new-privileges',
+    '--read-only',
+    '--tmpfs',
+    '/tmp:rw,nosuid,exec,size=256m',
     // Run as the host user so output files in the bind mount aren't owned by root on Linux hosts.
     ...(process.getuid && process.getgid ? ['--user', `${process.getuid()}:${process.getgid()}`] : []),
-    '-e', 'HOME=/tmp', '-e', 'TEXMFVAR=/tmp/texmf-var', '-e', 'TEXMFCONFIG=/tmp/texmf-config',
-    '-v', `${dir}:/work:rw`, '-w', '/work', IMAGE, ...argv];
+    '-e',
+    'HOME=/tmp',
+    '-e',
+    'TEXMFVAR=/tmp/texmf-var',
+    '-e',
+    'TEXMFCONFIG=/tmp/texmf-config',
+    '-v',
+    `${dir}:/work:rw`,
+    '-w',
+    '/work',
+    IMAGE,
+    ...argv,
+  ];
   let killed = false;
-  onStart?.(() => { killed = true; void exec('docker', ['rm', '-f', container]).catch(() => undefined); });
+  onStart?.(() => {
+    killed = true;
+    void exec('docker', ['rm', '-f', container]).catch(() => undefined);
+  });
   try {
     const r = await exec('docker', args, { timeout: timeoutMs, maxBuffer: 8 * 1024 * 1024 });
     return { stdout: r.stdout, stderr: r.stderr, killed, code: 0 };
   } catch (e: any) {
-    if (e?.killed || e?.signal) { killed = true; await exec('docker', ['rm', '-f', container]).catch(() => undefined); }
-    if (e?.code === 'ENOENT' || /Cannot connect to the Docker daemon|failed to connect to the docker API|docker.sock/i.test(String(e?.stderr))) throw Object.assign(new Error('docker'), { code: 'ENOENT' });
-    return { stdout: String(e?.stdout ?? ''), stderr: String(e?.stderr ?? ''), killed, reason: killed ? 'timeout' : undefined, code: typeof e?.code === 'number' ? e.code : 1 };
+    if (e?.killed || e?.signal) {
+      killed = true;
+      await exec('docker', ['rm', '-f', container]).catch(() => undefined);
+    }
+    if (
+      e?.code === 'ENOENT' ||
+      /Cannot connect to the Docker daemon|failed to connect to the docker API|docker.sock/i.test(String(e?.stderr))
+    )
+      throw Object.assign(new Error('docker'), { code: 'ENOENT' });
+    return {
+      stdout: String(e?.stdout ?? ''),
+      stderr: String(e?.stderr ?? ''),
+      killed,
+      reason: killed ? 'timeout' : undefined,
+      code: typeof e?.code === 'number' ? e.code : 1,
+    };
   }
 }
 
@@ -848,10 +1416,28 @@ async function buildPreambleFormat(ws: Workspace, mainFile: string, key: string)
   if (!release) return;
   try {
     if (workspaces.peek(ws.key) !== ws || ws.format?.key === key) return;
-    const r = await runTool(ws.dir, ['pdftex', '-ini', '-interaction=nonstopmode', '-halt-on-error', `-jobname=${PREAMBLE_FORMAT}`, '&pdflatex', 'mylatexformat.ltx', mainFile], 60_000);
-    const built = await fs.access(path.join(ws.dir, `${PREAMBLE_FORMAT}.fmt`)).then(() => true, () => false);
+    const r = await runTool(
+      ws.dir,
+      [
+        'pdftex',
+        '-ini',
+        '-interaction=nonstopmode',
+        '-halt-on-error',
+        `-jobname=${PREAMBLE_FORMAT}`,
+        '&pdflatex',
+        'mylatexformat.ltx',
+        mainFile,
+      ],
+      60_000,
+    );
+    const built = await fs.access(path.join(ws.dir, `${PREAMBLE_FORMAT}.fmt`)).then(
+      () => true,
+      () => false,
+    );
     ws.format = { key, ok: r.code === 0 && !r.killed && built };
-  } finally { release(); }
+  } finally {
+    release();
+  }
 }
 
 async function storeArtifacts(id: string, owner: string, pdf: Buffer, synctex: Buffer | null) {
@@ -869,16 +1455,24 @@ app.get('/api/projects/:id/pdf', async (req, res) => {
   try {
     projectPath(req.params.id);
     const cached = ARTIFACTS.get(resultKey(req.params.id, projectOwner(res)));
-    const pdf = cached?.pdf ?? (persistence.mode === 'neon-r2' ? await persistence.getArtifact(req.params.id, projectOwner(res), 'compiled.pdf') : await fs.readFile(path.join(projectPath(req.params.id), 'compiled.pdf')));
+    const pdf =
+      cached?.pdf ??
+      (persistence.mode === 'neon-r2'
+        ? await persistence.getArtifact(req.params.id, projectOwner(res), 'compiled.pdf')
+        : await fs.readFile(path.join(projectPath(req.params.id), 'compiled.pdf')));
     res.type('application/pdf').send(pdf);
-  } catch { send(res, 404, 'No compiled PDF exists yet'); }
+  } catch {
+    send(res, 404, 'No compiled PDF exists yet');
+  }
 });
 
 app.post('/api/projects/:id/synctex', async (req, res) => {
   let temporaryRoot = '';
   let syncLockKey = '';
   let endTurn: () => void = () => undefined;
-  const turn = new Promise<void>(resolve => { endTurn = resolve; });
+  const turn = new Promise<void>((resolve) => {
+    endTurn = resolve;
+  });
   let queued: Promise<void> | null = null;
   try {
     const id = String(req.params.id);
@@ -898,12 +1492,24 @@ app.post('/api/projects/:id/synctex', async (req, res) => {
     let sourceFile = '';
     if (mode === 'forward') {
       sourceFile = safeName(String(req.body.file ?? ''));
-      const line = Number(req.body.line), column = Number(req.body.column ?? 1);
-      if (!Number.isInteger(line) || line < 1 || !Number.isInteger(column) || column < 1) return void send(res, 400, 'A valid source line and column are required');
+      const line = Number(req.body.line),
+        column = Number(req.body.column ?? 1);
+      if (!Number.isInteger(line) || line < 1 || !Number.isInteger(column) || column < 1)
+        return void send(res, 400, 'A valid source line and column are required');
       syncCoordinates = `${line}:${column}`;
     } else if (mode === 'inverse') {
-      const page = Number(req.body.page), x = Number(req.body.x), y = Number(req.body.y);
-      if (!Number.isInteger(page) || page < 1 || !Number.isFinite(x) || !Number.isFinite(y) || Math.abs(x) > 100_000 || Math.abs(y) > 100_000) return void send(res, 400, 'A valid PDF page and position are required');
+      const page = Number(req.body.page),
+        x = Number(req.body.x),
+        y = Number(req.body.y);
+      if (
+        !Number.isInteger(page) ||
+        page < 1 ||
+        !Number.isFinite(x) ||
+        !Number.isFinite(y) ||
+        Math.abs(x) > 100_000 ||
+        Math.abs(y) > 100_000
+      )
+        return void send(res, 400, 'A valid PDF page and position are required');
       syncCoordinates = `${page}:${x}:${y}`;
     } else return void send(res, 400, 'SyncTeX mode must be forward or inverse');
 
@@ -912,12 +1518,20 @@ app.post('/api/projects/:id/synctex', async (req, res) => {
     await RUNNING.get(syncLockKey)?.done.catch(() => undefined);
     // Prefer the folder of the last answered compile, then any other warm folder of this project that has
     // SyncTeX data (a compile whose answer the browser abandoned still leaves a usable folder behind).
-    const hasSyncData = (dir: string) => fs.access(path.join(dir, pdfFile.replace(/\.pdf$/i, '.synctex.gz'))).then(() => true, () => false);
+    const hasSyncData = (dir: string) =>
+      fs.access(path.join(dir, pdfFile.replace(/\.pdf$/i, '.synctex.gz'))).then(
+        () => true,
+        () => false,
+      );
     const cached = ARTIFACTS.get(syncLockKey);
     let warm = cached ? workspaces.peek(cached.workspace) : undefined;
-    if (!warm || !await hasSyncData(warm.dir)) {
+    if (!warm || !(await hasSyncData(warm.dir))) {
       warm = undefined;
-      for (const candidate of workspaces.forProject(`${syncLockKey}:`)) if (await hasSyncData(candidate.dir)) { warm = candidate; break; }
+      for (const candidate of workspaces.forProject(`${syncLockKey}:`))
+        if (await hasSyncData(candidate.dir)) {
+          warm = candidate;
+          break;
+        }
     }
     const warmReady = !!warm;
     // Rebuilding from storage: make sure the latest compile's save has finished first.
@@ -928,17 +1542,23 @@ app.post('/api/projects/:id/synctex', async (req, res) => {
       temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'paperdesk-sync-'));
       syncRoot = temporaryRoot;
       for (const file of project.files) {
-        const name = safeName(file.name), target = path.join(syncRoot, name);
+        const name = safeName(file.name),
+          target = path.join(syncRoot, name);
         if (file.name.endsWith('/')) await fs.mkdir(target, { recursive: true });
-        else { await fs.mkdir(path.dirname(target), { recursive: true }); await fs.writeFile(target, toBuffer(file)); }
+        else {
+          await fs.mkdir(path.dirname(target), { recursive: true });
+          await fs.writeFile(target, toBuffer(file));
+        }
       }
-      const pdf = persistence.mode === 'neon-r2'
-        ? await persistence.getArtifact(id, owner, 'compiled.pdf')
-        : await fs.readFile(path.join(projectPath(id), 'compiled.pdf'));
+      const pdf =
+        persistence.mode === 'neon-r2'
+          ? await persistence.getArtifact(id, owner, 'compiled.pdf')
+          : await fs.readFile(path.join(projectPath(id), 'compiled.pdf'));
       const syncFile = pdfFile.replace(/\.pdf$/i, '.synctex.gz');
-      const synctex = persistence.mode === 'neon-r2'
-        ? await persistence.getArtifact(id, owner, 'synctex.gz')
-        : await fs.readFile(path.join(projectPath(id), 'synctex', syncFile));
+      const synctex =
+        persistence.mode === 'neon-r2'
+          ? await persistence.getArtifact(id, owner, 'synctex.gz')
+          : await fs.readFile(path.join(projectPath(id), 'synctex', syncFile));
       await fs.mkdir(path.dirname(path.join(syncRoot, pdfFile)), { recursive: true });
       await fs.writeFile(path.join(syncRoot, pdfFile), pdf);
       await fs.writeFile(path.join(syncRoot, syncFile), synctex);
@@ -947,9 +1567,13 @@ app.post('/api/projects/:id/synctex', async (req, res) => {
       temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'paperdesk-sync-'));
       syncRoot = temporaryRoot;
       for (const file of project.files) {
-        const name = safeName(file.name), target = path.join(syncRoot, name);
+        const name = safeName(file.name),
+          target = path.join(syncRoot, name);
         if (file.name.endsWith('/')) await fs.mkdir(target, { recursive: true });
-        else { await fs.mkdir(path.dirname(target), { recursive: true }); await fs.writeFile(target, toBuffer(file)); }
+        else {
+          await fs.mkdir(path.dirname(target), { recursive: true });
+          await fs.writeFile(target, toBuffer(file));
+        }
       }
       const pdf = await persistence.getArtifact(id, owner, 'compiled.pdf');
       const synctex = await persistence.getArtifact(id, owner, 'synctex.gz');
@@ -960,39 +1584,79 @@ app.post('/api/projects/:id/synctex', async (req, res) => {
     await fs.access(path.join(syncRoot, pdfFile));
     await fs.access(path.join(syncRoot, pdfFile.replace(/\.pdf$/i, '.synctex.gz')));
     const sourceRoot = COMPILE_MODE === 'native' ? syncRoot : '/work';
-    const args = mode === 'forward'
-      ? ['view', '-i', `${syncCoordinates}:${COMPILE_MODE === 'native' ? `${sourceRoot}/./${sourceFile}` : `${sourceRoot}/${sourceFile}`}`, '-o', `${sourceRoot}/${pdfFile}`]
-      : ['edit', '-o', `${syncCoordinates}:${sourceRoot}/${pdfFile}`];
+    const args =
+      mode === 'forward'
+        ? [
+            'view',
+            '-i',
+            `${syncCoordinates}:${COMPILE_MODE === 'native' ? `${sourceRoot}/./${sourceFile}` : `${sourceRoot}/${sourceFile}`}`,
+            '-o',
+            `${sourceRoot}/${pdfFile}`,
+          ]
+        : ['edit', '-o', `${syncCoordinates}:${sourceRoot}/${pdfFile}`];
     let output = '';
     try {
       if (COMPILE_MODE === 'native') {
         // One retry: a compile that started after the wait above may have replaced the file mid-read.
-        const result = await exec('synctex', args, { cwd: syncRoot, timeout: SYNCTEX_TIMEOUT_MS, maxBuffer: 1024 * 1024 })
-          .catch(async () => { await new Promise(r => setTimeout(r, 400)); await RUNNING.get(syncLockKey)?.done.catch(() => undefined); return exec('synctex', args, { cwd: syncRoot, timeout: SYNCTEX_TIMEOUT_MS, maxBuffer: 1024 * 1024 }); });
+        const result = await exec('synctex', args, {
+          cwd: syncRoot,
+          timeout: SYNCTEX_TIMEOUT_MS,
+          maxBuffer: 1024 * 1024,
+        }).catch(async () => {
+          await new Promise((r) => setTimeout(r, 400));
+          await RUNNING.get(syncLockKey)?.done.catch(() => undefined);
+          return exec('synctex', args, { cwd: syncRoot, timeout: SYNCTEX_TIMEOUT_MS, maxBuffer: 1024 * 1024 });
+        });
         output = result.stdout;
       } else {
-        const containerArgs = ['run', '--rm', '--network=none', '--memory=256m', '--cpus=1', '--pids-limit=64',
-          '--security-opt=no-new-privileges', '--read-only', '--tmpfs', '/tmp:rw,nosuid,size=16m',
+        const containerArgs = [
+          'run',
+          '--rm',
+          '--network=none',
+          '--memory=256m',
+          '--cpus=1',
+          '--pids-limit=64',
+          '--security-opt=no-new-privileges',
+          '--read-only',
+          '--tmpfs',
+          '/tmp:rw,nosuid,size=16m',
           ...(process.getuid && process.getgid ? ['--user', `${process.getuid()}:${process.getgid()}`] : []),
-          '-e', 'HOME=/tmp', '-v', `${syncRoot}:/work:ro`, '-w', '/work', IMAGE, 'synctex', ...args];
+          '-e',
+          'HOME=/tmp',
+          '-v',
+          `${syncRoot}:/work:ro`,
+          '-w',
+          '/work',
+          IMAGE,
+          'synctex',
+          ...args,
+        ];
         const result = await exec('docker', containerArgs, { timeout: 10_000, maxBuffer: 1024 * 1024 });
         output = result.stdout;
       }
+    } catch {
+      return void send(res, 503, 'SyncTeX lookup failed. Recompile the project and try again.');
     }
-    catch { return void send(res, 503, 'SyncTeX lookup failed. Recompile the project and try again.'); }
     if (mode === 'forward') {
       const position = parseForwardSync(output);
       return void res.json(position ? { found: true, ...position } : { found: false });
     }
     const position = parseInverseSync(output, sourceRoot);
-    if (!position || !await fs.access(path.join(syncRoot, position.file)).then(() => true, () => false)) return void res.json({ found: false });
+    if (
+      !position ||
+      !(await fs.access(path.join(syncRoot, position.file)).then(
+        () => true,
+        () => false,
+      ))
+    )
+      return void res.json({ found: false });
     res.json({ found: true, ...position });
   } catch (e) {
     // Nothing compiled is stored yet (for example, the first compile's save hasn't happened): not a client error.
-    if (e instanceof Error && /specified key does not exist|NoSuchKey|ENOENT|Project not found/i.test(e.message)) return void res.json({ found: false, recompile: true });
+    if (e instanceof Error && /specified key does not exist|NoSuchKey|ENOENT|Project not found/i.test(e.message))
+      return void res.json({ found: false, recompile: true });
     send(res, 400, e);
-  }
-  finally {
+  } finally {
     if (temporaryRoot) await fs.rm(temporaryRoot, { recursive: true, force: true }).catch(() => undefined);
     endTurn();
     if (syncLockKey && SYNCING.get(syncLockKey) === queued) SYNCING.delete(syncLockKey);
@@ -1006,10 +1670,17 @@ app.post('/api/projects/:id/wordcount', async (req, res) => {
     projectPath(String(req.params.id));
     const mainFile = safeName(String(req.body.mainFile ?? 'main.tex'));
     if (!mainFile.endsWith('.tex')) return void send(res, 400, 'Main document must be a .tex file');
-    const files = (Array.isArray(req.body.files) ? req.body.files : [])
-      .filter((f: StoredFile) => f && typeof f.name === 'string' && /\.(tex|bib|sty|cls)$/i.test(f.name) && f.encoding !== 'base64' && typeof f.content === 'string') as StoredFile[];
+    const files = (Array.isArray(req.body.files) ? req.body.files : []).filter(
+      (f: StoredFile) =>
+        f &&
+        typeof f.name === 'string' &&
+        /\.(tex|bib|sty|cls)$/i.test(f.name) &&
+        f.encoding !== 'base64' &&
+        typeof f.content === 'string',
+    ) as StoredFile[];
     validateFiles(files);
-    if (!files.some(f => f.name === mainFile)) return void send(res, 400, `Main file “${mainFile}” not found in the project`);
+    if (!files.some((f) => f.name === mainFile))
+      return void send(res, 400, `Main file “${mainFile}” not found in the project`);
     dir = await fs.mkdtemp(path.join(os.tmpdir(), 'paperdesk-count-'));
     for (const file of files) {
       const target = path.join(dir, safeName(file.name));
@@ -1020,10 +1691,12 @@ app.post('/api/projects/:id/wordcount', async (req, res) => {
     if (COMPILE_MODE === 'native') await giveCompileFilesToSandboxUser(dir);
     const run = await runTool(dir, ['texcount', '-inc', '-total', '-sum', '-utf8', mainFile], 20_000);
     const count = parseTexcount(run.stdout);
-    if (!count) return void send(res, 422, run.killed ? 'Word count took too long.' : 'texcount could not read this document.');
+    if (!count)
+      return void send(res, 422, run.killed ? 'Word count took too long.' : 'texcount could not read this document.');
     res.json(count);
   } catch (e) {
-    if (e instanceof Error && (e as NodeJS.ErrnoException).code === 'ENOENT') return void send(res, 503, 'Word count needs the LaTeX compiler, which is not available.');
+    if (e instanceof Error && (e as NodeJS.ErrnoException).code === 'ENOENT')
+      return void send(res, 503, 'Word count needs the LaTeX compiler, which is not available.');
     send(res, 400, e);
   } finally {
     if (dir) await fs.rm(dir, { recursive: true, force: true }).catch(() => undefined);
@@ -1052,25 +1725,42 @@ async function compileFolder(files: StoredFile[]) {
 app.post('/api/projects/:id/export', async (req, res) => {
   const dirs: string[] = [];
   const closed = new AbortController();
-  res.on('close', () => { if (!res.writableFinished) closed.abort(); });
+  res.on('close', () => {
+    if (!res.writableFinished) closed.abort();
+  });
   let release: (() => void) | null = null;
   try {
-    const id = String(req.params.id), owner = projectOwner(res);
+    const id = String(req.params.id),
+      owner = projectOwner(res);
     projectPath(id);
-    if (overBudget(`export:${owner || req.ip}`, 10)) return void send(res, 429, 'Too many exports. Wait a minute and try again.');
+    if (overBudget(`export:${owner || req.ip}`, 10))
+      return void send(res, 429, 'Too many exports. Wait a minute and try again.');
     const kind: ExportKind = req.body.kind === 'journal' ? 'journal' : 'arxiv';
     const stored = Array.isArray(req.body.files) && res.locals.role !== 'viewer' ? null : await readProject(id, owner);
-    const files = ((stored ? stored.files : req.body.files) as StoredFile[]).filter(f => f && typeof f.name === 'string' && typeof f.content === 'string');
+    const files = ((stored ? stored.files : req.body.files) as StoredFile[]).filter(
+      (f) => f && typeof f.name === 'string' && typeof f.content === 'string',
+    );
     validateFiles(files);
     const engine = String(req.body.engine ?? 'pdflatex');
     if (!ENGINES[engine]) return void send(res, 400, 'Unsupported compiler');
     const mainFile = safeName(String(req.body.mainFile ?? stored?.mainFile ?? 'main.tex'));
     if (!mainFile.endsWith('.tex')) return void send(res, 400, 'Main file must be a .tex file');
-    if (!files.some(f => f.name === mainFile)) return void send(res, 400, `Main file “${mainFile}” not found in the project`);
+    if (!files.some((f) => f.name === mainFile))
+      return void send(res, 400, `Main file “${mainFile}” not found in the project`);
     const stem = mainFile.replace(/\.tex$/i, '');
-    const args = (extra: string[]) => { const base = latexmkArgs(engine, mainFile, false, false); return ['latexmk', ...base.slice(0, -1), ...extra, mainFile]; };
-    const logOf = async (dir: string) => parseLatexLog(await fs.readFile(path.join(dir, `${stem}.log`), 'utf8').catch(() => ''), await fs.readFile(path.join(dir, `${stem}.blg`), 'utf8').catch(() => ''), mainFile);
-    const failure = async (dir: string, message: string, entries?: LogEntry[]) => { res.status(422).json({ error: message, errors: (entries ?? (await logOf(dir)).errors).slice(0, 8) }); };
+    const args = (extra: string[]) => {
+      const base = latexmkArgs(engine, mainFile, false, false);
+      return ['latexmk', ...base.slice(0, -1), ...extra, mainFile];
+    };
+    const logOf = async (dir: string) =>
+      parseLatexLog(
+        await fs.readFile(path.join(dir, `${stem}.log`), 'utf8').catch(() => ''),
+        await fs.readFile(path.join(dir, `${stem}.blg`), 'utf8').catch(() => ''),
+        mainFile,
+      );
+    const failure = async (dir: string, message: string, entries?: LogEntry[]) => {
+      res.status(422).json({ error: message, errors: (entries ?? (await logOf(dir)).errors).slice(0, 8) });
+    };
     /** A build counts only if latexmk finished without errors and left a PDF. */
     const build = async (dir: string, extra: string[]) => {
       const run = await runTool(dir, args(extra), COMPILE_TIMEOUT_MS);
@@ -1081,13 +1771,19 @@ app.post('/api/projects/:id/export', async (req, res) => {
     release = await compileSlot(closed.signal);
     // 1. Compile the whole project, recording which files the document reads.
     // Build files left in the project (a stale .aux, say) would only confuse this fresh compile.
-    const first = await compileFolder(files.filter(f => !BUILD_FILE.test(f.name)));
+    const first = await compileFolder(files.filter((f) => !BUILD_FILE.test(f.name)));
     dirs.push(first);
     const { pdf, timedOut } = await build(first, ['-recorder']);
-    if (!pdf) return void await failure(first, timedOut ? 'The project took too long to compile, so nothing was exported.' : 'The project doesn’t compile without errors, so nothing was exported. Fix the errors and try again.');
+    if (!pdf)
+      return void (await failure(
+        first,
+        timedOut
+          ? 'The project took too long to compile, so nothing was exported.'
+          : 'The project doesn’t compile without errors, so nothing was exported. Fix the errors and try again.',
+      ));
     const read = parseFls(await fs.readFile(path.join(first, `${stem}.fls`), 'utf8').catch(() => ''));
     const names = new Set(exportFiles(files, mainFile, read, kind));
-    const chosen: StoredFile[] = files.filter(f => names.has(f.name));
+    const chosen: StoredFile[] = files.filter((f) => names.has(f.name));
     const bbl = await fs.readFile(path.join(first, `${stem}.bbl`), 'utf8').catch(() => null);
     if (bbl !== null) chosen.push({ name: `${stem}.bbl`, content: bbl });
 
@@ -1095,16 +1791,31 @@ app.post('/api/projects/:id/export', async (req, res) => {
     const second = await compileFolder(chosen);
     dirs.push(second);
     const rebuilt = await build(second, ['-bibtex-']);
-    if (!rebuilt.pdf) return void await failure(second, 'The exported files didn’t compile on their own, so the ZIP wasn’t created. A file the document needs may be loaded in a way the export can’t see.');
-    const unresolved = (await logOf(second)).warnings.filter(w => /(Citation|Reference) .*undefined/i.test(w.message));
-    if (unresolved.length) return void await failure(second, 'The exported files compile, but with undefined citations or references, so the ZIP wasn’t created. Fix them and try again.', unresolved);
+    if (!rebuilt.pdf)
+      return void (await failure(
+        second,
+        'The exported files didn’t compile on their own, so the ZIP wasn’t created. A file the document needs may be loaded in a way the export can’t see.',
+      ));
+    const unresolved = (await logOf(second)).warnings.filter((w) =>
+      /(Citation|Reference) .*undefined/i.test(w.message),
+    );
+    if (unresolved.length)
+      return void (await failure(
+        second,
+        'The exported files compile, but with undefined citations or references, so the ZIP wasn’t created. Fix them and try again.',
+        unresolved,
+      ));
     release();
     release = null;
 
     if (kind === 'journal') chosen.push({ name: `${stem}.pdf`, content: pdf.toString('base64'), encoding: 'base64' });
-    const archive = archiver('zip', { zlib: { level: 9 } }), chunks: Buffer[] = [];
+    const archive = archiver('zip', { zlib: { level: 9 } }),
+      chunks: Buffer[] = [];
     archive.on('data', (chunk: Buffer) => chunks.push(chunk));
-    const done = new Promise<void>((resolve, reject) => { archive.on('end', resolve); archive.on('error', reject); });
+    const done = new Promise<void>((resolve, reject) => {
+      archive.on('end', resolve);
+      archive.on('error', reject);
+    });
     for (const file of chosen) archive.append(toBuffer(file), { name: safeName(file.name) });
     await archive.finalize();
     await done;
@@ -1113,7 +1824,8 @@ app.post('/api/projects/:id/export', async (req, res) => {
     res.send(Buffer.concat(chunks));
   } catch (e) {
     if (e instanceof Error && e.message === 'cancelled') return;
-    if (e instanceof Error && (e as NodeJS.ErrnoException).code === 'ENOENT') return void send(res, 503, 'Exporting needs the LaTeX compiler, which is not available.');
+    if (e instanceof Error && (e as NodeJS.ErrnoException).code === 'ENOENT')
+      return void send(res, 503, 'Exporting needs the LaTeX compiler, which is not available.');
     send(res, e instanceof Error && /busy/.test(e.message) ? 503 : 400, e);
   } finally {
     release?.();
@@ -1122,72 +1834,156 @@ app.post('/api/projects/:id/export', async (req, res) => {
 });
 
 // Who can open a project (owner only, through roleAllows).
-const sharingRoute = (handler: (store: SharingStore, req: express.Request, res: express.Response, owner: string, id: string) => Promise<unknown>) => async (req: express.Request, res: express.Response) => {
-  try {
-    if (!sharing) return void send(res, 501, 'Sharing needs the production database.');
-    const owner = projectOwner(res), id = String(req.params.id);
-    if (!owner.startsWith('user:')) return void send(res, 401, 'Sign in to share this project.');
-    // Only that the project exists matters here; loading its files would make every sharing request slow.
-    if (!await persistence.exists(id, owner)) return void send(res, 404, 'Project not found');
-    await handler(sharing, req, res, owner, id);
-  } catch (e) { send(res, e instanceof Error && /not found/i.test(e.message) ? 404 : 500, e); }
+const sharingRoute =
+  (
+    handler: (
+      store: SharingStore,
+      req: express.Request,
+      res: express.Response,
+      owner: string,
+      id: string,
+    ) => Promise<unknown>,
+  ) =>
+  async (req: express.Request, res: express.Response) => {
+    try {
+      if (!sharing) return void send(res, 501, 'Sharing needs the production database.');
+      const owner = projectOwner(res),
+        id = String(req.params.id);
+      if (!owner.startsWith('user:')) return void send(res, 401, 'Sign in to share this project.');
+      // Only that the project exists matters here; loading its files would make every sharing request slow.
+      if (!(await persistence.exists(id, owner))) return void send(res, 404, 'Project not found');
+      await handler(sharing, req, res, owner, id);
+    } catch (e) {
+      send(res, e instanceof Error && /not found/i.test(e.message) ? 404 : 500, e);
+    }
+  };
+const validRole = (req: express.Request, res: express.Response) => {
+  const ok = ROLES.includes(String(req.body?.role));
+  if (!ok) send(res, 400, 'Role must be editor or viewer.');
+  return ok;
 };
-const validRole = (req: express.Request, res: express.Response) => { const ok = ROLES.includes(String(req.body?.role)); if (!ok) send(res, 400, 'Role must be editor or viewer.'); return ok; };
-app.get('/api/projects/:id/members', sharingRoute(async (store, _req, res, owner, id) => res.json(await store.access(owner, id))));
-app.post('/api/projects/:id/invites', sharingRoute(async (store, req, res, owner, id) => {
-  if (!validRole(req, res)) return;
-  const email = req.body.email === undefined ? undefined : String(req.body.email);
-  if (email !== undefined && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) return void send(res, 400, 'Enter a valid email address.');
-  res.status(201).json(await store.createInvite(owner, id, String(req.body.role), email));
-}));
-app.delete('/api/projects/:id/invites/:token', sharingRoute(async (store, req, res, owner, id) => { await store.revokeInvite(owner, id, String(req.params.token)); res.status(204).end(); }));
-app.put('/api/projects/:id/members/:userId', sharingRoute(async (store, req, res, owner, id) => { if (!validRole(req, res)) return; await store.setRole(owner, id, String(req.params.userId), String(req.body.role)); res.status(204).end(); }));
-app.delete('/api/projects/:id/members/:userId', sharingRoute(async (store, req, res, owner, id) => { await store.removeMember(owner, id, String(req.params.userId)); res.status(204).end(); }));
+app.get(
+  '/api/projects/:id/members',
+  sharingRoute(async (store, _req, res, owner, id) => res.json(await store.access(owner, id))),
+);
+app.post(
+  '/api/projects/:id/invites',
+  sharingRoute(async (store, req, res, owner, id) => {
+    if (!validRole(req, res)) return;
+    const email = req.body.email === undefined ? undefined : String(req.body.email);
+    if (email !== undefined && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim()))
+      return void send(res, 400, 'Enter a valid email address.');
+    res.status(201).json(await store.createInvite(owner, id, String(req.body.role), email));
+  }),
+);
+app.delete(
+  '/api/projects/:id/invites/:token',
+  sharingRoute(async (store, req, res, owner, id) => {
+    await store.revokeInvite(owner, id, String(req.params.token));
+    res.status(204).end();
+  }),
+);
+app.put(
+  '/api/projects/:id/members/:userId',
+  sharingRoute(async (store, req, res, owner, id) => {
+    if (!validRole(req, res)) return;
+    await store.setRole(owner, id, String(req.params.userId), String(req.body.role));
+    res.status(204).end();
+  }),
+);
+app.delete(
+  '/api/projects/:id/members/:userId',
+  sharingRoute(async (store, req, res, owner, id) => {
+    await store.removeMember(owner, id, String(req.params.userId));
+    res.status(204).end();
+  }),
+);
 
 // Per-file history. Local file storage has none: the browser then shows its own snapshots.
 app.get('/api/projects/:id/history', async (req, res) => {
-  try { res.json(sharing ? { available: true, versions: await sharing.versions(projectOwner(res), String(req.params.id)) } : { available: false, versions: [] }); } catch (e) { send(res, 500, e); }
+  try {
+    res.json(
+      sharing
+        ? { available: true, versions: await sharing.versions(projectOwner(res), String(req.params.id)) }
+        : { available: false, versions: [] },
+    );
+  } catch (e) {
+    send(res, 500, e);
+  }
 });
 app.get('/api/projects/:id/history/:version', async (req, res) => {
   try {
-    const version = /^\d+$/.test(req.params.version) ? await sharing?.version(projectOwner(res), String(req.params.id), req.params.version) : null;
+    const version = /^\d+$/.test(req.params.version)
+      ? await sharing?.version(projectOwner(res), String(req.params.id), req.params.version)
+      : null;
     if (!version) return void send(res, 404, 'Version not found');
     res.json(version);
-  } catch (e) { send(res, 500, e); }
+  } catch (e) {
+    send(res, 500, e);
+  }
 });
 app.put('/api/projects/:id/history/:version', async (req, res) => {
   try {
     if (!sharing || !/^\d+$/.test(req.params.version)) return void send(res, 404, 'Version not found');
-    await sharing.nameVersion(projectOwner(res), String(req.params.id), req.params.version, String(req.body?.name ?? '').trim().slice(0, 120) || null);
+    await sharing.nameVersion(
+      projectOwner(res),
+      String(req.params.id),
+      req.params.version,
+      String(req.body?.name ?? '')
+        .trim()
+        .slice(0, 120) || null,
+    );
     res.status(204).end();
-  } catch (e) { send(res, 500, e); }
+  } catch (e) {
+    send(res, 500, e);
+  }
 });
 /** Restoring writes the old text back as a new version, so nothing in the history is lost. */
 app.post('/api/projects/:id/history/:version/restore', async (req, res) => {
   try {
-    const owner = projectOwner(res), id = String(req.params.id);
-    const version = sharing && /^\d+$/.test(req.params.version) ? await sharing.version(owner, id, req.params.version) : null;
+    const owner = projectOwner(res),
+      id = String(req.params.id);
+    const version =
+      sharing && /^\d+$/.test(req.params.version) ? await sharing.version(owner, id, req.params.version) : null;
     if (!version) return void send(res, 404, 'Version not found');
     const saved = await lockProject(id, owner, async () => {
       const project = await readProject(id, owner);
-      const files = project.files.some(f => f.name === version.file) ? project.files.map(f => f.name === version.file ? { name: f.name, content: version.content } : f) : [...project.files, { name: version.file, content: version.content }];
+      const files = project.files.some((f) => f.name === version.file)
+        ? project.files.map((f) => (f.name === version.file ? { name: f.name, content: version.content } : f))
+        : [...project.files, { name: version.file, content: version.content }];
       return writeProjectNow(id, { files }, { replace: true }, owner);
     });
     mirrorToLiveRoom(resultKey(id, owner), [{ name: version.file, content: version.content }], []);
-    await sharing!.insertVersion(owner, id, version.file, version.content, res.locals.author ?? null, `Restored from ${new Date(version.created).toISOString().slice(0, 16).replace('T', ' ')} UTC`);
+    await sharing!.insertVersion(
+      owner,
+      id,
+      version.file,
+      version.content,
+      res.locals.author ?? null,
+      `Restored from ${new Date(version.created).toISOString().slice(0, 16).replace('T', ' ')} UTC`,
+    );
     res.json({ file: version.file, content: version.content, modified: saved.modified });
-  } catch (e) { send(res, 500, e); }
+  } catch (e) {
+    send(res, 500, e);
+  }
 });
 
 app.delete('/api/projects/:id/cache', async (req, res) => {
   try {
     projectPath(req.params.id);
     if (persistence.mode === 'neon-r2') await persistence.deleteArtifacts(req.params.id, projectOwner(res));
-    else { await fs.rm(path.join(projectPath(req.params.id), 'compiled.pdf'), { force: true }); await fs.rm(path.join(projectPath(req.params.id), 'synctex'), { recursive: true, force: true }); }
+    else {
+      await fs.rm(path.join(projectPath(req.params.id), 'compiled.pdf'), { force: true });
+      await fs.rm(path.join(projectPath(req.params.id), 'synctex'), { recursive: true, force: true });
+    }
     const key = resultKey(req.params.id, projectOwner(res));
-    RESULTS.delete(key); ARTIFACTS.delete(key); await workspaces.dropProject(`${key}:`);
+    RESULTS.delete(key);
+    ARTIFACTS.delete(key);
+    await workspaces.dropProject(`${key}:`);
     res.status(204).end();
-  } catch (e) { send(res, 400, e); }
+  } catch (e) {
+    send(res, 400, e);
+  }
 });
 
 app.get('/api/projects/:id/logs', (req, res) => {
@@ -1212,14 +2008,29 @@ io.use(async (socket, next) => {
 });
 type SocketLike = { data: { user?: AuthUser; owner: string } };
 /** Who a socket is on a project: the room key, the real owner and id, and the role. Null when it has no access. */
-async function socketAccess(socket: SocketLike, id: string): Promise<{ key: string; owner: string; projectId: string; role: Role } | null> {
+async function socketAccess(
+  socket: SocketLike,
+  id: string,
+): Promise<{ key: string; owner: string; projectId: string; role: Role } | null> {
   if (typeof id !== 'string' || !/^[\w-]+$/.test(id)) return null;
   if (id.startsWith('s-')) {
     const access = socket.data.user ? await sharing?.resolve(id, socket.data.user.id) : null;
-    return access ? { key: resultKey(access.projectId, access.ownerId), owner: access.ownerId, projectId: access.projectId, role: access.role } : null;
+    return access
+      ? {
+          key: resultKey(access.projectId, access.ownerId),
+          owner: access.ownerId,
+          projectId: access.projectId,
+          role: access.role,
+        }
+      : null;
   }
-  const exists = await readProject(id, socket.data.owner).then(() => true, () => false);
-  return exists ? { key: resultKey(id, socket.data.owner), owner: socket.data.owner, projectId: id, role: 'owner' } : null;
+  const exists = await readProject(id, socket.data.owner).then(
+    () => true,
+    () => false,
+  );
+  return exists
+    ? { key: resultKey(id, socket.data.owner), owner: socket.data.owner, projectId: id, role: 'owner' }
+    : null;
 }
 
 // Real-time co-editing: one live document per open project, saved back to storage a few seconds after edits stop.
@@ -1228,18 +2039,20 @@ const collab = new CollabRooms({
   save: async (owner, projectId, texts, author) => {
     const changed: StoredFile[] = [];
     await lockProject(projectId, owner, async () => {
-    const stored = await readProject(projectId, owner);
-    const files = stored.files.map(f => {
-      const live = f.encoding === 'base64' || f.name.endsWith('/') ? undefined : texts.get(f.name);
-      if (live === undefined || live === f.content) return f;
-      const next = { name: f.name, content: live };
-      changed.push(next);
-      return next;
-    });
-    if (changed.length) await writeProjectNow(projectId, { files }, { replace: true }, owner);
+      const stored = await readProject(projectId, owner);
+      const files = stored.files.map((f) => {
+        const live = f.encoding === 'base64' || f.name.endsWith('/') ? undefined : texts.get(f.name);
+        if (live === undefined || live === f.content) return f;
+        const next = { name: f.name, content: live };
+        changed.push(next);
+        return next;
+      });
+      if (changed.length) await writeProjectNow(projectId, { files }, { replace: true }, owner);
     });
     if (!changed.length) return;
-    await sharing?.record(owner, projectId, changed, author).catch(e => console.error('Saving file history failed:', e));
+    await sharing
+      ?.record(owner, projectId, changed, author)
+      .catch((e) => console.error('Saving file history failed:', e));
   },
 });
 const collabChannel = (key: string) => `collab:${key}`;
@@ -1248,20 +2061,26 @@ function mirrorToLiveRoom(key: string, changed: StoredFile[], deleted: string[],
   const room = collab.get(key);
   if (!room) return;
   // A full save replaces the project: files it no longer lists are gone.
-  const gone = allFiles ? [...room.names.keys()].filter(name => !allFiles.some(f => f.name === name)) : deleted;
+  const gone = allFiles ? [...room.names.keys()].filter((name) => !allFiles.some((f) => f.name === name)) : deleted;
   if (!changed.length && !gone.length) return; // a settings-only save: nobody needs to reload the file list
   room.applyExternal(changed, gone);
   io.to(collabChannel(key)).emit('collab:files');
 }
-for (const signal of ['SIGTERM', 'SIGINT'] as const) process.once(signal, () => { void collab.flushAll().finally(() => process.exit(0)); });
+for (const signal of ['SIGTERM', 'SIGINT'] as const)
+  process.once(signal, () => {
+    void collab.flushAll().finally(() => process.exit(0));
+  });
 
-io.on('connection', socket => {
+io.on('connection', (socket) => {
   socket.on('project:join', async (id: string, ack?: (result: { ok: boolean }) => void) => {
     const access = await socketAccess(socket, id).catch(() => null);
     if (access) await socket.join(access.key);
     if (typeof ack === 'function') ack({ ok: !!access });
   });
-  socket.on('project:leave', async (id: string) => { const access = await socketAccess(socket, id).catch(() => null); if (access) await socket.leave(access.key); });
+  socket.on('project:leave', async (id: string) => {
+    const access = await socketAccess(socket, id).catch(() => null);
+    if (access) await socket.leave(access.key);
+  });
 
   // One live project per socket. Roles are checked here on join and again on every edit.
   let live: { room: CollabRoom; role: Role; clientId?: number } | null = null;
@@ -1270,22 +2089,31 @@ io.on('connection', socket => {
     if (!current) return;
     live = null;
     await socket.leave(collabChannel(current.room.key));
-    if (current.clientId !== undefined) socket.to(collabChannel(current.room.key)).emit('collab:left', current.clientId);
-    await collab.leave(current.room).catch(error => console.error('Closing a live document failed:', error));
+    if (current.clientId !== undefined)
+      socket.to(collabChannel(current.room.key)).emit('collab:left', current.clientId);
+    await collab.leave(current.room).catch((error) => console.error('Closing a live document failed:', error));
   };
-  socket.on('collab:join', async (id: string, ack?: (result: { ok: boolean; epoch?: string; state?: Buffer; role?: Role }) => void) => {
-    try {
-      await leave();
-      const access = await socketAccess(socket, id);
-      if (!access) return void ack?.({ ok: false });
-      const room = await collab.open(access.key, access.owner, access.projectId);
-      room.members++;
-      live = { room, role: access.role };
-      await socket.join(collabChannel(access.key));
-      ack?.({ ok: true, epoch: room.epoch, state: Buffer.from(Y.encodeStateAsUpdate(room.doc)), role: access.role });
-    } catch (error) { console.error('Joining a live document failed:', error); ack?.({ ok: false }); }
+  socket.on(
+    'collab:join',
+    async (id: string, ack?: (result: { ok: boolean; epoch?: string; state?: Buffer; role?: Role }) => void) => {
+      try {
+        await leave();
+        const access = await socketAccess(socket, id);
+        if (!access) return void ack?.({ ok: false });
+        const room = await collab.open(access.key, access.owner, access.projectId);
+        room.members++;
+        live = { room, role: access.role };
+        await socket.join(collabChannel(access.key));
+        ack?.({ ok: true, epoch: room.epoch, state: Buffer.from(Y.encodeStateAsUpdate(room.doc)), role: access.role });
+      } catch (error) {
+        console.error('Joining a live document failed:', error);
+        ack?.({ ok: false });
+      }
+    },
+  );
+  socket.on('collab:client', (clientId: number) => {
+    if (live && Number.isSafeInteger(clientId)) live.clientId = clientId;
   });
-  socket.on('collab:client', (clientId: number) => { if (live && Number.isSafeInteger(clientId)) live.clientId = clientId; });
   socket.on('collab:update', (update: ArrayBuffer | Buffer) => {
     if (!live || live.role === 'viewer') return;
     try {
@@ -1293,9 +2121,13 @@ io.on('connection', socket => {
       if (socket.data.user?.email) live.room.authors.add(socket.data.user.email);
       Y.applyUpdate(live.room.doc, bytes, socket.id);
       socket.to(collabChannel(live.room.key)).emit('collab:update', bytes);
-    } catch (error) { console.error('A live edit could not be applied:', error); }
+    } catch (error) {
+      console.error('A live edit could not be applied:', error);
+    }
   });
-  socket.on('collab:awareness', (update: ArrayBuffer | Buffer) => { if (live) socket.to(collabChannel(live.room.key)).emit('collab:awareness', update); });
+  socket.on('collab:awareness', (update: ArrayBuffer | Buffer) => {
+    if (live) socket.to(collabChannel(live.room.key)).emit('collab:awareness', update);
+  });
   socket.on('collab:leave', () => void leave());
   socket.on('disconnect', () => void leave());
 });
@@ -1305,17 +2137,44 @@ app.use((_req, res) => send(res, 404, 'Not found'));
 app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
   const status = Number(err?.status ?? err?.statusCode) || 500;
   if (status >= 500) console.error(err);
-  send(res, status, status === 413 ? 'The request is too large.' : status === 400 ? 'The request body isn’t valid JSON.' : 'Internal server error');
+  send(
+    res,
+    status,
+    status === 413
+      ? 'The request is too large.'
+      : status === 400
+        ? 'The request body isn’t valid JSON.'
+        : 'Internal server error',
+  );
 });
 
 // A stray rejected promise must not take the whole API down (Node exits on one by default): log it instead.
-process.on('unhandledRejection', reason => console.error('Unhandled promise rejection:', reason));
+process.on('unhandledRejection', (reason) => console.error('Unhandled promise rejection:', reason));
 await persistence.initialize();
 await sharing?.initialize();
 await kv.initialize();
 if (COMPILE_MODE === 'native') {
-  const required = ['latexmk', 'pdflatex', 'xelatex', 'lualatex', 'bibtex', 'biber', 'synctex', 'setpriv', 'prlimit'] as const;
-  const checks = await Promise.all(required.map(command => exec(command, ['--version'], { timeout: 8_000 }).then(() => true, () => false)));
+  const required = [
+    'latexmk',
+    'pdflatex',
+    'xelatex',
+    'lualatex',
+    'bibtex',
+    'biber',
+    'synctex',
+    'setpriv',
+    'prlimit',
+  ] as const;
+  const checks = await Promise.all(
+    required.map((command) =>
+      exec(command, ['--version'], { timeout: 8_000 }).then(
+        () => true,
+        () => false,
+      ),
+    ),
+  );
   nativeCompilerReady = checks.every(Boolean);
 }
-http.listen(PORT, '0.0.0.0', () => console.log(`PaperDesk API listening on port ${PORT} (${persistence.mode} storage, ${COMPILE_MODE} compiler)`));
+http.listen(PORT, '0.0.0.0', () =>
+  console.log(`PaperDesk API listening on port ${PORT} (${persistence.mode} storage, ${COMPILE_MODE} compiler)`),
+);

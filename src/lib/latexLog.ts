@@ -11,7 +11,10 @@ export function unwrapTexLog(log: string, width = 79) {
   let buf = '';
   for (const line of log.split(/\r?\n/)) {
     buf += line;
-    if (line.length !== width) { out.push(buf); buf = ''; }
+    if (line.length !== width) {
+      out.push(buf);
+      buf = '';
+    }
   }
   if (buf) out.push(buf);
   return out;
@@ -41,11 +44,13 @@ export function parseLatexLog(texLog: string, bibtexLog = '', mainFile = 'main.t
     }
     if (line.startsWith('! ')) {
       // Errors not in file:line form (e.g. emergency stops); find the "l.<n>" context line.
-      const ctx = lines.slice(i + 1, i + 12).find(l => /^l\.\d+/.test(l));
+      const ctx = lines.slice(i + 1, i + 12).find((l) => /^l\.\d+/.test(l));
       const ln = ctx ? Number(/^l\.(\d+)/.exec(ctx)![1]) : null;
       const rawMessage = line.slice(2).trim();
       const missingFile = /^LaTeX Error: File [`'](.+?)[`'] not found\.?$/.exec(rawMessage);
-      const message = missingFile ? `Image or file “${missingFile[1]}” was not found. Check the path on this line.` : rawMessage;
+      const message = missingFile
+        ? `Image or file “${missingFile[1]}” was not found. Check the path on this line.`
+        : rawMessage;
       const isFollowOn = /^(Emergency stop|==> Fatal error occurred)/.test(message) && errors.length > 0;
       if (!isFollowOn) errors.push({ file: currentFile(), line: ln, message });
       continue;
@@ -60,12 +65,28 @@ export function parseLatexLog(texLog: string, bibtexLog = '', mainFile = 'main.t
       }
       const at = /on input line (\d+)\.?/.exec(text);
       const who = warn[1] ? `${warn[1]}: ` : warn[2] ? `${warn[2]}: ` : '';
-      warnings.push({ file: currentFile(), line: at ? Number(at[1]) : null, message: who + text.replace(/\s*on input line \d+\.?/, '').replace(/\s+/g, ' ').trim() });
+      warnings.push({
+        file: currentFile(),
+        line: at ? Number(at[1]) : null,
+        message:
+          who +
+          text
+            .replace(/\s*on input line \d+\.?/, '')
+            .replace(/\s+/g, ' ')
+            .trim(),
+      });
       continue;
     }
-    const box = /^(Overfull|Underfull) \\[hv]box .*? (?:in paragraph at lines (\d+)--\d+|detected at line (\d+)|has occurred while \\output is active)/.exec(line);
+    const box =
+      /^(Overfull|Underfull) \\[hv]box .*? (?:in paragraph at lines (\d+)--\d+|detected at line (\d+)|has occurred while \\output is active)/.exec(
+        line,
+      );
     if (box) {
-      warnings.push({ file: currentFile(), line: box[2] ? Number(box[2]) : box[3] ? Number(box[3]) : null, message: line.replace(/\s*\[\]\s*$/, '').trim() });
+      warnings.push({
+        file: currentFile(),
+        line: box[2] ? Number(box[2]) : box[3] ? Number(box[3]) : null,
+        message: line.replace(/\s*\[\]\s*$/, '').trim(),
+      });
     }
 
     // Update the file stack after reading messages on this line.
@@ -76,7 +97,10 @@ export function parseLatexLog(texLog: string, bibtexLog = '', mainFile = 'main.t
   }
 
   const bib = parseBibtexLog(bibtexLog);
-  return { errors: dedupe([...errors, ...bib.errors]).map(withHint), warnings: dedupe([...warnings, ...bib.warnings]).map(withHint) };
+  return {
+    errors: dedupe([...errors, ...bib.errors]).map(withHint),
+    warnings: dedupe([...warnings, ...bib.warnings]).map(withHint),
+  };
 }
 
 function tokenize(line: string) {
@@ -95,13 +119,14 @@ function tokenize(line: string) {
 /** The context lines TeX prints after an error ("l.12 \foo" and its continuation), trimmed. */
 function followingDetail(lines: string[], i: number) {
   const ctx = lines.slice(i + 1, i + 8);
-  const at = ctx.findIndex(l => /^l\.\d+ /.test(l));
+  const at = ctx.findIndex((l) => /^l\.\d+ /.test(l));
   if (at < 0) return '';
   const code = ctx[at].replace(/^l\.\d+ /, '') + (ctx[at + 1]?.trim() ? ctx[at + 1].trim() : '');
   return code.trim();
 }
 
-const joinMessage = (msg: string, detail: string) => (detail && !msg.includes(detail) ? `${msg.trim()} — ${detail}` : msg.trim());
+const joinMessage = (msg: string, detail: string) =>
+  detail && !msg.includes(detail) ? `${msg.trim()} — ${detail}` : msg.trim();
 
 export function parseBibtexLog(blg: string) {
   const errors: LogEntry[] = [];
@@ -116,11 +141,18 @@ export function parseBibtexLog(blg: string) {
       continue;
     }
     const open = /^I couldn't open ((?:database|style|auxiliary) file .+)$/.exec(line);
-    if (open) { errors.push({ file: null, line: null, message: `BibTeX: couldn't open ${open[1].trim()}` }); continue; }
+    if (open) {
+      errors.push({ file: null, line: null, message: `BibTeX: couldn't open ${open[1].trim()}` });
+      continue;
+    }
     const w = /^Warning--(.*)$/.exec(line);
     if (w) {
       const where = /--line (\d+) of file (.+)$/.exec(lines[i + 1] ?? '');
-      warnings.push({ file: where ? where[2].trim() : null, line: where ? Number(where[1]) : null, message: `BibTeX: ${w[1].trim()}` });
+      warnings.push({
+        file: where ? where[2].trim() : null,
+        line: where ? Number(where[1]) : null,
+        message: `BibTeX: ${w[1].trim()}`,
+      });
     }
   }
   return { errors, warnings };
@@ -128,7 +160,7 @@ export function parseBibtexLog(blg: string) {
 
 function dedupe(list: LogEntry[]) {
   const seen = new Set<string>();
-  return list.filter(e => {
+  return list.filter((e) => {
     const key = `${e.file}:${e.line}:${e.message}`;
     if (seen.has(key)) return false;
     seen.add(key);
@@ -138,15 +170,24 @@ function dedupe(list: LogEntry[]) {
 
 /** Plain-language advice for the problems newcomers hit most. */
 const HINTS: [RegExp, string][] = [
-  [/Unknown graphics extension: \.svg/i, 'LaTeX can’t include SVG files. Upload the SVG again and PaperDesk adds a PNG copy, or export it as PDF.'],
+  [
+    /Unknown graphics extension: \.svg/i,
+    'LaTeX can’t include SVG files. Upload the SVG again and PaperDesk adds a PNG copy, or export it as PDF.',
+  ],
   [/Unknown graphics extension/i, 'This image type isn’t supported. Use PNG, JPG or PDF.'],
-  [/File [`'‘]([^'’]+\.(?:png|jpe?g|pdf|eps))['’] not found/i, 'Check the file name, folder and capitalisation, and upload the image if it’s missing.'],
+  [
+    /File [`'‘]([^'’]+\.(?:png|jpe?g|pdf|eps))['’] not found/i,
+    'Check the file name, folder and capitalisation, and upload the image if it’s missing.',
+  ],
   [/Cannot determine size of graphic/i, 'Use PNG, JPG or PDF images with pdfLaTeX.'],
 ];
 /** An empty reference list: nothing that is cited was found in the .bib file. */
-const EMPTY_BIBLIOGRAPHY = 'The reference list is empty: none of the keys you \\cite are in your .bib file. Add the missing entry (or correct the key), then recompile.';
+const EMPTY_BIBLIOGRAPHY =
+  'The reference list is empty: none of the keys you \\cite are in your .bib file. Add the missing entry (or correct the key), then recompile.';
 export function withHint(entry: LogEntry): LogEntry {
-  const emptyBibliography = /perhaps a missing \\item/i.test(entry.message) && (/\.bbl$/i.test(entry.file ?? '') || /thebibliography/.test(entry.message));
+  const emptyBibliography =
+    /perhaps a missing \\item/i.test(entry.message) &&
+    (/\.bbl$/i.test(entry.file ?? '') || /thebibliography/.test(entry.message));
   const hint = emptyBibliography ? EMPTY_BIBLIOGRAPHY : HINTS.find(([pattern]) => pattern.test(entry.message))?.[1];
   return hint && !entry.message.includes(hint) ? { ...entry, message: `${entry.message} ${hint}` } : entry;
 }
@@ -155,7 +196,8 @@ function editDistance(a: string, b: string) {
   let row = Array.from({ length: b.length + 1 }, (_, i) => i);
   for (let i = 1; i <= a.length; i++) {
     const next = [i];
-    for (let j = 1; j <= b.length; j++) next[j] = Math.min(row[j]! + 1, next[j - 1]! + 1, row[j - 1]! + (a[i - 1] === b[j - 1] ? 0 : 1));
+    for (let j = 1; j <= b.length; j++)
+      next[j] = Math.min(row[j]! + 1, next[j - 1]! + 1, row[j - 1]! + (a[i - 1] === b[j - 1] ? 0 : 1));
     row = next;
   }
   return row[b.length]!;
@@ -168,9 +210,15 @@ function editDistance(a: string, b: string) {
 export function withFileSuggestion(entry: LogEntry, projectFiles: string[]): LogEntry {
   const wanted = /File [`'‘]([^'’]+)['’] not found/i.exec(entry.message)?.[1];
   if (!wanted || /Did you mean/.test(entry.message)) return entry;
-  const stem = (name: string) => name.split('/').pop()!.replace(/\.[A-Za-z0-9]+$/, '').toLowerCase();
+  const stem = (name: string) =>
+    name
+      .split('/')
+      .pop()!
+      .replace(/\.[A-Za-z0-9]+$/, '')
+      .toLowerCase();
   const extension = /\.([A-Za-z0-9]+)$/.exec(wanted)?.[1]?.toLowerCase();
-  const target = stem(wanted), limit = target.length >= 8 ? 3 : target.length >= 4 ? 2 : 1;
+  const target = stem(wanted),
+    limit = target.length >= 8 ? 3 : target.length >= 4 ? 2 : 1;
   let best: { name: string; distance: number } | null = null;
   for (const name of projectFiles) {
     if (name.endsWith('/') || name === wanted) continue;
@@ -178,5 +226,10 @@ export function withFileSuggestion(entry: LogEntry, projectFiles: string[]): Log
     const distance = editDistance(target, stem(name));
     if (distance <= limit && (!best || distance < best.distance)) best = { name, distance };
   }
-  return best ? { ...entry, message: `${entry.message} Did you mean “${best.name}”? Rename the file or change the name in the document so the two match.` } : entry;
+  return best
+    ? {
+        ...entry,
+        message: `${entry.message} Did you mean “${best.name}”? Rename the file or change the name in the document so the two match.`,
+      }
+    : entry;
 }

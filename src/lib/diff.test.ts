@@ -15,7 +15,7 @@ describe('diffLines', () => {
 
 describe('tracked edits', () => {
   it('coalesces typed text and rejects that change without losing surrounding content', () => {
-    let changes = recordEdit('left right', 'left X right', 'main.tex', [] , 1);
+    let changes = recordEdit('left right', 'left X right', 'main.tex', [], 1);
     changes = recordEdit('left X right', 'left XY right', 'main.tex', changes, 2);
     expect(changes).toHaveLength(1);
     expect(rejectEdit('left XY right', changes[0])).toBe('left right');

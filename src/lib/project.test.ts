@@ -1,16 +1,28 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { arrayBufferToBase64, buildTree, decodeBase64Utf8, defaultFile, isBinary, isEditable, mergeProjects, normalizeFile, relative, tabFiles, type ProjectFile } from './project';
+import {
+  arrayBufferToBase64,
+  buildTree,
+  decodeBase64Utf8,
+  defaultFile,
+  isBinary,
+  isEditable,
+  mergeProjects,
+  normalizeFile,
+  relative,
+  tabFiles,
+  type ProjectFile,
+} from './project';
 
 const f = (name: string): ProjectFile => ({ name, content: '' });
 
 describe('buildTree', () => {
   it('nests files under folders and sorts folders first', () => {
     const tree = buildTree([f('main.tex'), f('figures/b.png'), f('figures/a.png'), f('appendix/'), f('refs.bib')]);
-    expect(tree.map(n => n.name)).toEqual(['appendix', 'figures', 'main.tex', 'refs.bib']);
-    const figures = tree.find(n => n.name === 'figures')!;
+    expect(tree.map((n) => n.name)).toEqual(['appendix', 'figures', 'main.tex', 'refs.bib']);
+    const figures = tree.find((n) => n.name === 'figures')!;
     expect(figures.folder).toBe(true);
     expect(figures.path).toBe('figures/');
-    expect(figures.children.map(n => n.path)).toEqual(['figures/a.png', 'figures/b.png']);
+    expect(figures.children.map((n) => n.path)).toEqual(['figures/a.png', 'figures/b.png']);
   });
 
   it('keeps explicit empty folders and links them to their file entry', () => {
@@ -32,11 +44,11 @@ describe('tabFiles', () => {
   const files = ['a.tex', 'b.tex', 'c.tex', 'd.tex', 'e.tex', 'f.tex', 'dir/'].map(f);
 
   it('skips folders and caps at five tabs', () => {
-    expect(tabFiles(files, 'a.tex').map(x => x.name)).toEqual(['a.tex', 'b.tex', 'c.tex', 'd.tex', 'e.tex']);
+    expect(tabFiles(files, 'a.tex').map((x) => x.name)).toEqual(['a.tex', 'b.tex', 'c.tex', 'd.tex', 'e.tex']);
   });
 
   it('always includes the active file', () => {
-    expect(tabFiles(files, 'f.tex').map(x => x.name)).toEqual(['a.tex', 'b.tex', 'c.tex', 'd.tex', 'f.tex']);
+    expect(tabFiles(files, 'f.tex').map((x) => x.name)).toEqual(['a.tex', 'b.tex', 'c.tex', 'd.tex', 'f.tex']);
   });
 });
 
@@ -74,12 +86,18 @@ describe('decodeBase64Utf8', () => {
 
 describe('normalizeFile', () => {
   it('decodes legacy base64 text from the server and drops the encoding', () => {
-    const file = normalizeFile({ name: 'main.tex', content: Buffer.from('\\section{Hi}').toString('base64'), encoding: 'base64' }, 'server');
+    const file = normalizeFile(
+      { name: 'main.tex', content: Buffer.from('\\section{Hi}').toString('base64'), encoding: 'base64' },
+      'server',
+    );
     expect(file).toEqual({ name: 'main.tex', content: '\\section{Hi}' });
   });
 
   it('repairs stored text that an older client tagged as base64 after decoding it', () => {
-    expect(normalizeFile({ name: 'main.tex', content: '\\section{Hi}', encoding: 'base64' }, 'storage')).toEqual({ name: 'main.tex', content: '\\section{Hi}' });
+    expect(normalizeFile({ name: 'main.tex', content: '\\section{Hi}', encoding: 'base64' }, 'storage')).toEqual({
+      name: 'main.tex',
+      content: '\\section{Hi}',
+    });
   });
 
   it('keeps binary files as base64', () => {
@@ -96,9 +114,12 @@ describe('mergeProjects', () => {
   const p = (id: string, modified: number) => ({ id, name: id, modified, files: [] });
 
   it('keeps the newer copy and uploads local projects the server lacks or has older', () => {
-    const { merged, upload } = mergeProjects([p('a', 5), p('b', 1), p('local', 3)], [p('a', 2), p('b', 9), p('remote', 4)]);
-    expect(merged.map(x => `${x.id}@${x.modified}`)).toEqual(['a@5', 'b@9', 'local@3', 'remote@4']);
-    expect(upload.map(x => x.id)).toEqual(['a', 'local']);
+    const { merged, upload } = mergeProjects(
+      [p('a', 5), p('b', 1), p('local', 3)],
+      [p('a', 2), p('b', 9), p('remote', 4)],
+    );
+    expect(merged.map((x) => `${x.id}@${x.modified}`)).toEqual(['a@5', 'b@9', 'local@3', 'remote@4']);
+    expect(upload.map((x) => x.id)).toEqual(['a', 'local']);
   });
 });
 
@@ -119,13 +140,22 @@ describe('non-UTF-8 text files', () => {
   });
 
   it('keeps genuine base64 from browser storage', () => {
-    expect(normalizeFile({ name: 'style.bst', content: latin1, encoding: 'base64' }, 'storage').encoding).toBe('base64');
+    expect(normalizeFile({ name: 'style.bst', content: latin1, encoding: 'base64' }, 'storage').encoding).toBe(
+      'base64',
+    );
   });
 });
 
 describe('defaultFile', () => {
   it('prefers main.tex over files that sort earlier', () => {
-    expect(defaultFile([f('figures/'), { name: 'figures/a.png', content: 'x', encoding: 'base64' }, f('intro.tex'), f('main.tex')])).toBe('main.tex');
+    expect(
+      defaultFile([
+        f('figures/'),
+        { name: 'figures/a.png', content: 'x', encoding: 'base64' },
+        f('intro.tex'),
+        f('main.tex'),
+      ]),
+    ).toBe('main.tex');
   });
 
   it('falls back to the first .tex, then the first editable file', () => {

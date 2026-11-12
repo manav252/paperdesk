@@ -4,7 +4,8 @@ import { importJWK, SignJWT } from 'jose';
 
 // Roles, invites and history need Postgres and object storage: run with E2E_CLOUD_STORAGE=1 and DATABASE_URL/R2_*
 // pointing at local test containers. Tokens are signed with the test-only key in test/fixtures/auth.
-const SUPABASE = 'http://127.0.0.1:54399', API = 'http://127.0.0.1:3002';
+const SUPABASE = 'http://127.0.0.1:54399',
+  API = 'http://127.0.0.1:3002';
 const people = {
   owner: { id: '11111111-1111-4111-8111-111111111111', email: 'owner@example.com' },
   editor: { id: '22222222-2222-4222-8222-222222222222', email: 'editor@example.com' },
@@ -16,8 +17,14 @@ const source = (text: string) => `\\documentclass{article}\n\\begin{document}\n$
 
 async function tokenFor(person: Person) {
   const key = await importJWK(JSON.parse(readFileSync('test/fixtures/auth/test-signing-key.json', 'utf8')), 'ES256');
-  return new SignJWT({ role: 'authenticated', email: people[person].email }).setProtectedHeader({ alg: 'ES256', kid: 'paperdesk-test' }).setSubject(people[person].id)
-    .setIssuer(`${SUPABASE}/auth/v1`).setAudience('authenticated').setIssuedAt().setExpirationTime('1h').sign(key);
+  return new SignJWT({ role: 'authenticated', email: people[person].email })
+    .setProtectedHeader({ alg: 'ES256', kid: 'paperdesk-test' })
+    .setSubject(people[person].id)
+    .setIssuer(`${SUPABASE}/auth/v1`)
+    .setAudience('authenticated')
+    .setIssuedAt()
+    .setExpirationTime('1h')
+    .sign(key);
 }
 function client(request: APIRequestContext, token: string | null) {
   const headers = token ? { Authorization: `Bearer ${token}` } : undefined;
@@ -30,11 +37,20 @@ function client(request: APIRequestContext, token: string | null) {
   };
 }
 const newId = () => `share-${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
-test.beforeEach(({ page }, info) => { void page; test.skip(!process.env.E2E_CLOUD_STORAGE || info.project.name !== 'desktop-light', 'Needs local Postgres and object storage.'); });
+test.beforeEach(({ page }, info) => {
+  void page;
+  test.skip(
+    !process.env.E2E_CLOUD_STORAGE || info.project.name !== 'desktop-light',
+    'Needs local Postgres and object storage.',
+  );
+});
 
 test('the server enforces every role, invite and link rule', async ({ request }) => {
-  const [owner, editor, viewer, stranger] = await Promise.all((['owner', 'editor', 'viewer', 'stranger'] as Person[]).map(async p => client(request, await tokenFor(p))));
-  const id = newId(), body = { name: 'Shared', files: [{ name: 'main.tex', content: source('First') }], mainFile: 'main.tex' };
+  const [owner, editor, viewer, stranger] = await Promise.all(
+    (['owner', 'editor', 'viewer', 'stranger'] as Person[]).map(async (p) => client(request, await tokenFor(p))),
+  );
+  const id = newId(),
+    body = { name: 'Shared', files: [{ name: 'main.tex', content: source('First') }], mainFile: 'main.tex' };
   expect((await owner!.put(`/${id}`, body)).status()).toBe(200);
   // Only the owner can see or manage access.
   expect((await stranger!.get(`/${id}/members`)).status()).toBe(404);
@@ -56,18 +72,32 @@ test('the server enforces every role, invite and link rule', async ({ request })
   expect((await viewer!.put(`/${alias}`, { name: 'Hacked' })).status()).toBe(403);
   for (const path of ['/files', '/share']) expect((await viewer!.post(`/${alias}${path}`)).status()).toBe(403);
   expect((await viewer!.get(`/${alias}/members`)).status()).toBe(403);
-  const compile = await viewer!.post(`/${alias}/compile`, { mainFile: 'main.tex', files: [{ name: 'main.tex', content: '\\broken{' }] });
+  const compile = await viewer!.post(`/${alias}/compile`, {
+    mainFile: 'main.tex',
+    files: [{ name: 'main.tex', content: '\\broken{' }],
+  });
   expect((await compile.json()).success).toBe(true);
 
   // Editor: can save, cannot delete the project or manage people; a stale save is refused.
-  const saved = await (await editor!.put(`/${alias}`, { files: [{ name: 'main.tex', content: source('Second') }] })).json();
+  const saved = await (
+    await editor!.put(`/${alias}`, { files: [{ name: 'main.tex', content: source('Second') }] })
+  ).json();
   expect(saved.id).toBe(alias);
-  expect((await editor!.put(`/${alias}`, { files: [{ name: 'main.tex', content: source('Stale') }], baseModified: saved.modified - 1000 })).status()).toBe(409);
+  expect(
+    (
+      await editor!.put(`/${alias}`, {
+        files: [{ name: 'main.tex', content: source('Stale') }],
+        baseModified: saved.modified - 1000,
+      })
+    ).status(),
+  ).toBe(409);
   expect((await editor!.get(`/${alias}/members`)).status()).toBe(403);
   expect((await editor!.post(`/${alias}/invites`, { role: 'editor' })).status()).toBe(403);
 
   // Email invites work once, only for that address; turning a link off stops new joins.
-  const emailInvite = (await (await owner!.post(`/${id}/invites`, { role: 'viewer', email: 'Stranger@Example.com' })).json()).token;
+  const emailInvite = (
+    await (await owner!.post(`/${id}/invites`, { role: 'viewer', email: 'Stranger@Example.com' })).json()
+  ).token;
   expect((await editor!.accept(emailInvite)).status()).toBe(403);
   expect((await stranger!.accept(emailInvite)).status()).toBe(200);
   expect((await stranger!.accept(emailInvite)).status()).toBe(404);
@@ -89,8 +119,16 @@ test('the server enforces every role, invite and link rule', async ({ request })
 });
 
 test('history records per file with authors, and restoring writes a new version', async ({ request }) => {
-  const owner = client(request, await tokenFor('owner')), id = newId();
-  const write = (text: string, notes = 'a') => owner.put(`/${id}`, { name: 'History', files: [{ name: 'main.tex', content: source(text) }, { name: 'notes.tex', content: notes }] });
+  const owner = client(request, await tokenFor('owner')),
+    id = newId();
+  const write = (text: string, notes = 'a') =>
+    owner.put(`/${id}`, {
+      name: 'History',
+      files: [
+        { name: 'main.tex', content: source(text) },
+        { name: 'notes.tex', content: notes },
+      ],
+    });
   await write('One');
   let list = (await (await owner.get(`/${id}/history`)).json()).versions;
   expect(list).toHaveLength(2);
@@ -116,24 +154,55 @@ test('history records per file with authors, and restoring writes a new version'
 
 async function signedIn(browser: Browser, person: Person) {
   const context = await browser.newContext({ viewport: { width: 1440, height: 900 } });
-  const access_token = await tokenFor(person), page = await context.newPage();
+  const access_token = await tokenFor(person),
+    page = await context.newPage();
   const errors: string[] = [];
-  page.on('pageerror', e => errors.push(e.message));
-  await page.route(/^https:\/\/fonts\.(googleapis|gstatic)\.com\//, route => route.fulfill({ status: 200, contentType: 'text/css', body: '' }));
-  await page.addInitScript(([session]) => {
-    localStorage.setItem('paperdesk-auth', session as string);
-    localStorage.setItem('paperdesk-tour-done', '1');
-    localStorage.setItem('paperdesk-help-seen', '1');
-    localStorage.setItem('paperdesk-compile-prefs', JSON.stringify({ autoCompile: false }));
-  }, [JSON.stringify({ access_token, refresh_token: 'test', token_type: 'bearer', expires_in: 3600, expires_at: Math.floor(Date.now() / 1000) + 3600, user: { id: people[person].id, aud: 'authenticated', role: 'authenticated', email: people[person].email, app_metadata: {}, user_metadata: {}, created_at: new Date().toISOString() } })]);
+  page.on('pageerror', (e) => errors.push(e.message));
+  await page.route(/^https:\/\/fonts\.(googleapis|gstatic)\.com\//, (route) =>
+    route.fulfill({ status: 200, contentType: 'text/css', body: '' }),
+  );
+  await page.addInitScript(
+    ([session]) => {
+      localStorage.setItem('paperdesk-auth', session as string);
+      localStorage.setItem('paperdesk-tour-done', '1');
+      localStorage.setItem('paperdesk-help-seen', '1');
+      localStorage.setItem('paperdesk-compile-prefs', JSON.stringify({ autoCompile: false }));
+    },
+    [
+      JSON.stringify({
+        access_token,
+        refresh_token: 'test',
+        token_type: 'bearer',
+        expires_in: 3600,
+        expires_at: Math.floor(Date.now() / 1000) + 3600,
+        user: {
+          id: people[person].id,
+          aud: 'authenticated',
+          role: 'authenticated',
+          email: people[person].email,
+          app_metadata: {},
+          user_metadata: {},
+          created_at: new Date().toISOString(),
+        },
+      }),
+    ],
+  );
   return { page, errors, context };
 }
 
-test('owner shares through the dialog; the viewer gets a read-only project and a working diff', async ({ browser, request }) => {
+test('owner shares through the dialog; the viewer gets a read-only project and a working diff', async ({
+  browser,
+  request,
+}) => {
   test.setTimeout(90_000);
-  const api = client(request, await tokenFor('owner')), id = newId();
-  await api.put(`/${id}`, { name: 'Dialog project', mainFile: 'main.tex', files: [{ name: 'main.tex', content: source('Version one') }] });
-  await api.post(`/${id}/invites`, { role: 'viewer' }).then(r => r.json()); // A named first version to compare with:
+  const api = client(request, await tokenFor('owner')),
+    id = newId();
+  await api.put(`/${id}`, {
+    name: 'Dialog project',
+    mainFile: 'main.tex',
+    files: [{ name: 'main.tex', content: source('Version one') }],
+  });
+  await api.post(`/${id}/invites`, { role: 'viewer' }).then((r) => r.json()); // A named first version to compare with:
   const first = (await (await api.get(`/${id}/history`)).json()).versions[0].id;
   await api.put(`/${id}/history/${first}`, { name: 'Draft' });
   await api.put(`/${id}`, { files: [{ name: 'main.tex', content: source('Version two') }] });
@@ -147,7 +216,8 @@ test('owner shares through the dialog; the viewer gets a read-only project and a
   await dialog.getByRole('combobox', { name: 'Invite role' }).selectOption('viewer');
   await dialog.getByRole('button', { name: 'Create invite' }).click();
   await expect(dialog).toContainText('viewer@example.com');
-  const invite = (await (await api.get(`/${id}/members`)).json()).invites.find((i: { email: string | null }) => i.email)?.token as string;
+  const invite = (await (await api.get(`/${id}/members`)).json()).invites.find((i: { email: string | null }) => i.email)
+    ?.token as string;
 
   const viewer = await signedIn(browser, 'viewer');
   await viewer.page.goto(`/?join=${invite}`);
@@ -160,52 +230,96 @@ test('owner shares through the dialog; the viewer gets a read-only project and a
   await viewer.page.locator('.editor-menus .text-menu').filter({ hasText: 'File' }).click();
   await viewer.page.getByRole('menuitem', { name: 'Project history' }).click();
   const history = viewer.page.getByRole('dialog', { name: 'Project history' });
-  await history.getByRole('combobox', { name: 'Older version' }).selectOption({ label: await history.getByRole('option', { name: /Draft/ }).first().innerText() });
+  await history
+    .getByRole('combobox', { name: 'Older version' })
+    .selectOption({ label: await history.getByRole('option', { name: /Draft/ }).first().innerText() });
   await expect(history.getByTestId('history-diff')).toContainText('Version one');
   await expect(history.getByTestId('history-diff')).toContainText('Version two');
   await expect(history.getByRole('button', { name: /Restore/ })).toHaveCount(0);
   expect((await (await api.get(`/${id}`)).json()).files[0].content).toBe(source('Version two'));
   expect([...owner.errors, ...viewer.errors]).toEqual([]);
   await api.del(`/${id}`);
-  await owner.context.close(); await viewer.context.close();
+  await owner.context.close();
+  await viewer.context.close();
 });
 
-test('a signed-out visitor is told which project a link is for, and lands in it after signing in', async ({ browser, request }) => {
+test('a signed-out visitor is told which project a link is for, and lands in it after signing in', async ({
+  browser,
+  request,
+}) => {
   test.setTimeout(90_000);
-  const api = client(request, await tokenFor('owner')), id = newId();
+  const api = client(request, await tokenFor('owner')),
+    id = newId();
   // A project with a large image: creating a link must not depend on loading the project's files.
   const image = Buffer.alloc(3 * 1024 * 1024, 7).toString('base64');
-  await api.put(`/${id}`, { name: 'Smart Wardrobe Management System', mainFile: 'main.tex', files: [{ name: 'main.tex', content: source('Wardrobe paper') }, { name: 'figures/big.png', content: image, encoding: 'base64' }] });
+  await api.put(`/${id}`, {
+    name: 'Smart Wardrobe Management System',
+    mainFile: 'main.tex',
+    files: [
+      { name: 'main.tex', content: source('Wardrobe paper') },
+      { name: 'figures/big.png', content: image, encoding: 'base64' },
+    ],
+  });
   const started = Date.now();
   const link = (await (await api.post(`/${id}/invites`, { role: 'editor' })).json()).token as string;
-  expect((await (await api.get(`/${id}/members`)).json()).invites.map((i: { token: string }) => i.token)).toEqual([link]);
+  expect((await (await api.get(`/${id}/members`)).json()).invites.map((i: { token: string }) => i.token)).toEqual([
+    link,
+  ]);
   expect(Date.now() - started).toBeLessThan(2000);
 
   // Anyone holding the link can see what it is for; an unknown link says so.
-  expect(await (await request.get(`${API}/api/invites/${link}`)).json()).toEqual({ project: 'Smart Wardrobe Management System', role: 'editor', forEmail: false });
+  expect(await (await request.get(`${API}/api/invites/${link}`)).json()).toEqual({
+    project: 'Smart Wardrobe Management System',
+    role: 'editor',
+    forEmail: false,
+  });
   expect((await request.get(`${API}/api/invites/not-a-real-link`)).status()).toBe(404);
 
   // A visitor who is not signed in, on a browser that has never opened the app.
-  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } }), page = await context.newPage();
+  const context = await browser.newContext({ viewport: { width: 1440, height: 900 } }),
+    page = await context.newPage();
   const errors: string[] = [];
-  page.on('pageerror', e => errors.push(e.message));
-  await page.route(/^https:\/\/fonts\.(googleapis|gstatic)\.com\//, route => route.fulfill({ status: 200, contentType: 'text/css', body: '' }));
+  page.on('pageerror', (e) => errors.push(e.message));
+  await page.route(/^https:\/\/fonts\.(googleapis|gstatic)\.com\//, (route) =>
+    route.fulfill({ status: 200, contentType: 'text/css', body: '' }),
+  );
   const token = await tokenFor('editor');
-  await page.route(`${SUPABASE}/auth/v1/**`, async route => {
+  await page.route(`${SUPABASE}/auth/v1/**`, async (route) => {
     const url = new URL(route.request().url());
-    if (url.pathname.endsWith('/settings')) return route.fulfill({ json: { external: { email: true, google: false } } });
+    if (url.pathname.endsWith('/settings'))
+      return route.fulfill({ json: { external: { email: true, google: false } } });
     if (url.pathname.endsWith('/otp')) return route.fulfill({ json: {} });
-    if (url.pathname.endsWith('/token')) return route.fulfill({ json: {
-      access_token: token, token_type: 'bearer', expires_in: 3600, expires_at: Math.floor(Date.now() / 1000) + 3600, refresh_token: 'test-refresh',
-      user: { id: people.editor.id, aud: 'authenticated', role: 'authenticated', email: people.editor.email, app_metadata: { provider: 'email' }, user_metadata: {}, created_at: new Date().toISOString() },
-    } });
+    if (url.pathname.endsWith('/token'))
+      return route.fulfill({
+        json: {
+          access_token: token,
+          token_type: 'bearer',
+          expires_in: 3600,
+          expires_at: Math.floor(Date.now() / 1000) + 3600,
+          refresh_token: 'test-refresh',
+          user: {
+            id: people.editor.id,
+            aud: 'authenticated',
+            role: 'authenticated',
+            email: people.editor.email,
+            app_metadata: { provider: 'email' },
+            user_metadata: {},
+            created_at: new Date().toISOString(),
+          },
+        },
+      });
     return route.fulfill({ status: 404, json: { error: 'unexpected auth call' } });
   });
-  await page.addInitScript(() => { localStorage.setItem('paperdesk-tour-done', '1'); localStorage.setItem('paperdesk-help-seen', '1'); });
+  await page.addInitScript(() => {
+    localStorage.setItem('paperdesk-tour-done', '1');
+    localStorage.setItem('paperdesk-help-seen', '1');
+  });
 
   await page.goto(`/?join=${link}`);
   const dialog = page.getByRole('dialog', { name: 'Sign in to PaperDesk' });
-  await expect(dialog).toContainText('You were invited to edit “Smart Wardrobe Management System”. Sign in to open it.');
+  await expect(dialog).toContainText(
+    'You were invited to edit “Smart Wardrobe Management System”. Sign in to open it.',
+  );
   // The sample project is not opened behind the dialog: that looked like the link had opened the wrong project.
   await expect(page.locator('.monaco-editor')).toHaveCount(0);
   expect(new URL(page.url()).hash).toBe('');
@@ -216,15 +330,24 @@ test('a signed-out visitor is told which project a link is for, and lands in it 
   // Opening the emailed link comes back with a one-time code; the invited project opens.
   await page.goto('/?code=test-code');
   await expect(page.locator('.view-line').filter({ hasText: 'Wardrobe paper' })).toBeVisible({ timeout: 30_000 });
-  await expect(page.locator('.project-title, .editor-title, header').filter({ hasText: 'Smart Wardrobe Management System' }).first()).toBeVisible();
+  await expect(
+    page
+      .locator('.project-title, .editor-title, header')
+      .filter({ hasText: 'Smart Wardrobe Management System' })
+      .first(),
+  ).toBeVisible();
   expect(new URL(page.url()).hash).toMatch(/^#\/paper\/s-/);
   expect(errors).toEqual([]);
   await context.close();
 
   // A link that was turned off says so instead of asking the visitor to sign in.
   await api.del(`/${id}/invites/${link}`);
-  const late = await browser.newContext(), latePage = await late.newPage();
-  await latePage.addInitScript(() => { localStorage.setItem('paperdesk-tour-done', '1'); localStorage.setItem('paperdesk-help-seen', '1'); });
+  const late = await browser.newContext(),
+    latePage = await late.newPage();
+  await latePage.addInitScript(() => {
+    localStorage.setItem('paperdesk-tour-done', '1');
+    localStorage.setItem('paperdesk-help-seen', '1');
+  });
   await latePage.goto(`/?join=${link}`);
   await expect(latePage.locator('.toast')).toContainText('This invitation link is no longer valid');
   await expect(latePage.getByRole('dialog', { name: 'Sign in to PaperDesk' })).toHaveCount(0);

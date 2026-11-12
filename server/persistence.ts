@@ -1,4 +1,10 @@
-import { DeleteObjectCommand, GetObjectCommand, HeadBucketCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import {
+  DeleteObjectCommand,
+  GetObjectCommand,
+  HeadBucketCommand,
+  PutObjectCommand,
+  S3Client,
+} from '@aws-sdk/client-s3';
 import { Pool } from 'pg';
 
 export type StoredFile = { name: string; content: string; encoding?: 'base64' };
@@ -17,7 +23,13 @@ export type ProjectData = {
 export type ProjectUpdate = Omit<Partial<ProjectData>, 'id' | 'modified'>;
 
 const env = process.env;
-const cloudValues = [env.DATABASE_URL, env.R2_ACCOUNT_ID, env.R2_ACCESS_KEY_ID, env.R2_SECRET_ACCESS_KEY, env.R2_BUCKET];
+const cloudValues = [
+  env.DATABASE_URL,
+  env.R2_ACCOUNT_ID,
+  env.R2_ACCESS_KEY_ID,
+  env.R2_SECRET_ACCESS_KEY,
+  env.R2_BUCKET,
+];
 const anyCloudValue = cloudValues.some(Boolean);
 const completeCloudConfig = cloudValues.every(Boolean);
 /** node-pg turns JS arrays into Postgres array literals, which jsonb columns reject; store JSON text instead. */
@@ -32,13 +44,22 @@ export class ProjectPersistence {
   private bucket?: string;
 
   constructor() {
-    if (anyCloudValue && !completeCloudConfig) throw new Error('Production storage needs DATABASE_URL, R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, and R2_BUCKET.');
+    if (anyCloudValue && !completeCloudConfig)
+      throw new Error(
+        'Production storage needs DATABASE_URL, R2_ACCOUNT_ID, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY, and R2_BUCKET.',
+      );
     this.mode = completeCloudConfig ? 'neon-r2' : 'local';
     this.ready = this.mode === 'local';
     if (this.mode === 'neon-r2') {
       // Neon requires TLS; `sslmode=disable` in the URL is only for a local Postgres during development.
       const ssl = /[?&]sslmode=disable\b/.test(env.DATABASE_URL!) ? false : { rejectUnauthorized: true };
-      this.pool = new Pool({ connectionString: env.DATABASE_URL, max: 2, idleTimeoutMillis: 15_000, connectionTimeoutMillis: 10_000, ssl });
+      this.pool = new Pool({
+        connectionString: env.DATABASE_URL,
+        max: 2,
+        idleTimeoutMillis: 15_000,
+        connectionTimeoutMillis: 10_000,
+        ssl,
+      });
       this.bucket = env.R2_BUCKET;
       this.s3 = new S3Client({
         region: 'auto',
@@ -84,52 +105,98 @@ export class ProjectPersistence {
   }
 
   /** The Postgres pool, for the sharing tables (null with local file storage). */
-  get database() { return this.pool ?? null; }
+  get database() {
+    return this.pool ?? null;
+  }
 
   async list(ownerId: string): Promise<ProjectData[]> {
-    const { rows } = await this.pool!.query('SELECT * FROM paperdesk_projects WHERE owner_id = $1 ORDER BY modified DESC', [ownerId]);
-    return Promise.all(rows.map(row => this.readRow(row)));
+    const { rows } = await this.pool!.query(
+      'SELECT * FROM paperdesk_projects WHERE owner_id = $1 ORDER BY modified DESC',
+      [ownerId],
+    );
+    return Promise.all(rows.map((row) => this.readRow(row)));
   }
 
   /** Whether the project exists, without loading its files. */
   async exists(id: string, ownerId: string) {
-    const { rowCount } = await this.pool!.query('SELECT 1 FROM paperdesk_projects WHERE id = $1 AND owner_id = $2', [id, ownerId]);
+    const { rowCount } = await this.pool!.query('SELECT 1 FROM paperdesk_projects WHERE id = $1 AND owner_id = $2', [
+      id,
+      ownerId,
+    ]);
     return !!rowCount;
   }
 
   async read(id: string, ownerId: string): Promise<ProjectData> {
-    const { rows } = await this.pool!.query('SELECT * FROM paperdesk_projects WHERE id = $1 AND owner_id = $2', [id, ownerId]);
+    const { rows } = await this.pool!.query('SELECT * FROM paperdesk_projects WHERE id = $1 AND owner_id = $2', [
+      id,
+      ownerId,
+    ]);
     if (!rows[0]) throw new Error('Project not found');
     return this.readRow(rows[0]);
   }
 
   async write(id: string, ownerId: string, update: ProjectUpdate): Promise<ProjectData> {
     // Only the metadata row is needed to merge an update; the stored source is fetched only when no files were sent.
-    const { rows } = await this.pool!.query('SELECT * FROM paperdesk_projects WHERE id = $1 AND owner_id = $2', [id, ownerId]);
+    const { rows } = await this.pool!.query('SELECT * FROM paperdesk_projects WHERE id = $1 AND owner_id = $2', [
+      id,
+      ownerId,
+    ]);
     const previous = rows[0] ? this.metaRow(rows[0]) : null;
     const files = update.files ?? (rows[0] ? (await this.readRow(rows[0])).files : []);
     const name = update.name ?? previous?.name ?? 'Untitled Project';
     const objectKey = `projects/${ownerId}/${id}/source.json`;
     const json = JSON.stringify(files);
-    await this.s3!.send(new PutObjectCommand({ Bucket: this.bucket, Key: objectKey, Body: json, ContentType: 'application/json' }));
-    const value = <K extends 'mainFile' | 'archived' | 'settings' | 'versions' | 'comments' | 'changes'>(key: K): ProjectData[K] => (update[key] !== undefined ? update[key] : previous?.[key]) as ProjectData[K];
+    await this.s3!.send(
+      new PutObjectCommand({ Bucket: this.bucket, Key: objectKey, Body: json, ContentType: 'application/json' }),
+    );
+    const value = <K extends 'mainFile' | 'archived' | 'settings' | 'versions' | 'comments' | 'changes'>(
+      key: K,
+    ): ProjectData[K] => (update[key] !== undefined ? update[key] : previous?.[key]) as ProjectData[K];
     const modified = Date.now();
-    const saved = await this.pool!.query(`INSERT INTO paperdesk_projects (id,owner_id,name,modified,main_file,archived,settings,versions,comments,changes,object_key)
+    const saved = await this.pool!.query(
+      `INSERT INTO paperdesk_projects (id,owner_id,name,modified,main_file,archived,settings,versions,comments,changes,object_key)
       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
       ON CONFLICT (owner_id, id) DO UPDATE SET name=EXCLUDED.name, modified=EXCLUDED.modified, main_file=EXCLUDED.main_file,
       archived=EXCLUDED.archived, settings=EXCLUDED.settings, versions=EXCLUDED.versions,
       comments=EXCLUDED.comments, changes=EXCLUDED.changes, object_key=EXCLUDED.object_key RETURNING id`,
-    [id, ownerId, name, modified, value('mainFile') ?? null, value('archived') ?? null, jsonb(value('settings')), jsonb(value('versions')), jsonb(value('comments')), jsonb(value('changes')), objectKey]);
+      [
+        id,
+        ownerId,
+        name,
+        modified,
+        value('mainFile') ?? null,
+        value('archived') ?? null,
+        jsonb(value('settings')),
+        jsonb(value('versions')),
+        jsonb(value('comments')),
+        jsonb(value('changes')),
+        objectKey,
+      ],
+    );
     if (!saved.rowCount) throw new Error('Project not found');
-    return { id, name, modified, files, mainFile: value('mainFile'), archived: value('archived'), settings: value('settings'), versions: value('versions'), comments: value('comments'), changes: value('changes') };
+    return {
+      id,
+      name,
+      modified,
+      files,
+      mainFile: value('mainFile'),
+      archived: value('archived'),
+      settings: value('settings'),
+      versions: value('versions'),
+      comments: value('comments'),
+      changes: value('changes'),
+    };
   }
 
   async delete(id: string, ownerId: string) {
-    const { rowCount } = await this.pool!.query('DELETE FROM paperdesk_projects WHERE id = $1 AND owner_id = $2', [id, ownerId]);
+    const { rowCount } = await this.pool!.query('DELETE FROM paperdesk_projects WHERE id = $1 AND owner_id = $2', [
+      id,
+      ownerId,
+    ]);
     if (!rowCount) return;
     const prefix = `projects/${ownerId}/${id}`;
     const keys = [`${prefix}/source.json`, `${prefix}/artifacts/compiled.pdf`, `${prefix}/artifacts/synctex.gz`];
-    await Promise.all(keys.map(Key => this.s3!.send(new DeleteObjectCommand({ Bucket: this.bucket, Key }))));
+    await Promise.all(keys.map((Key) => this.s3!.send(new DeleteObjectCommand({ Bucket: this.bucket, Key }))));
   }
 
   /**
@@ -137,20 +204,38 @@ export class ProjectPersistence {
    * A project whose id the account already uses gets a new id. Each row keeps its stored source object, so files
    * are not copied; compiled PDFs are not moved and are rebuilt on the next compile. Returns the id changes.
    */
-  async claim(fromOwner: string, toOwner: string, newId: (id: string) => string): Promise<{ from: string; to: string }[]> {
+  async claim(
+    fromOwner: string,
+    toOwner: string,
+    newId: (id: string) => string,
+  ): Promise<{ from: string; to: string }[]> {
     const client = await this.pool!.connect();
     try {
       await client.query('BEGIN');
-      const { rows } = await client.query('SELECT id FROM paperdesk_projects WHERE owner_id = $1 FOR UPDATE', [fromOwner]);
-      const taken = new Set((await client.query('SELECT id FROM paperdesk_projects WHERE owner_id = $1', [toOwner])).rows.map(r => String(r.id)));
+      const { rows } = await client.query('SELECT id FROM paperdesk_projects WHERE owner_id = $1 FOR UPDATE', [
+        fromOwner,
+      ]);
+      const taken = new Set(
+        (await client.query('SELECT id FROM paperdesk_projects WHERE owner_id = $1', [toOwner])).rows.map((r) =>
+          String(r.id),
+        ),
+      );
       const moved: { from: string; to: string }[] = [];
       for (const row of rows) {
         const from = String(row.id);
         let to = from;
         while (taken.has(to)) to = newId(from);
         taken.add(to);
-        await client.query('UPDATE paperdesk_projects SET owner_id = $1, id = $2 WHERE owner_id = $3 AND id = $4', [toOwner, to, fromOwner, from]);
-        await client.query('UPDATE paperdesk_file_versions SET owner_id = $1, project_id = $2 WHERE owner_id = $3 AND project_id = $4', [toOwner, to, fromOwner, from]);
+        await client.query('UPDATE paperdesk_projects SET owner_id = $1, id = $2 WHERE owner_id = $3 AND id = $4', [
+          toOwner,
+          to,
+          fromOwner,
+          from,
+        ]);
+        await client.query(
+          'UPDATE paperdesk_file_versions SET owner_id = $1, project_id = $2 WHERE owner_id = $3 AND project_id = $4',
+          [toOwner, to, fromOwner, from],
+        );
         moved.push({ from, to });
       }
       await client.query('COMMIT');
@@ -158,22 +243,40 @@ export class ProjectPersistence {
     } catch (error) {
       await client.query('ROLLBACK').catch(() => undefined);
       throw error;
-    } finally { client.release(); }
+    } finally {
+      client.release();
+    }
   }
 
   async putArtifact(id: string, ownerId: string, name: 'compiled.pdf' | 'synctex.gz', body: Buffer) {
-    await this.s3!.send(new PutObjectCommand({ Bucket: this.bucket, Key: `projects/${ownerId}/${id}/artifacts/${name}`, Body: body, ContentType: name.endsWith('.pdf') ? 'application/pdf' : 'application/gzip' }));
+    await this.s3!.send(
+      new PutObjectCommand({
+        Bucket: this.bucket,
+        Key: `projects/${ownerId}/${id}/artifacts/${name}`,
+        Body: body,
+        ContentType: name.endsWith('.pdf') ? 'application/pdf' : 'application/gzip',
+      }),
+    );
   }
 
   async getArtifact(id: string, ownerId: string, name: 'compiled.pdf' | 'synctex.gz') {
-    const result = await this.s3!.send(new GetObjectCommand({ Bucket: this.bucket, Key: `projects/${ownerId}/${id}/artifacts/${name}` }));
+    const result = await this.s3!.send(
+      new GetObjectCommand({ Bucket: this.bucket, Key: `projects/${ownerId}/${id}/artifacts/${name}` }),
+    );
     if (!result.Body) throw new Error('Stored artifact is empty');
     return Buffer.from(await result.Body.transformToByteArray());
   }
 
   /** Read-only copy links: an immutable snapshot that anyone with the id can read. */
   async putShare(shareId: string, snapshot: unknown) {
-    await this.s3!.send(new PutObjectCommand({ Bucket: this.bucket, Key: `shares/${shareId}.json`, Body: JSON.stringify(snapshot), ContentType: 'application/json' }));
+    await this.s3!.send(
+      new PutObjectCommand({
+        Bucket: this.bucket,
+        Key: `shares/${shareId}.json`,
+        Body: JSON.stringify(snapshot),
+        ContentType: 'application/json',
+      }),
+    );
   }
 
   async getShare(shareId: string) {
@@ -182,7 +285,13 @@ export class ProjectPersistence {
   }
 
   async deleteArtifacts(id: string, ownerId: string) {
-    await Promise.all(['compiled.pdf', 'synctex.gz'].map(name => this.s3!.send(new DeleteObjectCommand({ Bucket: this.bucket, Key: `projects/${ownerId}/${id}/artifacts/${name}` }))));
+    await Promise.all(
+      ['compiled.pdf', 'synctex.gz'].map((name) =>
+        this.s3!.send(
+          new DeleteObjectCommand({ Bucket: this.bucket, Key: `projects/${ownerId}/${id}/artifacts/${name}` }),
+        ),
+      ),
+    );
   }
 
   private async readRow(row: Record<string, unknown>): Promise<ProjectData> {
@@ -193,7 +302,9 @@ export class ProjectPersistence {
 
   private metaRow(row: Record<string, unknown>): Omit<ProjectData, 'files'> {
     return {
-      id: String(row.id), name: String(row.name), modified: Number(row.modified),
+      id: String(row.id),
+      name: String(row.name),
+      modified: Number(row.modified),
       ...(row.main_file ? { mainFile: String(row.main_file) } : {}),
       ...(row.archived === null ? {} : { archived: Boolean(row.archived) }),
       ...(row.settings === null ? {} : { settings: row.settings }),

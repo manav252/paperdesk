@@ -15,25 +15,47 @@ export function recordEdit(previous: string, next: string, file: string, changes
   let start = 0;
   while (start < previous.length && start < next.length && previous[start] === next[start]) start++;
   let suffix = 0;
-  while (suffix < previous.length - start && suffix < next.length - start && previous[previous.length - 1 - suffix] === next[next.length - 1 - suffix]) suffix++;
+  while (
+    suffix < previous.length - start &&
+    suffix < next.length - start &&
+    previous[previous.length - 1 - suffix] === next[next.length - 1 - suffix]
+  )
+    suffix++;
   const oldEnd = previous.length - suffix;
   const beforeText = previous.slice(start, oldEnd);
   const afterText = next.slice(start, next.length - suffix);
-  const existing = [...changes].reverse().find(change => change.file === file && start >= change.start && start <= change.start + change.afterText.length && previous.slice(change.start, change.start + change.afterText.length) === change.afterText);
+  const existing = [...changes]
+    .reverse()
+    .find(
+      (change) =>
+        change.file === file &&
+        start >= change.start &&
+        start <= change.start + change.afterText.length &&
+        previous.slice(change.start, change.start + change.afterText.length) === change.afterText,
+    );
   if (existing) {
     const from = start - existing.start;
     const to = Math.max(from, Math.min(existing.afterText.length, oldEnd - existing.start));
     const replacement = existing.afterText.slice(0, from) + afterText + existing.afterText.slice(to);
-    const updated = changes.filter(change => change.id !== existing.id);
+    const updated = changes.filter((change) => change.id !== existing.id);
     if (replacement === existing.beforeText) return updated;
     return [...updated, { ...existing, afterText: replacement }];
   }
   if (beforeText === afterText) return changes;
-  return [...changes, {
-    id: crypto.randomUUID(), file, start, line: previous.slice(0, start).split('\n').length, beforeText, afterText,
-    leftContext: previous.slice(Math.max(0, start - 40), start),
-    rightContext: previous.slice(oldEnd, oldEnd + 40), created: now,
-  }];
+  return [
+    ...changes,
+    {
+      id: crypto.randomUUID(),
+      file,
+      start,
+      line: previous.slice(0, start).split('\n').length,
+      beforeText,
+      afterText,
+      leftContext: previous.slice(Math.max(0, start - 40), start),
+      rightContext: previous.slice(oldEnd, oldEnd + 40),
+      created: now,
+    },
+  ];
 }
 
 /** Revert one tracked patch if its exact surrounding context is still present. */

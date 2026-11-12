@@ -4,7 +4,10 @@ import { describe, expect, it } from 'vitest';
 
 // The API image copies an explicit list of source files. A server import missing from that list only shows up
 // as a crash when Render starts the new image, so check the list against the imports here.
-const copied = readFileSync('Dockerfile.api', 'utf8').split('\n').filter(l => l.startsWith('COPY ')).flatMap(l => l.slice(5).trim().split(/\s+/).slice(0, -1));
+const copied = readFileSync('Dockerfile.api', 'utf8')
+  .split('\n')
+  .filter((l) => l.startsWith('COPY '))
+  .flatMap((l) => l.slice(5).trim().split(/\s+/).slice(0, -1));
 
 function localImports(file: string, seen = new Set<string>()): Set<string> {
   if (seen.has(file)) return seen;
@@ -18,6 +21,6 @@ function localImports(file: string, seen = new Set<string>()): Set<string> {
 
 describe('Dockerfile.api', () => {
   it('copies every file the API server imports', () => {
-    expect([...localImports('server/index.ts')].filter(f => !copied.includes(f))).toEqual([]);
+    expect([...localImports('server/index.ts')].filter((f) => !copied.includes(f))).toEqual([]);
   });
 });

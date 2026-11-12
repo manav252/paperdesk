@@ -6,12 +6,18 @@ let transientOwner: string | undefined;
 export function projectOwnerId() {
   try {
     let id = localStorage.getItem(OWNER_KEY);
-    if (!id) { id = crypto.randomUUID(); localStorage.setItem(OWNER_KEY, id); }
+    if (!id) {
+      id = crypto.randomUUID();
+      localStorage.setItem(OWNER_KEY, id);
+    }
     return id;
   } catch {
     try {
       let id = sessionStorage.getItem(OWNER_KEY);
-      if (!id) { id = crypto.randomUUID(); sessionStorage.setItem(OWNER_KEY, id); }
+      if (!id) {
+        id = crypto.randomUUID();
+        sessionStorage.setItem(OWNER_KEY, id);
+      }
       return id;
     } catch {
       transientOwner ??= crypto.randomUUID();
@@ -31,7 +37,7 @@ export function apiUrl(path: string) {
   return `${configuredApi}${path.startsWith('/') ? path : `/${path}`}`;
 }
 
-export const wait = (ms: number) => new Promise(resolve => window.setTimeout(resolve, ms));
+export const wait = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
 
 /** Render's free web service may return its proxy page or briefly refuse connections while it wakes. */
 export async function fetchWithWake(url: string, init: RequestInit, waking: () => void, attempts = 24) {
@@ -41,8 +47,12 @@ export async function fetchWithWake(url: string, init: RequestInit, waking: () =
     response = await fetch(url, init);
     if (response.status === 502 || response.status === 504) needsWake = true;
     else if (response.status === 503) {
-      const body = await response.clone().json().catch(() => null) as { error?: string } | null;
-      needsWake = !body?.error || !/Docker isn’t running|compiler image|LaTeX tools are not installed/i.test(body.error);
+      const body = (await response
+        .clone()
+        .json()
+        .catch(() => null)) as { error?: string } | null;
+      needsWake =
+        !body?.error || !/Docker isn’t running|compiler image|LaTeX tools are not installed/i.test(body.error);
     }
   } catch (error) {
     // A cancelled compile is not a sleeping server.
@@ -60,7 +70,9 @@ export async function fetchWithWake(url: string, init: RequestInit, waking: () =
       if (!health.ok) continue;
       const retried = await fetch(url, init);
       if (retried.status !== 502 && retried.status !== 504) return retried;
-    } catch { /* keep polling the sleeping instance */ }
+    } catch {
+      /* keep polling the sleeping instance */
+    }
   }
   throw new Error('The compile server did not wake up. Please try again in a moment.');
 }

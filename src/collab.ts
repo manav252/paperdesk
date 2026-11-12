@@ -32,9 +32,17 @@ const textKey = (name: string) => `f:${name}`;
  * editor with y-monaco, with everyone's cursors. The libraries are downloaded only when a shared project opens.
  */
 export async function startCollab(projectId: string, me: { name: string }, handlers: CollabHandlers): Promise<Collab> {
-  const [{ io }, Y, awarenessProtocol, { MonacoBinding }] = await Promise.all([import('socket.io-client'), import('yjs'), import('y-protocols/awareness'), import('y-monaco')]);
+  const [{ io }, Y, awarenessProtocol, { MonacoBinding }] = await Promise.all([
+    import('socket.io-client'),
+    import('yjs'),
+    import('y-protocols/awareness'),
+    import('y-monaco'),
+  ]);
   const socket = io(apiUrl('/').replace(/\/$/, '') || undefined, {
-    auth: cb => { const token = currentAccessToken(); cb(token ? { token } : { owner: projectOwnerId() }); },
+    auth: (cb) => {
+      const token = currentAccessToken();
+      cb(token ? { token } : { owner: projectOwnerId() });
+    },
   });
   const color = COLORS[Math.floor(Math.random() * COLORS.length)]!;
   const style = document.createElement('style');
@@ -55,24 +63,41 @@ export async function startCollab(projectId: string, me: { name: string }, handl
   const flush = () => {
     flushQueued = false;
     if (!doc || destroyed) return;
-    const current = names(), changed = new Map<string, string>(), next = new Map<string, string>();
-    for (const name of current) { const value = doc.getText(textKey(name)).toString(); next.set(name, value); if (known.get(name) !== value) changed.set(name, value); }
+    const current = names(),
+      changed = new Map<string, string>(),
+      next = new Map<string, string>();
+    for (const name of current) {
+      const value = doc.getText(textKey(name)).toString();
+      next.set(name, value);
+      if (known.get(name) !== value) changed.set(name, value);
+    }
     known = next;
     const key = [...current].sort().join('\n');
-    if (key !== knownNames) { knownNames = key; handlers.onNames(current); }
+    if (key !== knownNames) {
+      knownNames = key;
+      handlers.onNames(current);
+    }
     if (changed.size) handlers.onTexts(changed);
   };
-  const queueFlush = () => { if (!flushQueued) { flushQueued = true; queueMicrotask(flush); } };
+  const queueFlush = () => {
+    if (!flushQueued) {
+      flushQueued = true;
+      queueMicrotask(flush);
+    }
+  };
 
   const showPeers = () => {
     if (!awareness || !doc) return;
-    const peers: Peer[] = [], rules: string[] = [];
+    const peers: Peer[] = [],
+      rules: string[] = [];
     awareness.getStates().forEach((state, clientId) => {
       const user = (state as { user?: Peer }).user;
       if (!user || clientId === doc!.clientID) return;
       peers.push(user);
       const label = JSON.stringify(user.name.slice(0, 24));
-      rules.push(`.yRemoteSelection-${clientId}{background-color:${user.color}33}.yRemoteSelectionHead-${clientId}{border-left:2px solid ${user.color}}.yRemoteSelectionHead-${clientId}::after{content:${label};background:${user.color}}`);
+      rules.push(
+        `.yRemoteSelection-${clientId}{background-color:${user.color}33}.yRemoteSelectionHead-${clientId}{border-left:2px solid ${user.color}}.yRemoteSelectionHead-${clientId}::after{content:${label};background:${user.color}}`,
+      );
     });
     style.textContent = rules.join('\n');
     handlers.onPeers(peers);
@@ -87,52 +112,80 @@ export async function startCollab(projectId: string, me: { name: string }, handl
   };
 
   /** Starts from the server's copy; after a short disconnect of the same server document, sends what it missed. */
-  const join = () => socket.emit('collab:join', projectId, (reply: { ok: boolean; epoch?: string; state?: ArrayBuffer }) => {
-    if (destroyed || !reply?.ok || !reply.state) return;
-    const state = new Uint8Array(reply.state);
-    if (doc && reply.epoch === epoch) {
-      Y.applyUpdate(doc, state, 'remote');
-      socket.emit('collab:update', Y.encodeStateAsUpdate(doc));
-    } else {
-      binding?.destroy(); binding = null;
-      awareness?.destroy(); doc?.destroy();
-      const fresh = new Y.Doc();
-      Y.applyUpdate(fresh, state, 'remote');
-      doc = fresh; epoch = reply.epoch ?? '';
-      known = new Map(); knownNames = '\u0000';
-      fresh.on('update', (update: Uint8Array, origin: unknown) => { if (origin !== 'remote') socket.emit('collab:update', update); queueFlush(); });
-      const aware = new awarenessProtocol.Awareness(fresh);
-      awareness = aware;
-      aware.on('update', ({ added, updated, removed }: { added: number[]; updated: number[]; removed: number[] }, origin: unknown) => {
-        if (origin !== 'remote') socket.emit('collab:awareness', awarenessProtocol.encodeAwarenessUpdate(aware, [...added, ...updated, ...removed]));
-        showPeers();
-      });
-      aware.setLocalStateField('user', { name: me.name, color });
-      attach();
-    }
-    socket.emit('collab:client', doc.clientID);
-    if (awareness) socket.emit('collab:awareness', awarenessProtocol.encodeAwarenessUpdate(awareness, [doc.clientID]));
-    flush();
-  });
+  const join = () =>
+    socket.emit('collab:join', projectId, (reply: { ok: boolean; epoch?: string; state?: ArrayBuffer }) => {
+      if (destroyed || !reply?.ok || !reply.state) return;
+      const state = new Uint8Array(reply.state);
+      if (doc && reply.epoch === epoch) {
+        Y.applyUpdate(doc, state, 'remote');
+        socket.emit('collab:update', Y.encodeStateAsUpdate(doc));
+      } else {
+        binding?.destroy();
+        binding = null;
+        awareness?.destroy();
+        doc?.destroy();
+        const fresh = new Y.Doc();
+        Y.applyUpdate(fresh, state, 'remote');
+        doc = fresh;
+        epoch = reply.epoch ?? '';
+        known = new Map();
+        knownNames = '\u0000';
+        fresh.on('update', (update: Uint8Array, origin: unknown) => {
+          if (origin !== 'remote') socket.emit('collab:update', update);
+          queueFlush();
+        });
+        const aware = new awarenessProtocol.Awareness(fresh);
+        awareness = aware;
+        aware.on(
+          'update',
+          ({ added, updated, removed }: { added: number[]; updated: number[]; removed: number[] }, origin: unknown) => {
+            if (origin !== 'remote')
+              socket.emit(
+                'collab:awareness',
+                awarenessProtocol.encodeAwarenessUpdate(aware, [...added, ...updated, ...removed]),
+              );
+            showPeers();
+          },
+        );
+        aware.setLocalStateField('user', { name: me.name, color });
+        attach();
+      }
+      socket.emit('collab:client', doc.clientID);
+      if (awareness)
+        socket.emit('collab:awareness', awarenessProtocol.encodeAwarenessUpdate(awareness, [doc.clientID]));
+      flush();
+    });
 
   socket.on('connect', join);
-  socket.on('collab:update', (update: ArrayBuffer) => { if (doc) Y.applyUpdate(doc, new Uint8Array(update), 'remote'); });
-  socket.on('collab:awareness', (update: ArrayBuffer) => { if (awareness) awarenessProtocol.applyAwarenessUpdate(awareness, new Uint8Array(update), 'remote'); });
-  socket.on('collab:left', (clientId: number) => { if (awareness) awarenessProtocol.removeAwarenessStates(awareness, [clientId], 'remote'); });
+  socket.on('collab:update', (update: ArrayBuffer) => {
+    if (doc) Y.applyUpdate(doc, new Uint8Array(update), 'remote');
+  });
+  socket.on('collab:awareness', (update: ArrayBuffer) => {
+    if (awareness) awarenessProtocol.applyAwarenessUpdate(awareness, new Uint8Array(update), 'remote');
+  });
+  socket.on('collab:left', (clientId: number) => {
+    if (awareness) awarenessProtocol.removeAwarenessStates(awareness, [clientId], 'remote');
+  });
   socket.on('collab:files', () => handlers.onFiles());
   socket.on('collab:compiled', (result: { success: boolean }) => handlers.onCompiled(!!result?.success));
 
   return {
-    has: name => names().has(name),
-    text: name => doc?.getText(textKey(name)).toString() ?? '',
+    has: (name) => names().has(name),
+    text: (name) => doc?.getText(textKey(name)).toString() ?? '',
     setText(name, content) {
       if (!doc || !names().has(name)) return;
       const text = doc.getText(textKey(name));
       const span = replacedSpan(text.toString(), content);
       if (!span.remove && !span.insert) return;
-      doc.transact(() => { if (span.remove) text.delete(span.index, span.remove); if (span.insert) text.insert(span.index, span.insert); }, 'app');
+      doc.transact(() => {
+        if (span.remove) text.delete(span.index, span.remove);
+        if (span.insert) text.insert(span.index, span.insert);
+      }, 'app');
     },
-    bind(ed, name) { bound = name === null ? null : { ed, name }; attach(); },
+    bind(ed, name) {
+      bound = name === null ? null : { ed, name };
+      attach();
+    },
     destroy() {
       destroyed = true;
       binding?.destroy();

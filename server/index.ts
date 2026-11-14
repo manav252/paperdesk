@@ -18,7 +18,9 @@ import { applyFilePatch, type FilePatch } from '../src/lib/filePatch';
 import { BUILD_FILE, exportFiles, parseFls, type ExportKind } from '../src/lib/submission';
 import { createAuth, userOwnerId, type AuthUser } from './auth';
 import { ROLES, roleAllows, SharingStore, type Role } from './sharing';
-import { mailConfigured, sendInvite } from './mail';
+import { mailConfigured, sendInvite, sendMention } from './mail';
+import { ChatStore, cleanText, handleOf, mentioned } from './chat';
+import { githubConfigured, registerGithub } from './github';
 import * as Y from 'yjs';
 import { CollabRooms, type CollabRoom } from './collab';
 import { Kv } from './kv';
@@ -98,6 +100,7 @@ app.use('/api', (req, res, next) => {
 });
 const sharing = persistence.database ? new SharingStore(persistence.database) : null;
 const kv = new Kv(persistence.database);
+const chat = new ChatStore(kv);
 /** Simple per-client request budget: `limit` calls per minute. */
 const budgets = new Map<string, { count: number; reset: number }>();
 function overBudget(key: string, limit: number) {
@@ -566,6 +569,7 @@ app.get('/api/health', async (_req, res) => {
     assistant: { configured: assistantConfigured(), model: assistantModel() },
     auth: { configured: auth.configured },
     mail: { configured: mailConfigured },
+    github: { configured: githubConfigured },
   });
 });
 
@@ -646,6 +650,7 @@ app.get('/api/projects', async (_req, res) => {
     const owner = projectOwner(res);
     const own = await listProjects(owner);
     const user = res.locals.user as AuthUser | undefined;
+    if (user) await rememberProfile(user);
     if (!sharing || !user) return void res.json(own);
     await sharing.claimEmailInvites({ id: user.id, ownerId: userOwnerId(user), email: user.email });
     const [mine, memberships] = await Promise.all([sharing.sharedIds(owner), sharing.memberships(user.id)]);
@@ -780,6 +785,8 @@ app.delete('/api/projects/:id', async (req, res) => {
     RESULTS.delete(key);
     ARTIFACTS.delete(key);
     await workspaces.dropProject(`${key}:`);
+    await chat.clear(key);
+    await kv.delete('github-link', `${projectOwner(res)}/${req.params.id}`);
     res.status(204).end();
   } catch (e) {
     send(res, 400, e);
@@ -2005,6 +2012,8 @@ app.delete('/api/projects/:id/cache', async (req, res) => {
     RESULTS.delete(key);
     ARTIFACTS.delete(key);
     await workspaces.dropProject(`${key}:`);
+    await chat.clear(key);
+    await kv.delete('github-link', `${projectOwner(res)}/${req.params.id}`);
     res.status(204).end();
   } catch (e) {
     send(res, 400, e);
@@ -2097,6 +2106,8 @@ for (const signal of ['SIGTERM', 'SIGINT'] as const)
   });
 
 io.on('connection', (socket) => {
+  // Mention notifications reach every tab the person has open.
+  if (socket.data.user) void socket.join(`user:${socket.data.user.id}`);
   socket.on('project:join', async (id: string, ack?: (result: { ok: boolean }) => void) => {
     const access = await socketAccess(socket, id).catch(() => null);
     if (access) await socket.join(access.key);
@@ -2155,6 +2166,198 @@ io.on('connection', (socket) => {
   });
   socket.on('collab:leave', () => void leave());
   socket.on('disconnect', () => void leave());
+});
+
+// Project chat, @mentions and notifications.
+const profiles = new Map<string, string>();
+/** Owners are not in the members table, so each account's email is kept for mention lists. */
+async function rememberProfile(user: AuthUser) {
+  if (!user.email || profiles.get(user.id) === user.email) return;
+  if (profiles.size > 5000) profiles.clear();
+  profiles.set(user.id, user.email);
+  await kv.set('profile', user.id, { email: user.email }).catch(() => undefined);
+}
+/** Everyone on a project, with the project id each of them opens it by. */
+async function projectPeople(owner: string, id: string) {
+  if (!owner.startsWith('user:')) return [];
+  const ownerId = owner.slice(5);
+  const profile = await kv.get<{ email: string }>('profile', ownerId);
+  const people = [{ id: ownerId, email: profile?.value.email ?? '', projectId: id }];
+  if (sharing) {
+    const access = await sharing.access(owner, id);
+    for (const m of access.members)
+      people.push({ id: String(m.userId), email: String(m.email ?? ''), projectId: access.alias });
+  }
+  return people.filter((p) => p.email);
+}
+const chatAuthor = (res: express.Response) => {
+  const user = res.locals.user as AuthUser | undefined;
+  return user
+    ? { id: user.id, name: user.email ?? 'Someone' }
+    : {
+        id: `guest-${crypto
+          .createHash('sha256')
+          .update(projectOwner(res) || 'local')
+          .digest('hex')
+          .slice(0, 12)}`,
+        name: 'Guest',
+      };
+};
+async function notifyMentions(
+  req: express.Request,
+  res: express.Response,
+  text: string,
+  kind: 'chat' | 'comment',
+): Promise<number> {
+  const user = res.locals.user as AuthUser | undefined;
+  if (!user) return 0;
+  const owner = projectOwner(res),
+    id = String(req.params.id);
+  const targets = mentioned(text, await projectPeople(owner, id)).filter((p) => p.id !== user.id);
+  if (!targets.length) return 0;
+  const project = (await readProject(id, owner).catch(() => null))?.name ?? 'a project';
+  const from = user.email ?? 'Someone',
+    origin = req.header('Origin'),
+    site = origin && originAllowed(origin) ? origin : allowedOrigins[0];
+  for (const target of targets) {
+    const notice = await chat.notify(target.id, { kind, project, projectId: target.projectId, from, text });
+    io.to(`user:${target.id}`).emit('notify', notice);
+    if (mailConfigured && site && !overBudget(`mail:${owner}`, 10))
+      void sendMention({ to: target.email, project, from, text, link: `${site}/?open=${target.projectId}` });
+  }
+  return targets.length;
+}
+const chatRoute =
+  (handler: (req: express.Request, res: express.Response, room: string) => Promise<unknown>, missing?: object) =>
+  async (req: express.Request, res: express.Response) => {
+    try {
+      const owner = projectOwner(res),
+        id = String(req.params.id);
+      projectPath(id);
+      const exists =
+        persistence.mode === 'neon-r2'
+          ? await persistence.exists(id, owner)
+          : await fs.access(path.join(projectPath(id), 'project.json')).then(
+              () => true,
+              () => false,
+            );
+      // A project that is not saved yet simply has no chat (the browser asks as soon as the project opens).
+      if (!exists)
+        return void (missing ? res.json({ ...missing, me: chatAuthor(res).id }) : send(res, 404, 'Project not found'));
+      await handler(req, res, resultKey(id, owner));
+    } catch (e) {
+      send(res, 500, e);
+    }
+  };
+app.get(
+  '/api/projects/:id/chat',
+  chatRoute(
+    async (req, res, room) => {
+      const people = await projectPeople(projectOwner(res), String(req.params.id));
+      res.json({
+        me: chatAuthor(res).id,
+        messages: await chat.list(room),
+        people: people.map((p) => ({ id: p.id, email: p.email, handle: handleOf(p.email) })),
+      });
+    },
+    { me: '', messages: [], people: [] },
+  ),
+);
+app.post(
+  '/api/projects/:id/chat',
+  chatRoute(async (req, res, room) => {
+    const author = chatAuthor(res),
+      text = cleanText(req.body?.text);
+    if (!text) return void send(res, 400, 'Write a message first.');
+    if (overBudget(`chat:${author.id}`, 30))
+      return void send(res, 429, 'You are sending messages too quickly. Wait a minute.');
+    const message = await chat.add(room, author, text);
+    io.to(room).emit('chat:message', message);
+    await notifyMentions(req, res, text, 'chat').catch((e) => console.error('Notifying a mention failed:', e));
+    res.status(201).json(message);
+  }),
+);
+app.put(
+  '/api/projects/:id/chat/:message',
+  chatRoute(async (req, res, room) => {
+    const text = cleanText(req.body?.text);
+    if (!text) return void send(res, 400, 'Write a message first.');
+    const message = await chat.change(room, String(req.params.message), chatAuthor(res).id, { text });
+    if (!message) return void send(res, 403, 'You can only edit your own messages.');
+    io.to(room).emit('chat:message', message);
+    res.json(message);
+  }),
+);
+app.delete(
+  '/api/projects/:id/chat/:message',
+  chatRoute(async (req, res, room) => {
+    const message = await chat.change(room, String(req.params.message), chatAuthor(res).id, {
+      deleted: true,
+      any: res.locals.role === 'owner' && !!res.locals.user,
+    });
+    if (!message) return void send(res, 403, 'You can only delete your own messages.');
+    io.to(room).emit('chat:message', message);
+    res.json(message);
+  }),
+);
+// A comment that mentions someone: the comment itself is saved with the project, this only tells the person.
+app.post(
+  '/api/projects/:id/mentions',
+  chatRoute(async (req, res) => {
+    const author = chatAuthor(res),
+      text = cleanText(req.body?.text, 500);
+    if (overBudget(`mention:${author.id}`, 20)) return void send(res, 429, 'Too many mentions. Wait a minute.');
+    res.json({ notified: text ? await notifyMentions(req, res, text, 'comment') : 0 });
+  }),
+);
+const signedInUser = async (req: express.Request) => {
+  const token = bearerToken(req);
+  return token ? auth.verify(token) : null;
+};
+app.get('/api/notifications', async (req, res) => {
+  try {
+    const user = await signedInUser(req);
+    if (!user) return void send(res, 401, 'Sign in to see notifications.');
+    res.json(await chat.notices(user.id));
+  } catch (e) {
+    send(res, 500, e);
+  }
+});
+app.post('/api/notifications/read', async (req, res) => {
+  try {
+    const user = await signedInUser(req);
+    if (!user) return void send(res, 401, 'Sign in to see notifications.');
+    await chat.markRead(user.id);
+    res.status(204).end();
+  } catch (e) {
+    send(res, 500, e);
+  }
+});
+
+registerGithub(app, {
+  kv,
+  user: signedInUser,
+  originAllowed,
+  overBudget,
+  owner: projectOwner,
+  read: readProject,
+  flush: async (id, owner) => {
+    const room = collab.get(resultKey(id, owner));
+    if (room) await collab.flush(room);
+  },
+  change: async (id, owner, author, change) => {
+    const result = await lockProject(id, owner, async () => {
+      const next = await change(await readProject(id, owner));
+      if (next) await writeProjectNow(id, { files: next.files }, { replace: true }, owner);
+      return next;
+    });
+    if (!result) return;
+    mirrorToLiveRoom(resultKey(id, owner), result.changed, result.deleted);
+    await sharing
+      ?.record(owner, id, result.changed, author)
+      .catch((e) => console.error('Saving file history failed:', e));
+  },
+  maxBytes: MAX_PROJECT_BYTES,
 });
 
 app.use((_req, res) => send(res, 404, 'Not found'));

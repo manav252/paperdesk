@@ -230,9 +230,8 @@ test('editor header, menus, panels and dialogs', async ({ page }) => {
   await share.getByRole('button', { name: 'Close' }).last().click();
 
   await page.getByRole('button', { name: 'Comments' }).click();
+  await page.getByLabel('New comment').fill('Check this');
   await page.getByRole('button', { name: 'Add comment at cursor' }).click();
-  await page.getByLabel('Comment', { exact: true }).fill('Check this');
-  await page.getByRole('button', { name: 'Add comment', exact: true }).click();
   await expect(page.getByRole('dialog', { name: 'Comments' })).toContainText('Check this');
   await page.keyboard.press('Escape');
   await page.getByRole('button', { name: 'Settings', exact: true }).click();

@@ -64,6 +64,25 @@ Shared projects are edited through Yjs. The API holds one document per open proj
 updates and cursors over socket.io, checks the role on every edit, and saves the text shortly after typing stops.
 Files added or changed through the normal save path are mirrored into the live document.
 
+## Chat, mentions and notifications
+
+`server/chat.ts` stores chat messages and mention notifications in the `paperdesk_kv` table (`server/kv.ts`; memory
+when there is no database). Messages are posted over HTTP, rate-limited per person, and sent to everyone in the
+project's socket.io room; a mention is also sent to the mentioned person's own room, which every signed-in tab
+joins, and by email when a mail provider is configured. The browser keeps one connection for chat and
+notifications (`src/live.ts`), separate from the co-editing connection that exists only while a shared project is
+open. Text is stored and rendered as plain text; `src/lib/chatText.ts` splits it into mentions and file links.
+
+## GitHub sync
+
+`server/github.ts`. Each person connects their own GitHub account through an OAuth App; the token is encrypted
+with AES-256-GCM under `TOKEN_ENCRYPTION_KEY`, stored in `paperdesk_kv` and never sent to the browser. A project's
+link records the repository and the git id of every file at the last sync. Push and pull compare three states (last
+sync, project, repository) by git blob id: a pull takes what only GitHub changed and reports files changed on both
+sides as conflicts for the person to choose; a push is refused while GitHub has anything the project lacks, and
+its branch update is never forced. Commits are created through GitHub's git data API without naming an author, so
+GitHub records the connected account.
+
 ## Research features
 
 - **Citations by DOI or arXiv ID** (`server/citations.ts`, `src/lib/bibtex.ts`): looked up at Crossref and arXiv,

@@ -3789,3 +3789,336 @@ body.is-resizing .resizer:active::after {
     justify-content: center;
   }
 }
+
+/* Project chat, mentions and notifications */
+.chat-toggle,
+.bell > .icon-btn {
+  position: relative;
+}
+.chat-toggle.on {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.count-badge {
+  position: absolute;
+  top: -3px;
+  right: -4px;
+  min-width: 16px;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--danger, #d92d20);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 16px;
+  text-align: center;
+}
+.chat-messages {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.chat-empty {
+  font-size: 13px;
+}
+.chat-message {
+  font-size: 13px;
+  min-width: 0;
+}
+.chat-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-3);
+  font-size: 11.5px;
+  min-height: 22px;
+}
+.chat-meta strong {
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chat-actions {
+  margin-left: auto;
+  display: inline-flex;
+  opacity: 0;
+}
+.chat-message:hover .chat-actions,
+.chat-message:focus-within .chat-actions {
+  opacity: 1;
+}
+@media (hover: none) {
+  .chat-actions {
+    opacity: 1;
+  }
+}
+.chat-text,
+.chat-deleted {
+  margin: 2px 0 0;
+  padding: 7px 10px;
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.chat-message.mine .chat-text {
+  background: var(--accent-soft);
+}
+.chat-deleted {
+  color: var(--text-3);
+  font-style: italic;
+}
+.mention {
+  color: var(--accent);
+  font-weight: 600;
+}
+.file-link,
+.link-btn {
+  border: 0;
+  background: none;
+  padding: 0;
+  font: inherit;
+  color: var(--accent);
+  cursor: pointer;
+  text-align: left;
+}
+.file-link {
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 0.95em;
+  text-decoration: underline;
+}
+.chat-error {
+  margin: 0;
+  padding: 6px 12px;
+  font-size: 12.5px;
+  color: var(--danger, #d92d20);
+}
+.chat-form {
+  border-top: 1px solid var(--border);
+  padding: 10px 12px;
+}
+.chat-editing {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--text-3);
+  margin-bottom: 6px;
+}
+.chat-compose {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+}
+.mention-input {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+}
+.mention-input textarea {
+  display: block;
+  width: 100%;
+  resize: vertical;
+  min-height: 38px;
+  max-height: 160px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+}
+.mention-list {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 4px);
+  z-index: 60;
+  margin: 0;
+  padding: 4px;
+  list-style: none;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-md);
+}
+.mention-list li {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  padding: 6px 8px;
+  border-radius: 6px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.mention-list li.on,
+.mention-list li:hover {
+  background: var(--accent-soft);
+}
+.mention-list span {
+  color: var(--text-3);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.bell-menu {
+  width: min(340px, 86vw);
+  max-height: 60vh;
+  overflow-y: auto;
+}
+.bell-menu button {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  height: auto;
+  padding: 8px 10px;
+  text-align: left;
+  white-space: normal;
+}
+.bell-menu button.unread {
+  background: var(--accent-soft);
+}
+.bell-text {
+  color: var(--text-2);
+  overflow-wrap: anywhere;
+}
+.bell-menu time {
+  color: var(--text-3);
+  font-size: 11.5px;
+}
+.bell-empty {
+  padding: 10px;
+  margin: 0;
+  font-size: 13px;
+}
+
+/* GitHub sync */
+.sync-body {
+  padding: 16px 20px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  overflow-y: auto;
+  font-size: 13.5px;
+}
+.sync-body h4,
+.sync-body p {
+  margin: 0;
+}
+.sync-body section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-start;
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+.sync-body .btn {
+  align-self: flex-start;
+}
+.sync-tools {
+  display: inline-flex;
+  gap: 6px;
+  flex: none;
+}
+.sync-form,
+.sync-message {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+  font-size: 13px;
+}
+.sync-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.sync-form label.check {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+}
+.sync-form input:not([type='checkbox']),
+.sync-form select,
+.sync-message textarea {
+  padding: 7px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  max-width: 100%;
+}
+.sync-files {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.sync-status {
+  display: inline-block;
+  min-width: 62px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+.sync-status.added {
+  color: var(--success, #2f9e44);
+}
+.sync-status.deleted {
+  color: var(--danger, #d92d20);
+}
+.sync-diff,
+.sync-sides pre {
+  margin: 6px 0 0;
+  padding: 8px;
+  max-height: 220px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.sync-diff span {
+  display: block;
+}
+.sync-conflicts {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.sync-sides {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-top: 6px;
+}
+.sync-sides label {
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+.sync-sides label.on {
+  border-color: var(--accent);
+}
+@media (max-width: 640px) {
+  .sync-sides {
+    grid-template-columns: 1fr;
+  }
+}

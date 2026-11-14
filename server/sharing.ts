@@ -14,12 +14,17 @@ export function roleAllows(role: Role, method: string, sub: string) {
   const path = sub.replace(/\/+$/, '');
   if (path.startsWith('/members') || path.startsWith('/invites')) return false;
   if (method === 'GET') return true;
+  // Everyone on a project can use its chat and mention people.
+  if (/^\/(chat(\/[\w-]+)?|mentions)$/.test(path)) return true;
   if (method === 'POST' && VIEWER_POST.has(path)) return true;
   if (role !== 'editor') return false;
   if (method === 'PUT') return path === '' || /^\/files\/[^/]+$/.test(path) || /^\/history\/\d+$/.test(path);
   if (method === 'POST')
-    return ['/files', '/upload', '/share'].includes(path) || /^\/history\/\d+\/restore$/.test(path);
-  if (method === 'DELETE') return /^\/files\/[^/]+$/.test(path) || path === '/cache';
+    return (
+      ['/files', '/upload', '/share', '/github/link', '/github/push', '/github/pull'].includes(path) ||
+      /^\/history\/\d+\/restore$/.test(path)
+    );
+  if (method === 'DELETE') return /^\/files\/[^/]+$/.test(path) || path === '/cache' || path === '/github/link';
   return false;
 }
 

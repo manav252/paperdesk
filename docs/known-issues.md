@@ -26,6 +26,33 @@
 - Moving projects to an account on first sign-in does not move compiled PDFs; the next compile rebuilds them.
 - The personal spelling dictionary and editor preferences are stored per browser, not per account.
 
+## Chat and notifications
+
+- Chat keeps the newest 300 messages per project and the bell the newest 50 mentions per person.
+- Unread chat counts are remembered per browser, not per account.
+- Mention emails are sent only when `BREVO_API_KEY` and `MAIL_FROM` are set, and share the invitation limit of ten
+  emails a minute per project owner. The in-app notification is always created.
+- People can be mentioned once they have opened PaperDesk signed in at least once; `@name` is the part of their
+  email address before the `@`.
+- Comments are saved with the project as a whole. A mention in a comment notifies the person, but two people
+  adding comments at the same moment can still overwrite each other.
+- Without an account, chat works in the browser's own projects but is not live and has no mentions.
+
+## GitHub sync
+
+- Off unless `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` and `TOKEN_ENCRYPTION_KEY` are set on the API.
+- Only the repository's default branch is synced.
+- A file changed both in PaperDesk and on GitHub is a conflict: one version is chosen per file; the two are not
+  merged line by line.
+- Build files, the PDF compiled from each `.tex` file, and paths listed in the project's `.gitignore` are neither
+  pushed nor pulled. Negated `.gitignore` rules (`!name`) are not supported.
+- The sync works through GitHub's API, one request per changed file, so very large pushes are slow, and
+  repositories whose file list GitHub truncates (roughly 100,000 files) are refused.
+- GitHub's hourly API limit applies per connected account; PaperDesk itself allows twelve pushes or pulls a minute.
+- Each person connects their own GitHub account. On a shared project the link to the repository is shared, so
+  every editor who syncs needs push access to that repository.
+- Changing `TOKEN_ENCRYPTION_KEY` makes stored tokens unreadable: everyone has to connect GitHub again.
+
 ## Submission check and exports
 
 - Reference and file checks read the source directly. Names built by macros are only caught from the compile log,

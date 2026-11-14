@@ -171,11 +171,16 @@ test('email sign-in moves this browser’s projects to the account and sign-out 
   await expect(page.getByRole('menu')).toContainText('ada@example.com');
   await page.getByRole('menuitem', { name: 'Sign out' }).click();
   await expect(page.getByRole('button', { name: 'Sign in' }).first()).toBeVisible();
-  expect(
-    await page.evaluate(() => [
-      localStorage.getItem('paperdesk-auth'),
-      localStorage.getItem('paperdesk-owner-id') === '0b8f5a2c-4d6e-4f1a-8b3c-5d7e9f1a2b3c',
-    ]),
-  ).toEqual([null, false]);
+  // Signing out reloads the page, so the check may land in the middle of that navigation: ask again.
+  await expect
+    .poll(() =>
+      page
+        .evaluate(() => [
+          localStorage.getItem('paperdesk-auth'),
+          localStorage.getItem('paperdesk-owner-id') === '0b8f5a2c-4d6e-4f1a-8b3c-5d7e9f1a2b3c',
+        ])
+        .catch(() => 'navigating'),
+    )
+    .toEqual([null, false]);
   await expect(page.getByText('My thesis')).toHaveCount(0);
 });

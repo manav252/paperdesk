@@ -4,16 +4,13 @@ Planned work, roughly in order. Nothing here is promised; it records what has be
 
 ## Next
 
-- **Project chat and mentions.** A chat panel per project over the existing live connection, stored in Postgres,
-  with unread counts, links to files and lines, `@mentions` of collaborators in chat and comments, and an in-app
-  notification list. Email notifications only if a free mail provider is configured.
-- **GitHub sync.** Link a project to a repository through a GitHub OAuth App, with push and pull, a diff before
-  pushing and a conflict view on pull. Tokens encrypted on the server and revocable from Settings. Build files are
-  never pushed.
+- A "request access" button on the no-access screen.
+- Comments stored per comment on the server, so two people adding comments at once cannot overwrite each other.
+- GitHub sync: choosing a branch other than the default, and merging both versions of a conflicting file line by
+  line instead of choosing one.
 
 ## Later
 
-- Email for invitations, so the owner does not have to send the link by hand.
 - Spell checking in languages other than US English, and a personal dictionary that follows the account.
 - `\includeonly`, `\import` and `\subimport` in the submission checks.
 - More templates: thesis, poster, letterhead.
@@ -21,6 +18,11 @@ Planned work, roughly in order. Nothing here is promised; it records what has be
 
 ## Done recently
 
+- GitHub sync: connect an account, link a project to a new or existing repository, push with a diff preview and a
+  commit message, pull with a conflict view.
+- Project chat with unread counts, links to files and lines, `@mentions` in chat and comments, and a notification
+  bell (with an email when a mail provider is configured).
+- Invitation emails.
 - Template gallery with complete sample documents, previews, filters and search.
 - Submission check with arXiv, journal and single-file exports.
 - Pasting and dragging images into the editor as figures.

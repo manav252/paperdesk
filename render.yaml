@@ -43,6 +43,12 @@ services:
         sync: false
       - key: MAIL_FROM
         sync: false
+      - key: GITHUB_CLIENT_ID
+        sync: false
+      - key: GITHUB_CLIENT_SECRET
+        sync: false
+      - key: TOKEN_ENCRYPTION_KEY
+        sync: false
       - key: SUPABASE_JWT_SECRET
         sync: false
       - key: ASSISTANT_MODEL

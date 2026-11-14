@@ -25,6 +25,8 @@ import {
   Play,
   Download,
   Share2,
+  MessageSquare,
+  Github,
   Undo2,
   Redo2,
   Bold,
@@ -98,7 +100,9 @@ import { AssistantPanel, ExplainButton, QUICK_PROMPTS, useAssistant, type Assist
 import { Tour, TOUR_KEY, type TourStep } from './Tour';
 import { apiUrl, fetchWithWake, ownerHeaders, projectOwnerId } from './lib/api';
 import { authConfigured, authReady, currentAccessToken, currentAccount, signOut } from './lib/auth';
-import { AccountButton, SignInDialog } from './Account';
+import { AccountButton, SignInDialog, useAccount } from './Account';
+import { ChatPanel, MentionInput, NotificationBell, RichText, useChat } from './Chat';
+import { GitHubAccount, GitHubSync, githubReturn } from './GitHubSync';
 import { startCollab, type Collab, type Peer } from './collab';
 import { CitationDialog } from './Citations';
 import { SubmissionCheck } from './Submission';
@@ -414,6 +418,8 @@ function App() {
     [sortBy, setSortBy] = useState<'modified' | 'name'>('modified'),
     [openMenu, setOpenMenu] = useState(''),
     [modal, setModal] = useState(''),
+    [chatOpen, setChatOpen] = useState(false),
+    [commentDraft, setCommentDraft] = useState(''),
     [dialog, setDialog] = useState<Dialog | null>(null),
     [toast, setToast] = useState<Toast | null>(null),
     [engine, setEngine] = useState('pdflatex'),
@@ -741,6 +747,53 @@ function App() {
       if (v) setDrawer(false);
     } else setPref('assistant', v);
   };
+  // Project chat shares the side panel's place with the assistant: opening one closes the other.
+  const account = useAccount();
+  const chat = useChat(project?.id ?? '', apiFetch, apiOnline === true, chatOpen, !!account);
+  const openChat = (v: boolean) => {
+    setChatOpen(v);
+    if (v) {
+      if (assistantOpen) setAssistantOpen(false);
+      setDrawer(false);
+    }
+  };
+  useEffect(() => {
+    if (assistantOpen) setChatOpen(false);
+  }, [assistantOpen]);
+  useEffect(() => setChatOpen(false), [projectId]);
+  const addComment = () => {
+    const text = commentDraft.trim();
+    if (!text || !project) return;
+    update((p) => ({
+      ...p,
+      comments: [
+        ...(p.comments ?? []),
+        { id: crypto.randomUUID(), file: fileName, line: cursor.line, text, created: Date.now(), resolved: false },
+      ],
+    }));
+    setCommentDraft('');
+    // The comment is saved with the project; this only tells the people it mentions.
+    if (account && /@[a-z0-9]/i.test(text))
+      void apiFetch(`/api/projects/${project.id}/mentions`, {
+        method: 'POST',
+        headers: json,
+        body: JSON.stringify({ text: `${fileName}:${cursor.line} ${text}` }),
+      }).catch(() => undefined);
+  };
+  const openNotice = (id: string) => {
+    if (project && activeTab !== 'dashboard' && (project.id === id || project.shareId === id)) openChat(true);
+    else location.hash = `#/project/${id}/`;
+  };
+  // Back from connecting GitHub: return to the sync dialog.
+  useEffect(() => {
+    if (!githubReturn.value || !project || !projectId) return;
+    const result = githubReturn.value;
+    githubReturn.value = '';
+    if (result === 'connected') {
+      setModal('github');
+      notify('GitHub connected.');
+    } else notify('GitHub could not be connected. Try again.', 'error');
+  }, [projectId, project?.id]);
   // The startup health check may not have answered yet (a waking server); ask again when the assistant opens.
   useEffect(() => {
     if (assistantOpen && !health?.assistant)
@@ -2427,6 +2480,7 @@ function App() {
             { label: 'Project history', icon: <ScrollText size={14} />, run: () => setModal('history') },
             { label: 'Word count', run: () => setModal('wordcount') },
             { label: 'Check before submitting', run: () => setModal('submission') },
+            { label: 'GitHub sync', icon: <Github size={14} />, run: () => setModal('github') },
             { label: 'Download project', icon: <FileArchive size={14} />, run: downloadProject },
             { label: 'Download PDF', icon: <Download size={14} />, run: downloadPdf, disabled: !pdfUrl },
             'sep',
@@ -2596,6 +2650,7 @@ function App() {
               </button>
             </nav>
             <div className="dash-right">
+              {account && <NotificationBell apiFetch={apiFetch} onOpen={openNotice} />}
               <AccountButton />
               {themeMenu}
               <Dropdown
@@ -2860,6 +2915,21 @@ function App() {
                 </span>
               )}
               {project.role === 'viewer' && <span className="view-only-badge">View only</span>}
+              <button
+                className={`icon-btn chrome-btn chat-toggle ${chatOpen ? 'on' : ''}`}
+                aria-label={chat.unread ? `Chat, ${chat.unread} unread` : 'Chat'}
+                aria-pressed={chatOpen}
+                title="Chat"
+                onClick={() => openChat(!chatOpen)}
+              >
+                <MessageSquare size={16} />
+                {chat.unread > 0 && (
+                  <span className="count-badge" data-testid="chat-unread">
+                    {chat.unread > 9 ? '9+' : chat.unread}
+                  </span>
+                )}
+              </button>
+              {account && <NotificationBell apiFetch={apiFetch} onOpen={openNotice} />}
               <AccountButton compact />
               <span
                 className={`save-indicator ${saveState === 'Saved' ? '' : 'busy'} ${apiOnline === false ? 'offline' : ''}`}
@@ -3668,6 +3738,18 @@ function App() {
               </section>
             )}
             {narrow && assistantOpen && <div className="drawer-backdrop" onClick={() => setNarrowAssistant(false)} />}
+            {narrow && chatOpen && <div className="drawer-backdrop" onClick={() => setChatOpen(false)} />}
+            {chatOpen && !assistantOpen && (
+              <ChatPanel
+                chat={chat}
+                files={project.files.filter((f) => !f.name.endsWith('/')).map((f) => f.name)}
+                onJump={(file, line) => {
+                  if (narrow) setChatOpen(false);
+                  jumpTo(file, line);
+                }}
+                onClose={() => setChatOpen(false)}
+              />
+            )}
             {assistantOpen && (
               <AssistantPanel
                 assistant={assistant}
@@ -3745,30 +3827,33 @@ function App() {
       {modal && project && (
         <Modal
           title={
-            modal === 'settings'
-              ? 'Settings'
-              : modal === 'cite'
-                ? 'Add citation'
-                : modal === 'wordcount'
-                  ? 'Word count'
-                  : modal === 'submission'
-                    ? 'Check before submitting'
-                    : modal === 'shortcuts'
-                      ? 'Keyboard shortcuts'
-                      : modal === 'history'
-                        ? 'Project history'
-                        : modal === 'changes'
-                          ? 'Track changes'
-                          : modal === 'comments'
-                            ? 'Comments'
-                            : modal === 'fix'
-                              ? 'Review suggested fix'
-                              : modal === 'share'
-                                ? 'Share project'
-                                : 'Compile log'
+            modal === 'github'
+              ? 'GitHub sync'
+              : modal === 'settings'
+                ? 'Settings'
+                : modal === 'cite'
+                  ? 'Add citation'
+                  : modal === 'wordcount'
+                    ? 'Word count'
+                    : modal === 'submission'
+                      ? 'Check before submitting'
+                      : modal === 'shortcuts'
+                        ? 'Keyboard shortcuts'
+                        : modal === 'history'
+                          ? 'Project history'
+                          : modal === 'changes'
+                            ? 'Track changes'
+                            : modal === 'comments'
+                              ? 'Comments'
+                              : modal === 'fix'
+                                ? 'Review suggested fix'
+                                : modal === 'share'
+                                  ? 'Share project'
+                                  : 'Compile log'
           }
           close={() => setModal('')}
           wide={
+            modal === 'github' ||
             modal === 'submission' ||
             modal === 'logs' ||
             modal === 'cite' ||
@@ -3777,7 +3862,18 @@ function App() {
             modal === 'fix'
           }
         >
-          {modal === 'share' ? (
+          {modal === 'github' ? (
+            <GitHubSync
+              projectId={project.id}
+              projectName={project.name}
+              apiFetch={apiFetch}
+              signedIn={!!account}
+              canEdit={project.role !== 'viewer'}
+              notify={notify}
+              settle={() => new Promise((done) => window.setTimeout(done, 800)).then(() => saveChain.current)}
+              onPulled={refreshFiles}
+            />
+          ) : modal === 'share' ? (
             <div className="settings-body">
               {!project.role || project.role === 'owner' ? (
                 <ShareAccess projectId={project.id} apiFetch={apiFetch} copy={copyText} />
@@ -4045,14 +4141,21 @@ function App() {
             </div>
           ) : modal === 'comments' ? (
             <div className="logs-body">
-              <p className="muted">Comments are stored locally with this project.</p>
+              <p className="muted">Comments are stored with this project. Type @ to mention someone who works on it.</p>
               {(project.comments ?? []).map((c) => (
                 <div className="field-row" key={c.id}>
                   <div>
                     <strong>
                       {c.file}:{c.line}
                     </strong>
-                    <span>{c.text}</span>
+                    <span>
+                      <RichText
+                        text={c.text}
+                        files={project.files.map((f) => f.name)}
+                        people={chat.people}
+                        onJump={jumpTo}
+                      />
+                    </span>
                   </div>
                   <button
                     className="btn btn-secondary btn-sm"
@@ -4067,29 +4170,16 @@ function App() {
                   </button>
                 </div>
               ))}
+              <MentionInput
+                value={commentDraft}
+                onChange={setCommentDraft}
+                people={chat.people}
+                onSubmit={addComment}
+                label="New comment"
+                placeholder="Write a comment for the line your cursor is on…"
+              />
               <div className="modal-foot">
-                <button
-                  className="btn btn-secondary"
-                  onClick={() =>
-                    askName('Add comment', 'Comment', '', 'Add comment', (text) => {
-                      if (!text.trim()) return 'Enter a comment';
-                      update((p) => ({
-                        ...p,
-                        comments: [
-                          ...(p.comments ?? []),
-                          {
-                            id: crypto.randomUUID(),
-                            file: fileName,
-                            line: cursor.line,
-                            text: text.trim(),
-                            created: Date.now(),
-                            resolved: false,
-                          },
-                        ],
-                      }));
-                    })
-                  }
-                >
+                <button className="btn btn-secondary" disabled={!commentDraft.trim()} onClick={addComment}>
                   Add comment at cursor
                 </button>
                 <button className="btn btn-primary" onClick={() => setModal('')}>
@@ -4152,6 +4242,16 @@ function App() {
                     checked={prefs.spellcheck}
                     onChange={(e) => setPref('spellcheck', e.target.checked)}
                   />
+                </div>
+              </section>
+              <section>
+                <h4>Connected accounts</h4>
+                <div className="field-row">
+                  <div>
+                    <strong>GitHub</strong>
+                    <span>Used to push and pull projects. Disconnecting revokes PaperDesk’s access.</span>
+                  </div>
+                  <GitHubAccount apiFetch={apiFetch} notify={notify} />
                 </div>
               </section>
               <section>

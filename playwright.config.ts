@@ -67,6 +67,12 @@ export default defineConfig({
               BREVO_API_KEY: 'test-mail-key',
               MAIL_FROM: 'paperdesk@example.com',
               PAPERDESK_CORS_ORIGINS: 'http://127.0.0.1:4173',
+              // GitHub sync talks to the stand-in; these are test-only values.
+              GITHUB_API_URL: `${FAKES_URL}/github/api`,
+              GITHUB_WEB_URL: `${FAKES_URL}/github`,
+              GITHUB_CLIENT_ID: 'test-client',
+              GITHUB_CLIENT_SECRET: 'test-client-secret',
+              TOKEN_ENCRYPTION_KEY: 'test-encryption-key',
             },
           },
           {

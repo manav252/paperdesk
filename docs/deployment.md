@@ -40,6 +40,8 @@ put in a `VITE_` variable, because those are compiled into the public web app.
    | `BREVO_API_KEY`                            | Brevo API key for invitation emails (optional; without it invitations are links only)  |
    | `MAIL_FROM`                                | The verified Brevo sender address invitations come from (needed with `BREVO_API_KEY`)  |
    | `ANTHROPIC_API_KEY`                        | Key for the assistant panel (optional; without it the panel says it is not configured) |
+   | `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` | From the GitHub OAuth App in step 8 (optional; without them GitHub sync is off)        |
+   | `TOKEN_ENCRYPTION_KEY`                     | A long random string that encrypts stored GitHub tokens (needed with the two above)    |
 
    `ASSISTANT_MODEL` has a default in the blueprint and can be changed. After the service is created, note its
    public origin, for example `https://paperdesk-api-xxxx.onrender.com`.
@@ -54,11 +56,17 @@ put in a `VITE_` variable, because those are compiled into the public web app.
    Providers → Google**. Then add `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` (the publishable key) to the
    GitLab CI/CD variables, and `SUPABASE_URL` to Render.
 
-8. **First deployment.** Push `main` to GitHub. The sync workflow copies it to GitLab, the Pages pipeline builds the
+8. **GitHub sync (optional).** On GitHub, open **Settings → Developer settings → OAuth Apps → New OAuth App**. Set
+   the homepage URL to the Pages URL and the authorization callback URL to `<api origin>/api/github/callback`.
+   Copy the client ID and generate a client secret, and enter both in Render together with a
+   `TOKEN_ENCRYPTION_KEY` of your own (for example the output of `openssl rand -base64 32`). No database change is
+   needed: chat, notifications and repository links use the `paperdesk_kv` table the API creates on start.
+
+9. **First deployment.** Push `main` to GitHub. The sync workflow copies it to GitLab, the Pages pipeline builds the
    web app, and Render builds and starts the API.
 
-9. **Check.** `<api origin>/api/health` should report `storage.mode: neon-r2`, `storage.ready: true` and
-   `compilerReady: true`. The Pages pipeline should be green and the site should compile a template.
+10. **Check.** `<api origin>/api/health` should report `storage.mode: neon-r2`, `storage.ready: true` and
+    `compilerReady: true`. The Pages pipeline should be green and the site should compile a template.
 
 ## Later deployments
 

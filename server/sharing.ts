@@ -123,7 +123,7 @@ export class SharingStore {
       'INSERT INTO paperdesk_invites (token, alias, email, role, created) VALUES ($1,$2,$3,$4,$5)',
       [token, alias, clean, role, Date.now()],
     );
-    return { token, email: clean, role };
+    return { token, email: clean, role, alias };
   }
 
   async revokeInvite(ownerId: string, projectId: string, token: string) {
@@ -171,9 +171,9 @@ export class SharingStore {
     );
     const invite = rows[0];
     if (!invite) return { status: 404, error: 'This invitation is no longer valid.' };
+    if (invite.owner_id === user.ownerId) return { id: String(invite.project_id), role: 'owner' };
     if (invite.email && invite.email !== user.email?.toLowerCase())
       return { status: 403, error: `This invitation is for ${invite.email}. Sign in with that address.` };
-    if (invite.owner_id === user.ownerId) return { id: String(invite.project_id), role: 'owner' };
     const saved = await this.pool.query(
       `INSERT INTO paperdesk_project_members (alias, user_id, email, role, added) VALUES ($1,$2,$3,$4,$5)
       ON CONFLICT (alias, user_id) DO UPDATE SET email = EXCLUDED.email RETURNING role`,

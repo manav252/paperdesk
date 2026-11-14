@@ -387,17 +387,18 @@ test('a project link opens that project for the owner and a collaborator, and no
   // The editor is invited by email only: the project link alone must be enough for them.
   const invited = await (await api.post(`/${id}/invites`, { role: 'editor', email: people.editor.email })).json();
   expect(invited.emailed).toBe(true);
+  const shareId = (await (await api.get(`/${id}/members`)).json()).alias as string;
+  expect(shareId).toMatch(/^s-/);
   const sent = (await (await request.get('http://127.0.0.1:3997/mail/sent')).json()) as {
     to: { email: string }[];
     subject: string;
     textContent: string;
   }[];
-  const message = sent.find((m) => m.textContent.includes(invited.token));
+  // The email carries the project link, which keeps working after the invitation has been accepted.
+  const emailed = `/?open=${shareId}`;
+  const message = sent.find((m) => m.textContent.includes(`http://127.0.0.1:4173${emailed}`));
   expect(message?.to).toEqual([{ email: people.editor.email }]);
   expect(message?.subject).toBe('owner@example.com invited you to “Linked project” on PaperDesk');
-  expect(message?.textContent).toContain(`http://127.0.0.1:4173/?join=${invited.token}`);
-  const shareId = (await (await api.get(`/${id}/members`)).json()).alias as string;
-  expect(shareId).toMatch(/^s-/);
   const link = `/#/project/${shareId}/`;
 
   const visit = async (person: Person, signedIn: boolean) => {
@@ -459,7 +460,7 @@ test('a project link opens that project for the owner and a collaborator, and no
 
   // Signed out, in a browser that has never opened the app: sign in, then land on the project.
   const guest = await visit('editor', false);
-  await guest.page.goto(link);
+  await guest.page.goto(emailed);
   const dialog = guest.page.getByRole('dialog', { name: 'Sign in to PaperDesk' });
   await expect(dialog).toContainText('Sign in to open this project.');
   await expect(guest.page.locator('.monaco-editor')).toHaveCount(0);
@@ -474,6 +475,9 @@ test('a project link opens that project for the owner and a collaborator, and no
   await guest.page.keyboard.type('% edited by the collaborator');
   await expect(guest.page.locator('.view-line').filter({ hasText: 'edited by the collaborator' })).toBeVisible();
   await guest.page.reload();
+  await opened(guest.page);
+  // The emailed link still opens the project once the invitation has been used.
+  await guest.page.goto(emailed);
   await opened(guest.page);
   await guest.context.close();
 
@@ -493,6 +497,7 @@ test('a project link opens that project for the owner and a collaborator, and no
     stranger.page.getByRole('alert').filter({ hasText: 'You don’t have access to this project' }),
   ).toBeVisible({ timeout: 30_000 });
   await expect(stranger.page.getByRole('alert')).toContainText(people.stranger.email);
+  await expect(stranger.page.getByRole('button', { name: 'Sign in with another account' })).toBeVisible();
   await stranger.page.getByRole('button', { name: 'Go to your projects' }).click();
   await expect(stranger.page.getByRole('alert').filter({ hasText: 'access' })).toHaveCount(0);
   await stranger.context.close();

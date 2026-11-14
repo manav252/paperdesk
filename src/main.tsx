@@ -97,7 +97,7 @@ import { applyFix, clipSelection, fixStillApplies, logContext, numberedFile, typ
 import { AssistantPanel, ExplainButton, QUICK_PROMPTS, useAssistant, type AssistantStatus } from './Assistant';
 import { Tour, TOUR_KEY, type TourStep } from './Tour';
 import { apiUrl, fetchWithWake, ownerHeaders, projectOwnerId } from './lib/api';
-import { authConfigured, authReady, currentAccessToken, currentAccount } from './lib/auth';
+import { authConfigured, authReady, currentAccessToken, currentAccount, signOut } from './lib/auth';
 import { AccountButton, SignInDialog } from './Account';
 import { startCollab, type Collab, type Peer } from './collab';
 import { CitationDialog } from './Citations';
@@ -451,6 +451,8 @@ function App() {
     spellRef = useRef<Spellchecker | null>(null);
   const [pdfSearch, setPdfSearch] = useState(false);
   const [noAccess, setNoAccess] = useState<'' | 'project' | 'link'>('');
+  /** The project a signed-in visitor was refused, kept so they can switch to the account that was invited. */
+  const refused = useRef('');
   const [joinPrompt, setJoinPrompt] = useState(''),
     [conflict, setConflict] = useState(''),
     serverModified = useRef(new Map<string, number>()),
@@ -861,8 +863,9 @@ function App() {
             history.replaceState({ screen: 'project', id: map.get(open) }, '', projectPath(map.get(open)!));
         }
         const wanted = pendingOpen();
-        if (wanted && currentAccessToken()) {
-          clearPendingOpen();
+        if (wanted) {
+          // Signed out, the project route below asks for sign-in and keeps the project for afterwards.
+          if (currentAccessToken()) clearPendingOpen();
           if (!routeProjectId()) history.replaceState({ screen: 'project', id: wanted }, '', projectPath(wanted));
         }
         const join = pendingJoin();
@@ -930,8 +933,10 @@ function App() {
             history.replaceState({ screen: 'dashboard' }, '', '/');
             setProjectId('');
             setActiveTab('dashboard');
-            if (authConfigured && currentAccessToken()) setNoAccess('project');
-            else if (authConfigured && !join) {
+            if (authConfigured && currentAccessToken()) {
+              refused.current = asked;
+              setNoAccess('project');
+            } else if (authConfigured && !join) {
               /* Signed out: remember the project, ask them to sign in, and open it when they come back. */ firstVisit.current = false;
               keepPendingOpen(asked);
               setJoinPrompt('Sign in to open this project.');
@@ -2549,7 +2554,21 @@ function App() {
               </p>
             </>
           )}
-          <button className="btn btn-primary" onClick={() => setNoAccess('')}>
+          {noAccess === 'project' && (
+            <button
+              className="btn btn-primary"
+              onClick={() => {
+                keepPendingOpen(refused.current);
+                void signOut();
+              }}
+            >
+              Sign in with another account
+            </button>
+          )}
+          <button
+            className={noAccess === 'project' ? 'btn btn-secondary' : 'btn btn-primary'}
+            onClick={() => setNoAccess('')}
+          >
             Go to your projects
           </button>
         </div>

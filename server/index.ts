@@ -1892,12 +1892,13 @@ app.post(
         project: about?.project ?? 'a project',
         role: invite.role,
         inviter: (res.locals.user as AuthUser | undefined)?.email,
-        link: `${site}/?join=${invite.token}`,
+        // The project link, not the one-time token: it keeps working after the invitation has been accepted.
+        link: `${site}/?open=${invite.alias}`,
       });
       emailed = mail.sent;
       emailError = mail.reason;
     }
-    res.status(201).json({ ...invite, emailed, emailError });
+    res.status(201).json({ token: invite.token, email: invite.email, role: invite.role, emailed, emailError });
   }),
 );
 app.delete(

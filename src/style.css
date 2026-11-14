@@ -1133,11 +1133,13 @@ body.is-resizing .pdf-workspace {
   background: var(--hover);
   color: var(--text);
 }
+/* In the row, centred in the space between the menus and the buttons, so a long name shortens instead of running
+   under them. */
 .project-title {
-  position: absolute;
-  left: 50%;
-  transform: translateX(-50%);
-  max-width: min(34vw, 420px);
+  flex: 0 1 auto;
+  min-width: 0;
+  margin: 0 auto;
+  max-width: 420px;
   height: 30px;
   display: inline-flex;
   align-items: center;
@@ -1168,7 +1170,7 @@ body.is-resizing .pdf-workspace {
   opacity: 1;
 }
 .header-right {
-  margin-left: auto;
+  flex: none;
   display: flex;
   align-items: center;
   gap: 6px;

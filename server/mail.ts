@@ -10,7 +10,10 @@ export const mailConfigured = !!(KEY && FROM);
 const escapeHtml = (text: string) =>
   text.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 
-/** Returns whether the provider accepted the message. Never throws: a failed email must not fail the invitation. */
+/**
+ * Returns whether the provider accepted the message, and its reason when it did not, for the project owner to read.
+ * Never throws: a failed email must not fail the invitation.
+ */
 export async function sendInvite(invite: {
   to: string;
   project: string;
@@ -18,7 +21,7 @@ export async function sendInvite(invite: {
   inviter?: string;
   link: string;
 }) {
-  if (!mailConfigured) return false;
+  if (!mailConfigured) return { sent: false };
   const can = invite.role === 'viewer' ? 'view' : 'edit',
     who = invite.inviter ?? 'Someone';
   const text = `${who} invited you to ${can} “${invite.project}” on PaperDesk.\n\nOpen the project: ${invite.link}\n\nSign in with this email address (${invite.to}) to get access. If you were not expecting this, you can ignore this email.`;
@@ -38,10 +41,14 @@ export async function sendInvite(invite: {
       }),
       signal: AbortSignal.timeout(10_000),
     });
-    if (!response.ok) console.error(`Invitation email was refused (${response.status})`);
-    return response.ok;
+    if (response.ok) return { sent: true };
+    const body = (await response.json().catch(() => ({}))) as { message?: unknown };
+    const reason = typeof body.message === 'string' ? body.message.slice(0, 300) : `status ${response.status}`;
+    console.error(`Invitation email was refused (${response.status}): ${reason}`);
+    return { sent: false, reason };
   } catch (e) {
-    console.error('Invitation email could not be sent:', e instanceof Error ? e.message : e);
-    return false;
+    const reason = e instanceof Error ? e.message : 'the email service could not be reached';
+    console.error('Invitation email could not be sent:', reason);
+    return { sent: false, reason };
   }
 }

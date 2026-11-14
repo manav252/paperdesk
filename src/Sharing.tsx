@@ -99,13 +99,13 @@ export function ShareAccess({
     try {
       const r = await call('/invites', { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify(body) });
       if (r) {
-        const made = (await r.json().catch(() => ({}))) as { emailed?: boolean };
+        const made = (await r.json().catch(() => ({}))) as { emailed?: boolean; emailError?: string };
         setNotice(
           !body.email
             ? ''
             : made.emailed
               ? `Invitation emailed to ${body.email}.`
-              : `No email was sent to ${body.email}. Copy the link below and send it to them.`,
+              : `No email was sent to ${body.email}${made.emailError ? ` (the email service said: ${made.emailError})` : ''}. Copy the link below and send it to them.`,
         );
         await refresh();
       }

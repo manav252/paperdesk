@@ -1883,18 +1883,21 @@ app.post(
     // The link in the email points at the site the owner is using, or the first allowed site.
     const asked = req.headers.origin,
       site = asked && originAllowed(asked) ? asked : allowedOrigins[0];
-    let emailed = false;
+    let emailed = false,
+      emailError: string | undefined;
     if (invite.email && site && !overBudget(`mail:${owner}`, 10)) {
       const about = await store.invitation(invite.token);
-      emailed = await sendInvite({
+      const mail = await sendInvite({
         to: invite.email,
         project: about?.project ?? 'a project',
         role: invite.role,
         inviter: (res.locals.user as AuthUser | undefined)?.email,
         link: `${site}/?join=${invite.token}`,
       });
+      emailed = mail.sent;
+      emailError = mail.reason;
     }
-    res.status(201).json({ ...invite, emailed });
+    res.status(201).json({ ...invite, emailed, emailError });
   }),
 );
 app.delete(

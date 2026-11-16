@@ -4122,3 +4122,17 @@ body.is-resizing .resizer:active::after {
     grid-template-columns: 1fr;
   }
 }
+
+/* Document language: the choice in the new-project dialog and the tag on template cards */
+.dialog-choice {
+  display: inline-flex;
+  margin: 4px 0 14px;
+}
+.template-language {
+  flex: none;
+}
+.template-tags i.template-lang {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}

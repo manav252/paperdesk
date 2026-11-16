@@ -86,7 +86,8 @@ test('the gallery shows every template with a preview, and filters by category a
   await expect(cards).toHaveCount(1);
   await expect(cards.first()).toContainText('Beamer Presentation');
   await filters.getByRole('button', { name: /^Paper/ }).click();
-  await expect(cards).toHaveCount(4);
+  // Four LaTeX papers and the Typst one.
+  await expect(cards).toHaveCount(5);
 
   // Search narrows within the category; nothing found offers a way back.
   const search = page.getByRole('textbox', { name: 'Search templates' });
@@ -98,7 +99,8 @@ test('the gallery shows every template with a preview, and filters by category a
   await page.getByRole('button', { name: 'Show all templates' }).click();
   await expect(cards).toHaveCount(ids.length);
   await search.fill('resume');
-  await expect(cards).toHaveCount(1);
+  // The LaTeX CV and the Typst CV.
+  await expect(cards).toHaveCount(2);
   await expect(cards.first()).toContainText('CV / Resume');
 });
 

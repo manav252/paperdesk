@@ -1,3 +1,17 @@
+# The official Typst compiler: one static binary at a pinned version, checked against the release's checksum.
+FROM debian:bookworm-slim AS typst
+ARG TYPST_VERSION=0.15.1
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl xz-utils \
+ && case "$(dpkg --print-architecture)" in \
+      amd64) arch=x86_64; sum=a6d077d0a95eed5a2eba715b2dae06be954f624ccbf85758a03f389ded33118c ;; \
+      arm64) arch=aarch64; sum=5aa8d74a3d906e60ea12a66ac2f37f8eef1b14cbad7182a745e393a10c23dcee ;; \
+      *) echo "No Typst build for this architecture" >&2; exit 1 ;; \
+    esac \
+ && curl -fsSL -o /tmp/typst.tar.xz "https://github.com/typst/typst/releases/download/v${TYPST_VERSION}/typst-${arch}-unknown-linux-musl.tar.xz" \
+ && echo "${sum}  /tmp/typst.tar.xz" | sha256sum -c - \
+ && tar -xJf /tmp/typst.tar.xz -C /tmp \
+ && install -m 755 "/tmp/typst-${arch}-unknown-linux-musl/typst" /typst
+
 FROM node:22-bookworm-slim
 
 ENV NODE_ENV=production \
@@ -18,12 +32,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && luaotfload-tool --update --force \
     && rm -rf /var/lib/apt/lists/* /tmp/*
 
+COPY --from=typst /typst /usr/local/bin/typst
+
 ENV NODE_OPTIONS=--max-old-space-size=128
 
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts
-COPY src/lib/latexLog.ts src/lib/synctex.ts src/lib/wordcount.ts src/lib/filePatch.ts src/lib/textDiff.ts src/lib/bibtex.ts src/lib/submission.ts ./src/lib/
+COPY src/lib/latexLog.ts src/lib/typstLog.ts src/lib/synctex.ts src/lib/wordcount.ts src/lib/filePatch.ts src/lib/textDiff.ts src/lib/bibtex.ts src/lib/submission.ts ./src/lib/
 COPY server/index.ts server/assistant.ts server/auth.ts server/citations.ts server/chat.ts server/collab.ts server/github.ts server/kv.ts server/mail.ts server/persistence.ts server/sharing.ts server/workspace.ts ./server/
 
 EXPOSE 10000

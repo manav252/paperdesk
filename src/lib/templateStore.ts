@@ -1,6 +1,7 @@
 // The template gallery's data. Every folder in /templates is one template: a metadata.json, the project's files and
 // a thumbnail.png of its first page. Adding a template is adding a folder; nothing here needs to change.
 import { arrayBufferToBase64, type ProjectFile } from './project';
+import { projectLanguage, type ProjectLanguage } from './typstLog';
 
 export type TemplateMeta = {
   id: string;
@@ -9,6 +10,7 @@ export type TemplateMeta = {
   category: string;
   tags: string[];
   mainFile: string;
+  language: ProjectLanguage;
   engine: string;
   order: number;
   thumbnail?: string;
@@ -25,12 +27,15 @@ const thumbnails = import.meta.glob('/templates/*/thumbnail.png', {
   import: 'default',
 }) as Record<string, string>;
 // Files are loaded only when a template is used, so the gallery itself stays small.
-const textFiles = import.meta.glob(['/templates/*/**/*.{tex,bib,cls,bst,sty,txt}', '!/templates/_*/**'], {
-  query: '?raw',
-  import: 'default',
-}) as Record<string, () => Promise<string>>;
+const textFiles = import.meta.glob(
+  ['/templates/*/**/*.{tex,bib,cls,bst,sty,txt,typ,yml,yaml,toml,svg}', '!/templates/_*/**'],
+  {
+    query: '?raw',
+    import: 'default',
+  },
+) as Record<string, () => Promise<string>>;
 const binaryFiles = import.meta.glob(
-  ['/templates/*/**/*.{png,jpg,jpeg,pdf,eps}', '!/templates/*/thumbnail.png', '!/templates/_*/**'],
+  ['/templates/*/**/*.{png,jpg,jpeg,pdf,eps,ttf,otf}', '!/templates/*/thumbnail.png', '!/templates/_*/**'],
   { query: '?url', import: 'default' },
 ) as Record<string, () => Promise<string>>;
 
@@ -47,6 +52,7 @@ export const templates: TemplateMeta[] = Object.entries(metadata)
       category: raw.category ?? 'Other',
       tags: raw.tags ?? [],
       mainFile: raw.mainFile ?? 'main.tex',
+      language: projectLanguage(raw.language, raw.mainFile),
       engine: raw.engine ?? 'pdflatex',
       order: raw.order ?? 999,
       thumbnail: thumbnails[`/templates/${id}/thumbnail.png`],
@@ -57,12 +63,13 @@ export const templates: TemplateMeta[] = Object.entries(metadata)
 /** Categories in the order templates first use them, for the filter buttons. */
 export const templateCategories = (list: TemplateMeta[]) => [...new Set(list.map((t) => t.category))];
 
-/** Templates in a category ('' for all) whose name, description or tags contain every word of the search. */
-export function filterTemplates(list: TemplateMeta[], category: string, search: string) {
+/** Templates in a category and language ('' for all) whose name, description or tags contain every word of the search. */
+export function filterTemplates(list: TemplateMeta[], category: string, search: string, language = '') {
   const words = search.toLowerCase().split(/\s+/).filter(Boolean);
   return list.filter((t) => {
     if (category && t.category !== category) return false;
-    const text = `${t.name} ${t.description} ${t.category} ${t.tags.join(' ')}`.toLowerCase();
+    if (language && t.language !== language) return false;
+    const text = `${t.name} ${t.description} ${t.category} ${t.tags.join(' ')} ${t.language}`.toLowerCase();
     return words.every((word) => text.includes(word));
   });
 }

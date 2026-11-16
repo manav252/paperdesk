@@ -97,11 +97,10 @@ try {
       .map((n) => ({
         name: `tpl-${n}`,
         dir: path.join(TEMPLATES, n),
-        expect: {
-          success: true,
-          template: true,
-          ...JSON.parse(readFileSync(path.join(TEMPLATES, n, 'metadata.json'), 'utf8')).test,
-        },
+        expect: (() => {
+          const meta = JSON.parse(readFileSync(path.join(TEMPLATES, n, 'metadata.json'), 'utf8'));
+          return { success: true, template: true, language: meta.language, ...meta.test };
+        })(),
       })),
   ].filter((c) => !only.length || only.includes(c.name) || (only.includes('templates') && c.expect.template));
   const fixtures = cases.map((c) => c.name);
@@ -112,7 +111,10 @@ try {
   for (const { name, dir, expect } of cases) {
     const files = readTree(dir);
     const id = `fixture-${name}`;
-    const created = await json(`${API}/projects`, { method: 'POST', body: JSON.stringify({ id, name, files }) });
+    const created = await json(`${API}/projects`, {
+      method: 'POST',
+      body: JSON.stringify({ id, name, files, ...(expect.language ? { language: expect.language } : {}) }),
+    });
     if (created.status !== 201) throw new Error(`Could not create ${name}: ${JSON.stringify(created.body)}`);
     // The stored copy must round-trip byte-for-byte (binary figures included).
     const stored = (await json(`${API}/projects/${id}`)).body.files;
@@ -136,18 +138,34 @@ try {
           },
         },
       );
+    // Typst projects: one compile (plus one after an edit), started from main.typ.
+    const typst = expect.language === 'typst';
+    const mainFile = typst ? 'main.typ' : 'main.tex';
+    if (typst && expect.success)
+      runs.push({
+        engine: 'typst',
+        edit: { label: 'edit', text: '\n\nTypst recompile check text.\n', expect: 'typst recompile check text' },
+      });
     for (const { engine, edit } of runs) {
       const t = Date.now();
       const sent = edit
         ? files.map((f) =>
-            f.name === 'main.tex'
-              ? { ...f, content: f.content.replace(/\\end\{document\}/, `${edit.text}\\end{document}`) }
-              : f,
+            f.name !== mainFile
+              ? f
+              : typst
+                ? { ...f, content: f.content + edit.text }
+                : { ...f, content: f.content.replace(/\\end\{document\}/, `${edit.text}\\end{document}`) },
           )
         : null;
       const { status, body } = await json(`${API}/projects/${id}/compile`, {
         method: 'POST',
-        body: JSON.stringify({ engine, mainFile: 'main.tex', ...(sent ? { files: sent } : {}) }),
+        body: JSON.stringify({
+          engine,
+          mainFile,
+          ...(typst ? { language: 'typst' } : {}),
+          ...(expect.timeoutMs ? { timeoutMs: expect.timeoutMs } : {}),
+          ...(sent ? { files: sent } : {}),
+        }),
       });
       const problems = [];
       if (edit?.expect) expect.contains = [...(expect.contains ?? []), edit.expect];
@@ -270,7 +288,7 @@ try {
       const timing = body?.timings
         ? `  [queue ${body.timings.queue}ms · sync ${body.timings.sync}ms · TeX+startup ${body.timings.tex}ms · read ${body.timings.read}ms · total ${body.timings.total}ms]`
         : '';
-      const label = `${name.padEnd(20)} ${engine.padEnd(9)} ${secs}s${timing}${edit ? `  (${edit.label}: ${body?.timings?.passes === 1 ? 'single pass' : 'latexmk'})` : ''}`;
+      const label = `${name.padEnd(20)} ${engine.padEnd(9)} ${secs}s${timing}${edit ? `  (${edit.label}: ${typst ? 'typst' : body?.timings?.passes === 1 ? 'single pass' : 'latexmk'})` : ''}`;
       if (edit?.expect) expect.contains = expect.contains.filter((c) => c !== edit.expect);
       if (problems.length) {
         failures++;

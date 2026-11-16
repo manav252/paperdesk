@@ -1,0 +1,11 @@
+{
+  "name": "CV / Resume (Typst)",
+  "description": "Clean one-page CV in Typst: contact header, education, experience, projects, skills, publications and awards.",
+  "category": "CV",
+  "tags": ["CV", "Resume", "One page"],
+  "language": "typst",
+  "mainFile": "main.typ",
+  "engine": "typst",
+  "order": 12,
+  "test": { "engines": ["typst"], "maxPages": 1, "contains": ["Ananya Mehta", "Education", "Experience", "Projects", "Skills", "Publications", "Awards"] }
+}

@@ -19,6 +19,8 @@ export type ProjectData = {
   versions?: unknown[];
   comments?: unknown[];
   changes?: unknown[];
+  /** The document language, which decides the compiler. Projects from before Typst support are LaTeX. */
+  language?: 'latex' | 'typst';
 };
 export type ProjectUpdate = Omit<Partial<ProjectData>, 'id' | 'modified'>;
 
@@ -89,6 +91,10 @@ export class ProjectPersistence {
       PRIMARY KEY (owner_id, id)
     )`);
     await this.pool!.query('ALTER TABLE paperdesk_projects ADD COLUMN IF NOT EXISTS owner_id text');
+    // Typst support: every project has a language, and the ones that already existed are LaTeX.
+    await this.pool!.query(
+      "ALTER TABLE paperdesk_projects ADD COLUMN IF NOT EXISTS language text NOT NULL DEFAULT 'latex'",
+    );
     await this.pool!.query("UPDATE paperdesk_projects SET owner_id = 'legacy' WHERE owner_id IS NULL");
     await this.pool!.query('ALTER TABLE paperdesk_projects ALTER COLUMN owner_id SET NOT NULL');
     // Project IDs are only unique within one browser workspace. Older tables keyed on id alone, so every
@@ -149,16 +155,16 @@ export class ProjectPersistence {
     await this.s3!.send(
       new PutObjectCommand({ Bucket: this.bucket, Key: objectKey, Body: json, ContentType: 'application/json' }),
     );
-    const value = <K extends 'mainFile' | 'archived' | 'settings' | 'versions' | 'comments' | 'changes'>(
+    const value = <K extends 'mainFile' | 'archived' | 'settings' | 'versions' | 'comments' | 'changes' | 'language'>(
       key: K,
     ): ProjectData[K] => (update[key] !== undefined ? update[key] : previous?.[key]) as ProjectData[K];
     const modified = Date.now();
     const saved = await this.pool!.query(
-      `INSERT INTO paperdesk_projects (id,owner_id,name,modified,main_file,archived,settings,versions,comments,changes,object_key)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+      `INSERT INTO paperdesk_projects (id,owner_id,name,modified,main_file,archived,settings,versions,comments,changes,object_key,language)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
       ON CONFLICT (owner_id, id) DO UPDATE SET name=EXCLUDED.name, modified=EXCLUDED.modified, main_file=EXCLUDED.main_file,
       archived=EXCLUDED.archived, settings=EXCLUDED.settings, versions=EXCLUDED.versions,
-      comments=EXCLUDED.comments, changes=EXCLUDED.changes, object_key=EXCLUDED.object_key RETURNING id`,
+      comments=EXCLUDED.comments, changes=EXCLUDED.changes, object_key=EXCLUDED.object_key, language=EXCLUDED.language RETURNING id`,
       [
         id,
         ownerId,
@@ -171,6 +177,7 @@ export class ProjectPersistence {
         jsonb(value('comments')),
         jsonb(value('changes')),
         objectKey,
+        value('language') === 'typst' ? 'typst' : 'latex',
       ],
     );
     if (!saved.rowCount) throw new Error('Project not found');
@@ -185,6 +192,7 @@ export class ProjectPersistence {
       versions: value('versions'),
       comments: value('comments'),
       changes: value('changes'),
+      language: value('language') === 'typst' ? 'typst' : 'latex',
     };
   }
 
@@ -311,6 +319,7 @@ export class ProjectPersistence {
       ...(row.versions === null ? {} : { versions: row.versions as unknown[] }),
       ...(row.comments === null ? {} : { comments: row.comments as unknown[] }),
       ...(row.changes === null ? {} : { changes: row.changes as unknown[] }),
+      language: row.language === 'typst' ? 'typst' : 'latex',
     };
   }
 }

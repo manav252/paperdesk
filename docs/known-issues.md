@@ -26,6 +26,23 @@
 - Moving projects to an account on first sign-in does not move compiled PDFs; the next compile rebuilds them.
 - The personal spelling dictionary and editor preferences are stored per browser, not per account.
 
+## Typst
+
+- Typst packages (`#import "@preview/..."`) are not available: compiles have no network, so only what is in the
+  project or built into Typst works. The three Typst templates use no packages.
+- Only the fonts built into Typst (Libertinus Serif, New Computer Modern, DejaVu Sans Mono) and font files added to
+  the project are used, so a document looks the same locally and in production.
+- Jumping between the PDF and the source, the outline, command completion, word count, "Check before submitting"
+  and the assistant's LaTeX fixes are LaTeX-only. Citations added by DOI go into the `.bib` file, but the `@key`
+  has to be typed by hand.
+- Typst stops at the first syntax error, so the log shows one error at a time for those.
+- Each compile starts the compiler afresh; Typst's own incremental mode needs a long-running process, which the
+  sandbox does not keep. Compiles of the templates take well under a second, and only changed files are uploaded.
+- A project's language is chosen when it is created and cannot be changed afterwards. There is no conversion
+  between LaTeX and Typst.
+- In production the block on downloads is a proxy setting rather than a network namespace, because the host does
+  not allow one; locally the compile container has no network at all.
+
 ## Chat and notifications
 
 - Chat keeps the newest 300 messages per project and the bell the newest 50 mentions per person.

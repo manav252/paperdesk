@@ -17,7 +17,7 @@ export const setCompletionFiles = (get: () => ProjectFile[]) => {
 
 let registered = false;
 
-/** Registers LaTeX/BibTeX highlighting and the two editor themes. Safe to call more than once. */
+/** Registers LaTeX, Typst and BibTeX highlighting and the two editor themes. Safe to call more than once. */
 export function setupMonaco(monaco: Monaco) {
   if (registered) return;
   registered = true;
@@ -141,6 +141,76 @@ export function setupMonaco(monaco: Monaco) {
           })),
         };
       return { suggestions: projectPaths(files, ctx.kind).map((p) => ({ label: p, kind: K.File, ...name(p) })) };
+    },
+  });
+
+  // Typst: markup with `#` code, `$` math, `//` comments, `= Headings`, <labels> and @references.
+  monaco.languages.register({ id: 'typst', extensions: ['.typ'] });
+  monaco.languages.setMonarchTokensProvider('typst', {
+    tokenizer: {
+      root: [
+        [/\/\/.*$/, 'comment'],
+        [/\/\*/, { token: 'comment', next: '@blockComment' }],
+        [/^\s*=+\s.*$/, 'keyword.heading'],
+        [
+          /#(?:let|set|show|import|include|if|else|for|while|in|return|break|continue|context|none|auto|true|false)\b/,
+          'keyword',
+        ],
+        [/#[a-zA-Z_][\w.-]*/, 'keyword'],
+        [/"/, { token: 'string', next: '@string' }],
+        [/\$/, { token: 'string.math', next: '@math' }],
+        [/<[a-zA-Z_][\w:.-]*>/, 'type'],
+        [/@[a-zA-Z_][\w:.-]*/, 'type'],
+        [/\\./, 'keyword'],
+        [/[{}]/, 'delimiter.curly'],
+        [/[[\]]/, 'delimiter.square'],
+      ],
+      blockComment: [
+        [/\*\//, { token: 'comment', next: '@pop' }],
+        [/[^*]+/, 'comment'],
+        [/./, 'comment'],
+      ],
+      string: [
+        [/\\./, 'string'],
+        [/"/, { token: 'string', next: '@pop' }],
+        [/[^"\\]+/, 'string'],
+      ],
+      math: [
+        [/\\./, 'string.math'],
+        [/\$/, { token: 'string.math', next: '@pop' }],
+        [/[a-zA-Z]{2,}/, 'string.math.command'],
+        [/[^$\\a-zA-Z]+/, 'string.math'],
+        [/./, 'string.math'],
+      ],
+    },
+  });
+  monaco.languages.setLanguageConfiguration('typst', {
+    comments: { lineComment: '//', blockComment: ['/*', '*/'] },
+    brackets: [
+      ['{', '}'],
+      ['[', ']'],
+      ['(', ')'],
+    ],
+    autoClosingPairs: [
+      { open: '{', close: '}' },
+      { open: '[', close: ']' },
+      { open: '(', close: ')' },
+      { open: '"', close: '"', notIn: ['string'] },
+      { open: '$', close: '$' },
+    ],
+    surroundingPairs: [
+      { open: '{', close: '}' },
+      { open: '[', close: ']' },
+      { open: '(', close: ')' },
+      { open: '"', close: '"' },
+      { open: '$', close: '$' },
+      { open: '*', close: '*' },
+      { open: '_', close: '_' },
+    ],
+    // A line that opens a bracket indents the next one; a closing bracket goes back out.
+    indentationRules: {
+      increaseIndentPattern: /^.*[{[(][^}\])]*$/,
+      decreaseIndentPattern: /^\s*[}\])]/,
     },
   });
 

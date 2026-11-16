@@ -38,6 +38,14 @@ uses. With `DATABASE_URL` and the `R2_*` variables set it uses Postgres and obje
 - One compile runs at a time. A newer compile of the same project replaces a running one, which answers HTTP 410.
 - The log is parsed into errors and warnings with file and line (`src/lib/latexLog.ts`), with plain-language hints for
   the mistakes newcomers make most.
+- **Typst** is the second document language. A project records its language (`language` on the project; projects
+  from before Typst are LaTeX, set by a column default in Postgres) and the compile route picks the compiler from
+  it. Typst runs as the official command-line compiler, one pinned version installed in both images from the
+  release archive and checked against its checksum. The binary was chosen over the in-browser WebAssembly build
+  because the compile service already exists and the binary is small and fast, while the WebAssembly build would add
+  several megabytes of download for every visitor. A Typst compile goes through the same sandbox, timeout, memory
+  limit and warm folder as LaTeX, with `--root` set to the project folder so nothing outside it can be read. Its
+  diagnostics are parsed by `src/lib/typstLog.ts`.
 - SyncTeX maps between source lines and PDF positions (`src/lib/synctex.ts`). PDF.js reports positions from the
   bottom-left of the page and SyncTeX from the top-left, so coordinates are flipped with the page box.
 

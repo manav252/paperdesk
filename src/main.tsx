@@ -89,6 +89,9 @@ import {
   type Project,
   type ProjectFile,
   type TreeNode,
+  languageOf,
+  mainFileOf,
+  sourceExt,
 } from './lib/project';
 import { withFileSuggestion, type LogEntry } from './lib/latexLog';
 import { diffLines } from './lib/diff';
@@ -137,6 +140,33 @@ import { attachSpellcheck, type SpellMenu, type Spellchecker } from './spell/spe
 import { filesFromDrop, isSvg, safeImageName, svgToPngBase64, type Incoming } from './lib/upload';
 import './style.css';
 
+/** Which highlighting a file gets in the editor. */
+const editorLanguage = (name: string) =>
+  name.endsWith('.bib')
+    ? 'bibtex'
+    : name.endsWith('.typ')
+      ? 'typst'
+      : /\.(ya?ml|toml|txt|md|csv)$/i.test(name)
+        ? 'plaintext'
+        : 'latex';
+const starterTypst = `#set page(paper: "a4", margin: 2.5cm)
+#set text(size: 11pt)
+#set par(justify: true)
+#set heading(numbering: "1.")
+
+#align(center)[
+  #text(size: 17pt, weight: "bold")[Your Title]
+
+  Your Name \\\\
+  #datetime.today().display()
+]
+
+= Introduction
+
+Start writing here. Math works inline, $e^(i pi) + 1 = 0$, and on its own line:
+
+$ integral_0^1 x^2 dif x = 1 / 3 $
+`;
 const starter = `\\documentclass[12pt,a4paper]{article}
 
 \\usepackage[utf8]{inputenc}
@@ -337,7 +367,9 @@ type Dialog = {
   placeholder?: string;
   confirmLabel: string;
   danger?: boolean;
-  onConfirm: (value: string) => string | void;
+  /** A second question answered by picking one option, such as the language of a new project. */
+  choice?: { label: string; options: { value: string; label: string }[]; initial: string };
+  onConfirm: (value: string, choice: string) => string | void;
 };
 type MenuItem =
   | {
@@ -369,6 +401,12 @@ const apiFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
   });
 };
 
+// Monaco rejects its pending work with a "Canceled" error when an editor closes (for example on leaving a project
+// right after jumping to a line). Nothing failed, so it should not surface as an unhandled error.
+window.addEventListener('unhandledrejection', (event) => {
+  const reason = event.reason as { name?: string; message?: string } | undefined;
+  if (reason?.name === 'Canceled' && reason.message === 'Canceled') event.preventDefault();
+});
 // Monaco is bundled (monacoLocal.ts) but split into its own chunk; start loading it straight away.
 const monacoLoad = import('./monacoLocal');
 function useMonacoLoad() {
@@ -740,6 +778,7 @@ function App() {
   const sidebarOpen = narrow ? drawer : prefs.sidebar;
   const setSidebar = (v: boolean) => (narrow ? setDrawer(v) : setPref('sidebar', v));
   // Like the file tree, the assistant is a temporary overlay on narrow screens.
+  const typstProject = !!project && languageOf(project) === 'typst';
   const assistantOpen = narrow ? narrowAssistant : prefs.assistant;
   const setAssistantOpen = (v: boolean) => {
     if (narrow) {
@@ -878,6 +917,7 @@ function App() {
           name: `${d.name} (copy)`,
           modified: Date.now(),
           mainFile: d.mainFile,
+          language: d.language,
           files: d.files,
         },
         'server',
@@ -1005,6 +1045,7 @@ function App() {
               name: p.name,
               files: (syncedFiles.current.set(p.id, new Map(p.files.map((f) => [f.name, f]))), p.files),
               mainFile: p.mainFile,
+              language: p.language,
               archived: p.archived,
               settings: p.settings,
               versions: p.versions,
@@ -1080,6 +1121,7 @@ function App() {
                 body: JSON.stringify({
                   name: project.name,
                   mainFile: project.mainFile,
+                  language: project.language,
                   archived: project.archived,
                   settings: project.settings,
                   versions: collabNames ? undefined : project.versions,
@@ -1331,12 +1373,12 @@ function App() {
   const compile = async ({ auto = false }: { auto?: boolean } = {}) => {
     if (!project) return;
     const target = project,
-      mainFile = target.mainFile ?? 'main.tex',
+      mainFile = mainFileOf(target),
       revision = sourceRevision.current;
     if (!target.files.some((f) => f.name === mainFile)) {
       setCompileState({
         status: 'error',
-        message: `Main document ${mainFile} not found. Choose an existing .tex file in Project settings.`,
+        message: `Main document ${mainFile} not found. Choose an existing ${sourceExt(target)} file in Project settings.`,
       });
       return;
     }
@@ -1382,6 +1424,7 @@ function App() {
               files: payload.files,
               engine,
               mainFile,
+              language: languageOf(target),
               timeoutMs: compilePrefs.timeout * 1000,
               draft: compilePrefs.draft,
               stopOnFirstError: compilePrefs.stopOnFirstError,
@@ -1479,12 +1522,20 @@ function App() {
     setProjectId('');
     setActiveTab('dashboard');
   };
-  const newProject = (name = 'Untitled Project') => {
-    const p = { id: crypto.randomUUID(), name, modified: Date.now(), files: [{ name: 'main.tex', content: starter }] };
+  const newProject = (name = 'Untitled Project', language: 'latex' | 'typst' = 'latex') => {
+    const main = language === 'typst' ? 'main.typ' : 'main.tex';
+    const p: Project = {
+      id: crypto.randomUUID(),
+      name,
+      modified: Date.now(),
+      language,
+      mainFile: main,
+      files: [{ name: main, content: language === 'typst' ? starterTypst : starter }],
+    };
     history.pushState({ screen: 'project', id: p.id }, '', projectPath(p.id));
     setProjects((x) => [p, ...x]);
     setProjectId(p.id);
-    setFileName('main.tex');
+    setFileName(main);
     setPdfUrl('');
     setPdfData(null);
     setResult(null);
@@ -1492,17 +1543,25 @@ function App() {
     setActiveTab('editor');
   };
   const promptNewProject = () =>
-    askName(
-      'Create a new project',
-      'Project name',
-      '',
-      'Create project',
-      (v) => {
-        if (!v.trim()) return 'Enter a project name';
-        newProject(v.trim());
+    setDialog({
+      title: 'Create a new project',
+      label: 'Project name',
+      initial: '',
+      confirmLabel: 'Create project',
+      placeholder: 'e.g. My research paper',
+      choice: {
+        label: 'Document language',
+        initial: 'latex',
+        options: [
+          { value: 'latex', label: 'LaTeX' },
+          { value: 'typst', label: 'Typst' },
+        ],
       },
-      'e.g. My research paper',
-    );
+      onConfirm: (v, language) => {
+        if (!v.trim()) return 'Enter a project name';
+        newProject(v.trim(), language === 'typst' ? 'typst' : 'latex');
+      },
+    });
   const renameProject = (p: Project) => {
     setOpenMenu('');
     askName('Rename project', 'Project name', p.name, 'Save changes', (v) => {
@@ -1552,7 +1611,7 @@ function App() {
     try {
       const files = await loadTemplateFiles(t.id),
         id = crypto.randomUUID(),
-        p: Project = { id, name: t.name, modified: Date.now(), mainFile: t.mainFile, files };
+        p: Project = { id, name: t.name, modified: Date.now(), mainFile: t.mainFile, language: t.language, files };
       history.pushState({ screen: 'project', id }, '', projectPath(id));
       setProjects((x) => [p, ...x]);
       setPdfUrl('');
@@ -1592,7 +1651,7 @@ function App() {
     askName(
       folder ? 'New folder' : 'New file',
       folder ? 'Folder name' : 'File name (use “folder/name.tex” to place it in a folder)',
-      folder ? 'figures' : 'notes.tex',
+      folder ? 'figures' : project && languageOf(project) === 'typst' ? 'notes.typ' : 'notes.tex',
       folder ? 'Create folder' : 'Create file',
       (input) => {
         const name = folder ? input.trim().replace(/\/+$/, '') + '/' : input.trim();
@@ -1678,6 +1737,7 @@ function App() {
               name: current.name,
               files: current.files,
               mainFile: current.mainFile,
+              language: current.language,
               archived: current.archived,
               settings: current.settings,
               versions: current.versions,
@@ -1758,7 +1818,7 @@ function App() {
       }
       const image = added.find((x) => isImage(x.name) && !isSvg(x.name));
       const mainTex =
-        project?.files.find((x) => x.name === (project.mainFile ?? 'main.tex')) ??
+        project?.files.find((x) => x.name === mainFileOf(project)) ??
         project?.files.find((x) => x.name.endsWith('.tex'));
       const figure =
         image && insertImage
@@ -1836,8 +1896,7 @@ function App() {
     if (!added.length) return;
     const names = new Set(added.map((f) => f.name));
     const main =
-      project.files.find((f) => f.name === (project.mainFile ?? 'main.tex')) ??
-      project.files.find((f) => f.name.endsWith('.tex'));
+      project.files.find((f) => f.name === mainFileOf(project)) ?? project.files.find((f) => f.name.endsWith('.tex'));
     const ed = editorRef.current,
       model = ed?.getModel(),
       texOpen = !!ed && !!model && !!currentFile && /\.tex$/i.test(currentFile.name);
@@ -2015,7 +2074,7 @@ function App() {
       const r = await apiFetch(`/api/projects/${project.id}/share`, {
         method: 'POST',
         headers: json,
-        body: JSON.stringify({ name: project.name, mainFile: project.mainFile ?? 'main.tex', files: project.files }),
+        body: JSON.stringify({ name: project.name, mainFile: mainFileOf(project), files: project.files }),
       });
       const d = await r.json().catch(() => null);
       if (!r.ok || !d?.id) throw new Error(d?.error ?? 'The link couldn’t be created.');
@@ -2084,8 +2143,7 @@ function App() {
   const applySubmissionFix = (fix: Fix) => {
     const run = () => {
       update((p) => ({ ...p, files: applySubmissionChange(p.files, fix) as ProjectFile[] }));
-      if (!applySubmissionChange(project.files, fix).some((f) => f.name === fileName))
-        setFileName(project.mainFile ?? 'main.tex');
+      if (!applySubmissionChange(project.files, fix).some((f) => f.name === fileName)) setFileName(mainFileOf(project));
       notify(
         fix.type === 'delete-files'
           ? `Deleted ${fix.files.length === 1 ? fix.files[0] : `${fix.files.length} files`}`
@@ -2159,6 +2217,10 @@ function App() {
     ed.focus();
   };
   const syncSourceToPdf = async () => {
+    if (project && languageOf(project) === 'typst') {
+      notify('Jumping between the source and the PDF is not available for Typst projects yet.');
+      return;
+    }
     if (!currentFile || !isEditable(currentFile)) {
       notify('Open a text file before syncing to the PDF.');
       return;
@@ -2175,7 +2237,7 @@ function App() {
           file: currentFile.name,
           line: position?.lineNumber ?? cursor.line,
           column: position?.column ?? cursor.col,
-          mainFile: project.mainFile ?? 'main.tex',
+          mainFile: mainFileOf(project),
         }),
       });
       const data = await response.json();
@@ -2197,6 +2259,7 @@ function App() {
     }
   };
   const syncPdfToSource = async (syncPage: number, x: number, y: number) => {
+    if (project && languageOf(project) === 'typst') return;
     // One lookup at a time; a newer request waits and runs next (older queued ones are replaced).
     if (pdfSyncPending.current) {
       pdfSyncNext.current = { page: syncPage, x, y };
@@ -2207,7 +2270,7 @@ function App() {
       const response = await apiFetch(`/api/projects/${projectId}/synctex`, {
         method: 'POST',
         headers: json,
-        body: JSON.stringify({ mode: 'inverse', page: syncPage, x, y, mainFile: project.mainFile ?? 'main.tex' }),
+        body: JSON.stringify({ mode: 'inverse', page: syncPage, x, y, mainFile: mainFileOf(project) }),
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error ?? 'SyncTeX lookup failed.');
@@ -2478,8 +2541,8 @@ function App() {
             { label: 'Upload files', icon: <Upload size={14} />, run: () => fileInput.current?.click() },
             'sep',
             { label: 'Project history', icon: <ScrollText size={14} />, run: () => setModal('history') },
-            { label: 'Word count', run: () => setModal('wordcount') },
-            { label: 'Check before submitting', run: () => setModal('submission') },
+            { label: 'Word count', run: () => setModal('wordcount'), disabled: typstProject },
+            { label: 'Check before submitting', run: () => setModal('submission'), disabled: typstProject },
             { label: 'GitHub sync', icon: <Github size={14} />, run: () => setModal('github') },
             { label: 'Download project', icon: <FileArchive size={14} />, run: downloadProject },
             { label: 'Download PDF', icon: <Download size={14} />, run: downloadPdf, disabled: !pdfUrl },
@@ -3073,7 +3136,7 @@ function App() {
                   selected={currentFile?.name ?? ''}
                   collapsed={collapsed}
                   act={{
-                    mainFile: project.mainFile ?? 'main.tex',
+                    mainFile: mainFileOf(project),
                     dropTarget,
                     dropProps,
                     onToggle: (p) =>
@@ -3116,7 +3179,7 @@ function App() {
                 className="hidden"
                 type="file"
                 multiple
-                accept=".tex,.bib,.bst,.sty,.cls,.png,.jpg,.jpeg,.pdf,.svg,.eps,.csv,.txt,.dat,.zip"
+                accept=".tex,.typ,.bib,.yml,.yaml,.toml,.bst,.sty,.cls,.png,.jpg,.jpeg,.gif,.pdf,.svg,.eps,.csv,.txt,.dat,.ttf,.otf,.zip"
                 onChange={(e) => uploadFiles(e.target.files)}
               />
               <input
@@ -3369,7 +3432,7 @@ function App() {
                     <Editor
                       height="100%"
                       path={`${project.id}/${currentFile?.name ?? fileName}`}
-                      language={(currentFile?.name ?? fileName).endsWith('.bib') ? 'bibtex' : 'latex'}
+                      language={editorLanguage(currentFile?.name ?? fileName)}
                       theme={theme.resolved === 'dark' ? 'paperdesk-dark' : 'paperdesk-light'}
                       beforeMount={setupMonaco}
                       loading={
@@ -3499,11 +3562,13 @@ function App() {
                         </button>
                       }
                       items={[
-                        ...[
-                          ['pdflatex', 'pdfLaTeX'],
-                          ['xelatex', 'XeLaTeX'],
-                          ['lualatex', 'LuaLaTeX'],
-                        ].map(([v, l]) => ({ label: l, checked: engine === v, run: () => setEngine(v) })),
+                        ...(typstProject
+                          ? [{ label: 'Typst', checked: true, run: () => undefined }]
+                          : [
+                              ['pdflatex', 'pdfLaTeX'],
+                              ['xelatex', 'XeLaTeX'],
+                              ['lualatex', 'LuaLaTeX'],
+                            ].map(([v, l]) => ({ label: l!, checked: engine === v, run: () => setEngine(v!) }))),
                         'sep',
                         {
                           label: `Auto compile: ${compilePrefs.autoCompile ? 'On' : 'Off'}`,
@@ -3939,7 +4004,7 @@ function App() {
             <WordCountView
               projectId={project.id}
               files={project.files}
-              mainFile={project.mainFile ?? 'main.tex'}
+              mainFile={mainFileOf(project)}
               apiFetch={apiFetch}
             />
           ) : modal === 'submission' ? (
@@ -3947,7 +4012,7 @@ function App() {
               projectId={project.id}
               projectName={project.name}
               files={project.files}
-              mainFile={project.mainFile ?? 'main.tex'}
+              mainFile={mainFileOf(project)}
               engine={engine}
               compile={result}
               pdfUrl={pdfUrl}
@@ -4276,30 +4341,36 @@ function App() {
                     <strong>Compiler</strong>
                     <span>Used by Recompile.</span>
                   </div>
-                  <select
-                    className="select"
-                    value={engine}
-                    onChange={(e) => setEngine(e.target.value)}
-                    aria-label="Compiler"
-                  >
-                    <option value="pdflatex">pdfLaTeX</option>
-                    <option value="xelatex">XeLaTeX</option>
-                    <option value="lualatex">LuaLaTeX</option>
-                  </select>
+                  {typstProject ? (
+                    <select className="select" value="typst" disabled aria-label="Compiler">
+                      <option value="typst">Typst</option>
+                    </select>
+                  ) : (
+                    <select
+                      className="select"
+                      value={engine}
+                      onChange={(e) => setEngine(e.target.value)}
+                      aria-label="Compiler"
+                    >
+                      <option value="pdflatex">pdfLaTeX</option>
+                      <option value="xelatex">XeLaTeX</option>
+                      <option value="lualatex">LuaLaTeX</option>
+                    </select>
+                  )}
                 </div>
                 <div className="field-row">
                   <div>
                     <strong>Main document</strong>
-                    <span>Choose the root .tex file to compile.</span>
+                    <span>Choose the root {sourceExt(project)} file to compile.</span>
                   </div>
                   <select
                     className="select"
                     aria-label="Main document"
-                    value={project.mainFile ?? 'main.tex'}
+                    value={mainFileOf(project)}
                     onChange={(e) => update((p) => ({ ...p, mainFile: e.target.value }))}
                   >
                     {project.files
-                      .filter((f) => f.name.endsWith('.tex') && !f.name.includes('/'))
+                      .filter((f) => f.name.endsWith(sourceExt(project)) && !f.name.includes('/'))
                       .map((f) => (
                         <option key={f.name}>{f.name}</option>
                       ))}
@@ -4836,6 +4907,7 @@ function Modal({
 
 function PromptDialog({ dialog, close }: { dialog: Dialog; close: () => void }) {
   const [value, setValue] = useState(dialog.initial ?? ''),
+    [choice, setChoice] = useState(dialog.choice?.initial ?? ''),
     [error, setError] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
@@ -4847,7 +4919,7 @@ function PromptDialog({ dialog, close }: { dialog: Dialog; close: () => void }) 
     }
   }, []);
   const submit = () => {
-    const err = dialog.onConfirm(value);
+    const err = dialog.onConfirm(value, choice);
     if (err) {
       setError(err);
       return;
@@ -4857,6 +4929,27 @@ function PromptDialog({ dialog, close }: { dialog: Dialog; close: () => void }) 
   return (
     <Modal title={dialog.title} close={close}>
       {dialog.message && <p className="dialog-message">{dialog.message}</p>}
+      {dialog.choice && (
+        <>
+          <span className="field-label" id="dialog-choice">
+            {dialog.choice.label}
+          </span>
+          <div className="segmented dialog-choice" role="radiogroup" aria-labelledby="dialog-choice">
+            {dialog.choice.options.map((option) => (
+              <button
+                type="button"
+                role="radio"
+                key={option.value}
+                aria-checked={choice === option.value}
+                className={choice === option.value ? 'on' : ''}
+                onClick={() => setChoice(option.value)}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
       {dialog.label !== undefined && (
         <>
           <label className="field-label" htmlFor="dialog-input">
@@ -4993,7 +5086,11 @@ function TreeLevel({
         const open = !collapsed.has(n.path);
         const folder = n.folder ? `${n.path.replace(/\/+$/, '')}/` : '';
         const isMain = !n.folder && n.path === act.mainFile;
-        const canBeMain = !n.folder && n.path.endsWith('.tex') && !n.path.includes('/') && !isMain;
+        const canBeMain =
+          !n.folder &&
+          n.path.endsWith(act.mainFile.endsWith('.typ') ? '.typ' : '.tex') &&
+          !n.path.includes('/') &&
+          !isMain;
         return (
           <div
             key={n.path}
@@ -5132,7 +5229,7 @@ function Outline({
 }
 
 function fileIcon(f: ProjectFile) {
-  return f.name.endsWith('.tex') ? (
+  return /\.(tex|typ)$/.test(f.name) ? (
     <FileCode2 size={15} className="fi fi-tex" />
   ) : f.name.endsWith('.bib') ? (
     <BookOpen size={15} className="fi fi-bib" />

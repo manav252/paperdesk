@@ -30,6 +30,13 @@ Each folder here is one template in the gallery. When someone picks it, every fi
 4. Run `npm run templates:build -- thesis` to create `thumbnail.png` (page 1 of the compiled PDF).
 5. Run `npm test` and `npm run test:templates`.
 
+## Typst templates
+
+A Typst template is the same kind of folder with `main.typ` as its main file and three metadata differences:
+`"language": "typst"`, `"mainFile": "main.typ"` and `"test": { "engines": ["typst"], ... }`. It must compile with
+Typst alone: compiles have no network, so `@preview` packages cannot be downloaded, and only Typst's built-in fonts
+are available unless the template includes font files.
+
 ## Checks
 
 - `npm test` checks that every template has complete metadata and a thumbnail, and that nothing in it is missing,

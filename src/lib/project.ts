@@ -1,5 +1,7 @@
 /** Pure project/file helpers shared by the UI. Kept free of React so they can be unit-tested. */
 /** Text files hold UTF-8 in `content`; binary files (figures, PDFs) hold base64 and set `encoding`. */
+import { defaultMainFile, projectLanguage, type ProjectLanguage } from './typstLog';
+
 export type ProjectFile = { name: string; content: string; kind?: string; encoding?: 'base64' };
 export type Project = {
   id: string;
@@ -12,12 +14,20 @@ export type Project = {
   files: ProjectFile[];
   compiled?: string;
   mainFile?: string;
+  /** The document language; projects without one are LaTeX. */
+  language?: ProjectLanguage;
   archived?: boolean;
   settings?: { autoCompile: boolean; stopOnFirstError: boolean; draft: boolean; timeout: number };
   versions?: { id: string; label: string; created: number; files: ProjectFile[] }[];
   changes?: import('./changes').TrackedChange[];
   comments?: { id: string; file: string; line: number; text: string; created: number; resolved: boolean }[];
 };
+
+/** A project's language and the file its compile starts from. */
+export const languageOf = (p: Pick<Project, 'language' | 'mainFile'>) => projectLanguage(p.language, p.mainFile);
+export const mainFileOf = (p: Pick<Project, 'language' | 'mainFile'>) => p.mainFile ?? defaultMainFile(languageOf(p));
+/** The extension of source files that can be the main document. */
+export const sourceExt = (p: Pick<Project, 'language' | 'mainFile'>) => (languageOf(p) === 'typst' ? '.typ' : '.tex');
 
 export const isBinary = (name: string) => /\.(png|jpe?g|gif|bmp|tiff?|pdf|eps|ps|zip|gz|ttf|otf|woff2?)$/i.test(name);
 export const isImage = (name: string) => /\.(png|jpe?g|gif|bmp)$/i.test(name);

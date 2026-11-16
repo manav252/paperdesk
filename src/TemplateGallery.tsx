@@ -14,8 +14,12 @@ export function TemplateGallery({
 }) {
   const [category, setCategory] = useState('');
   const [search, setSearch] = useState('');
+  const [language, setLanguage] = useState('');
   const categories = useMemo(() => templateCategories(templates), [templates]);
-  const shown = useMemo(() => filterTemplates(templates, category, search), [templates, category, search]);
+  const shown = useMemo(
+    () => filterTemplates(templates, category, search, language),
+    [templates, category, search, language],
+  );
 
   return (
     <section className="template-gallery" aria-label="Templates">
@@ -33,6 +37,24 @@ export function TemplateGallery({
               <span className="template-filter-count">
                 {name ? templates.filter((t) => t.category === name).length : templates.length}
               </span>
+            </button>
+          ))}
+        </div>
+        <div className="segmented template-language" role="radiogroup" aria-label="Template language">
+          {[
+            ['', 'All'],
+            ['latex', 'LaTeX'],
+            ['typst', 'Typst'],
+          ].map(([value, label]) => (
+            <button
+              type="button"
+              role="radio"
+              key={value || 'all'}
+              aria-checked={language === value}
+              className={language === value ? 'on' : ''}
+              onClick={() => setLanguage(value!)}
+            >
+              {label}
             </button>
           ))}
         </div>
@@ -66,6 +88,7 @@ export function TemplateGallery({
             onClick={() => {
               setSearch('');
               setCategory('');
+              setLanguage('');
             }}
           >
             Show all templates
@@ -90,6 +113,9 @@ export function TemplateGallery({
                 <strong>{template.name}</strong>
                 <span>{template.description}</span>
                 <div className="template-tags">
+                  <i className={`template-lang ${template.language}`}>
+                    {template.language === 'typst' ? 'Typst' : 'LaTeX'}
+                  </i>
                   {template.tags.map((tag) => (
                     <i key={tag}>{tag}</i>
                   ))}

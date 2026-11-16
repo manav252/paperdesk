@@ -1,5 +1,19 @@
-# PaperDesk LaTeX compiler: full TeX Live (pdfLaTeX, XeLaTeX, LuaLaTeX, BibTeX/Biber, latexmk).
+# PaperDesk compiler image: full TeX Live (pdfLaTeX, XeLaTeX, LuaLaTeX, BibTeX/Biber, latexmk) and Typst.
 # The API runs one throwaway container per compile with networking disabled and a read-only root.
+# The official Typst compiler: one static binary at a pinned version, checked against the release's checksum.
+FROM debian:bookworm-slim AS typst
+ARG TYPST_VERSION=0.15.1
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl xz-utils \
+ && case "$(dpkg --print-architecture)" in \
+      amd64) arch=x86_64; sum=a6d077d0a95eed5a2eba715b2dae06be954f624ccbf85758a03f389ded33118c ;; \
+      arm64) arch=aarch64; sum=5aa8d74a3d906e60ea12a66ac2f37f8eef1b14cbad7182a745e393a10c23dcee ;; \
+      *) echo "No Typst build for this architecture" >&2; exit 1 ;; \
+    esac \
+ && curl -fsSL -o /tmp/typst.tar.xz "https://github.com/typst/typst/releases/download/v${TYPST_VERSION}/typst-${arch}-unknown-linux-musl.tar.xz" \
+ && echo "${sum}  /tmp/typst.tar.xz" | sha256sum -c - \
+ && tar -xJf /tmp/typst.tar.xz -C /tmp \
+ && install -m 755 "/tmp/typst-${arch}-unknown-linux-musl/typst" /typst
+
 FROM texlive/texlive:latest
 
 # Build the LuaLaTeX font database once at image build time. luaotfload only reads the database from its
@@ -16,6 +30,8 @@ RUN SYSVAR=$(kpsewhich -var-value TEXMFSYSVAR) \
  && chmod 755 /usr/local/bin/paperdesk-entry \
  && fc-cache -fs \
  && mkdir -p /work && chmod 1777 /work
+
+COPY --from=typst /typst /usr/local/bin/typst
 
 WORKDIR /work
 ENTRYPOINT ["/usr/local/bin/paperdesk-entry"]

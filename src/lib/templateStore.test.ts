@@ -46,7 +46,12 @@ describe('template gallery data', () => {
     const files = filesOf(id);
     expect(files.some((f) => f.name === meta.mainFile)).toBe(true);
     // The same checks as "Check before submitting": missing files, undefined references and citations, unused files.
-    const problems = checkSubmission(files, meta.mainFile, { success: true, errors: [], warnings: [] }, []).filter(
+    // They read LaTeX; Typst templates are checked by compiling them (npm run test:templates).
+    const found =
+      meta.language === 'typst'
+        ? []
+        : checkSubmission(files, meta.mainFile, { success: true, errors: [], warnings: [] }, []);
+    const problems = found.filter(
       (issue) => !(issue.kind === 'unused-file' && /^(SOURCE\.txt|.*\.(cls|bst))$/.test(issue.file ?? '')),
     );
     expect(problems.map((p) => `${p.kind}: ${p.message}`)).toEqual([]);
@@ -57,6 +62,15 @@ describe('template gallery data', () => {
       .join('\n');
     expect(text).not.toMatch(/lorem ipsum|your title here/i);
     expect(text.length).toBeGreaterThan(2500);
+  });
+
+  it('offers LaTeX and Typst templates and filters by language', () => {
+    const typst = filterTemplates(templates, '', '', 'typst');
+    expect(typst.map((t) => t.id).sort()).toEqual(['typst-cv', 'typst-ieee', 'typst-report']);
+    expect(typst.every((t) => t.mainFile === 'main.typ')).toBe(true);
+    expect(filterTemplates(templates, '', '', 'latex').every((t) => t.language === 'latex')).toBe(true);
+    expect(filterTemplates(templates, 'CV', '', 'typst').map((t) => t.id)).toEqual(['typst-cv']);
+    expect(filterTemplates(templates, '', '').length).toBe(templates.length);
   });
 
   it("loads a template's text files in tree order", async () => {
@@ -88,7 +102,7 @@ describe('template gallery data', () => {
   });
 
   it('filters by category and by every search word', () => {
-    expect(filterTemplates(templates, 'CV', '').map((t) => t.id)).toEqual(['cv']);
+    expect(filterTemplates(templates, 'CV', '').map((t) => t.id)).toEqual(['cv', 'typst-cv']);
     expect(filterTemplates(templates, '', 'springer journal').map((t) => t.id)).toEqual(['springer-journal']);
     expect(filterTemplates(templates, '', 'SLIDES').map((t) => t.id)).toEqual(['beamer']);
     expect(filterTemplates(templates, 'Paper', 'slides')).toEqual([]);

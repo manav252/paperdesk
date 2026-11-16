@@ -1,0 +1,11 @@
+{
+  "name": "Project Report (Typst)",
+  "description": "Long report in Typst with a title page, abstract, contents, four chapters with figures, a table and an equation, and a bibliography.",
+  "category": "Report",
+  "tags": ["Report", "Thesis", "Multi-chapter"],
+  "language": "typst",
+  "mainFile": "main.typ",
+  "engine": "typst",
+  "order": 13,
+  "test": { "engines": ["typst"], "minPages": 8, "image": true, "contains": ["Campus Bike-Share Pilot", "Contents", "Chapter 1", "Figure 3.1", "Table 3.1", "Bibliography"] }
+}

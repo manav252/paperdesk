@@ -1,0 +1,11 @@
+{
+  "name": "IEEE Conference Paper (Typst)",
+  "description": "Two-column IEEE-style conference paper in Typst: author blocks, abstract, numbered sections, figures, a table, equations and IEEE references.",
+  "category": "Paper",
+  "tags": ["Paper", "IEEE", "Two-column", "Conference"],
+  "language": "typst",
+  "mainFile": "main.typ",
+  "engine": "typst",
+  "order": 11,
+  "test": { "engines": ["typst"], "minPages": 2, "image": true, "contains": ["Low-Power Occupancy Sensing", "Abstract", "Index Terms", "Table I", "Fig. 1", "References"] }
+}

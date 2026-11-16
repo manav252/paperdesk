@@ -93,8 +93,18 @@ try {
       const dir = path.join(work, id);
       cpSync(path.join(ROOT, id), dir, { recursive: true });
       const main = meta.mainFile ?? 'main.tex';
-      compile(dir, main, meta.engine ?? 'pdflatex');
-      toPng(dir, main.replace(/\.tex$/, '.pdf'), 'thumbnail.png', 56, 'png256');
+      if (meta.language === 'typst')
+        inContainer(dir, [
+          'typst',
+          'compile',
+          '--root',
+          '.',
+          '--ignore-system-fonts',
+          main,
+          main.replace(/\.typ$/, '.pdf'),
+        ]);
+      else compile(dir, main, meta.engine ?? 'pdflatex');
+      toPng(dir, main.replace(/\.(tex|typ)$/, '.pdf'), 'thumbnail.png', 56, 'png256');
       cpSync(path.join(dir, 'thumbnail.png'), path.join(ROOT, id, 'thumbnail.png'));
       console.log(`preview ${id}`);
     }

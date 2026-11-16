@@ -74,6 +74,8 @@ import {
 import { useTheme, type ThemePref } from './theme';
 import { setCompletionFiles, setupMonaco } from './monacoSetup';
 import { outlineOf } from './lib/outline';
+import { CompileTimes } from './CompileTimes';
+import { compileSegments, seconds, type CompileMarks, type ServerTimings } from './lib/compileTrace';
 import { sourceWords, typstOutline } from './lib/typstSource';
 import { pdfToSource, sourceToPdf } from './lib/typstSync';
 import {
@@ -185,6 +187,12 @@ const SNIPPETS = {
   },
 } as const;
 
+/** "Compiled in 3.2s · 2 warnings": the time from the click to the PDF on screen (or to the result, while it loads). */
+function compiledMessage({ marks, server, warnings }: CompileTrace) {
+  const { total } = compileSegments(marks, server);
+  return `Compiled in ${seconds(total)}${warnings ? ` · ${warnings} warning${warnings > 1 ? 's' : ''}` : ''}`;
+}
+
 /** Which highlighting a file gets in the editor. */
 const editorLanguage = (name: string) =>
   name.endsWith('.bib')
@@ -212,19 +220,16 @@ Start writing here. Math works inline, $e^(i pi) + 1 = 0$, and on its own line:
 
 $ integral_0^1 x^2 dif x = 1 / 3 $
 `;
-const starter = `\\documentclass[12pt,a4paper]{article}
+const starter = `\\documentclass[11pt,a4paper]{article}
 
 \\usepackage[utf8]{inputenc}
 \\usepackage{graphicx}
 \\usepackage{amsmath}
-\\usepackage{amssymb}
-\\usepackage{geometry}
+\\usepackage[margin=2.5cm]{geometry}
 \\usepackage{hyperref}
 
-\\geometry{margin=1in}
-
-\\title{My First LaTeX Document}
-\\author{Author Name}
+\\title{Untitled document}
+\\author{Author name}
 \\date{\\today}
 
 \\begin{document}
@@ -233,29 +238,23 @@ const starter = `\\documentclass[12pt,a4paper]{article}
 
 \\section{Introduction}
 
-Welcome to the LaTeX Editor.
+Replace this text with your own, then press Recompile to build the PDF.
 
-This is your first document. You can edit this content and compile it into a PDF.
+\\section{Equations}
 
-\\section{Mathematical Equations}
+Inline math is written like $a^2 + b^2 = c^2$. A numbered equation:
 
-An example equation:
-
-\\[
-E = mc^2
-\\]
-
-\\section{Conclusion}
-
-This document was created using our online LaTeX editor.
+\\begin{equation}
+  E = mc^2
+\\end{equation}
 
 \\end{document}
 `;
 const seed: Project[] = [
   {
     id: 'p1',
-    name: 'Research Paper — Quantum Computing',
-    modified: Date.now() - 1000 * 60 * 18,
+    name: 'Sample document',
+    modified: Date.now(),
     files: [
       { name: 'main.tex', content: starter },
       {
@@ -352,15 +351,8 @@ type CompileState = {
   entry?: LogEntry;
   stale?: boolean;
 };
-type CompileTimings = {
-  queue?: number;
-  sync?: number;
-  tex?: number;
-  read?: number;
-  passes?: number;
-  preamble?: number;
-  total?: number;
-};
+type CompileTimings = ServerTimings;
+type CompileTrace = { marks: CompileMarks; server: ServerTimings; warnings: number };
 type CompileResult = {
   success: boolean | null;
   log: string;
@@ -570,7 +562,9 @@ function App() {
   const [templateBusy, setTemplateBusy] = useState(''),
     compileOnOpen = useRef('');
   const [autoCompileRevision, setAutoCompileRevision] = useState(0),
-    [pdfRenderMs, setPdfRenderMs] = useState<number | null>(null);
+    /** Timestamps of the latest compile, from the click to the first page on screen. */
+    compileMarks = useRef<CompileTrace | null>(null),
+    [compileTrace, setCompileTrace] = useState<CompileTrace | null>(null);
   const compileAbort = useRef<AbortController | null>(null),
     syncState = useRef<SyncState | null>(null),
     sourceRevision = useRef(0),
@@ -1455,12 +1449,14 @@ function App() {
     // A compile you asked for shows the PDF on a phone; an automatic one leaves you in the editor.
     if (!auto && narrow && layout === 'editor') setPref('layout', 'pdf');
     setCompileState({ status: 'running', message: 'Compiling…' });
-    const started = performance.now();
+    const marks: CompileMarks = { click: performance.now() };
+    compileMarks.current = null;
     try {
       // Only changed files are uploaded; if the server restarted and lost its copy, it answers 409 and everything is sent once.
       const send = async (full: boolean) => {
         await authReady();
         const payload = await compileFiles(target.id, target.files, full ? null : syncState.current);
+        marks.prepared = performance.now();
         const r = await fetchWithWake(
           apiUrl(`/api/projects/${target.id}/compile`),
           {
@@ -1480,6 +1476,7 @@ function App() {
           },
           () => setCompileState({ status: 'running', message: 'Waking up the compile server…' }),
         );
+        marks.answered = performance.now();
         return { r, payload };
       };
       let { r, payload } = await send(false);
@@ -1490,6 +1487,7 @@ function App() {
       } catch {
         /* non-JSON body: the API is unreachable */
       }
+      marks.received = performance.now();
       // 410: another compile of this project (e.g. in another tab) replaced this one; its result will arrive there.
       // With collaborators, a replaced compile means someone else is compiling: their PDF arrives through the live channel.
       if (controller.signal.aborted || r.status === 410) return;
@@ -1520,11 +1518,11 @@ function App() {
         setPdfUrl(
           `${apiUrl(`/api/projects/${target.id}/pdf?t=${Date.now()}`)}${currentAccessToken() ? '' : `&owner=${encodeURIComponent(projectOwnerId())}`}`,
         );
-        const w = res.warnings.length;
-        setCompileState({
-          status: 'success',
-          message: `Compiled in ${((performance.now() - started) / 1000).toFixed(1)}s${w ? ` · ${w} warning${w > 1 ? 's' : ''}` : ''}`,
-        });
+        // The time shown runs until the PDF is on screen: the viewer adds the last two marks (see pdfShown).
+        const trace = { marks, server: res.timings ?? {}, warnings: res.warnings.length };
+        compileMarks.current = trace;
+        setCompileTrace(trace);
+        setCompileState({ status: 'success', message: compiledMessage(trace) });
       } else {
         const e = res.errors[0];
         setCompileState({
@@ -1546,6 +1544,17 @@ function App() {
       window.clearTimeout(timeoutTimer);
       if (compileAbort.current === controller) compileAbort.current = null;
     }
+  };
+  /** The viewer opened or drew the PDF of the latest compile: finish its timing and show the full time. */
+  const pdfShown = (step: 'opened' | 'painted') => {
+    const trace = compileMarks.current;
+    if (!trace || trace.marks[step] !== undefined || (step === 'painted' && trace.marks.opened === undefined)) return;
+    trace.marks[step] = performance.now();
+    if (step === 'opened') return;
+    compileMarks.current = null;
+    const done = { ...trace, marks: { ...trace.marks } };
+    setCompileTrace(done);
+    setCompileState((state) => (state.status === 'success' ? { ...state, message: compiledMessage(done) } : state));
   };
   const stopCompile = () => {
     compileAbort.current?.abort();
@@ -2845,13 +2854,7 @@ function App() {
           <main className="dash-main">
             <div className="dash-heading">
               <div>
-                <div className="eyebrow">Workspace / My projects</div>
                 <h1>{activeTab === 'templates' ? 'Start from a template' : 'Your projects'}</h1>
-                <p className="subhead">
-                  {activeTab === 'templates'
-                    ? 'Choose a starting point for your next document.'
-                    : 'Pick up where you left off.'}
-                </p>
               </div>
               <button className="btn btn-primary" onClick={promptNewProject}>
                 <Plus size={16} /> New project
@@ -2862,7 +2865,7 @@ function App() {
             )}
             <div className="section-bar">
               <div className="section-title">
-                <h2>Recent projects</h2>
+                <h2>Projects</h2>
                 <span className="count-pill">{sortedProjects.length}</span>
               </div>
               <div className="dash-tools">
@@ -2977,7 +2980,7 @@ function App() {
                   <FileText size={24} />
                 </div>
                 <h3>No projects found</h3>
-                <p>{query ? 'Try a different search.' : 'Create your first project to get started.'}</p>
+                <p>{query ? 'No project name matches this search.' : 'Create a project or start from a template.'}</p>
                 {!query && (
                   <button className="btn btn-primary" onClick={promptNewProject}>
                     <Plus size={15} /> New project
@@ -2986,10 +2989,7 @@ function App() {
               </div>
             )}
             <div className="dash-footer">
-              <span>
-                PaperDesk <span className="dot">·</span> A thoughtful place to write
-              </span>
-              <span>Projects are saved to the PaperDesk server and in this browser</span>
+              <span>Projects are saved to the PaperDesk server and in this browser.</span>
             </div>
           </main>
         </>
@@ -3806,20 +3806,20 @@ function App() {
                       onDocument={(pdf) => {
                         pdfDocument.current = pdf;
                       }}
-                      onLoaded={setPageTotal}
+                      onLoaded={(pages) => {
+                        setPageTotal(pages);
+                        pdfShown('opened');
+                      }}
+                      onPainted={() => pdfShown('painted')}
                       onPageChange={setPage}
                       onScale={(s) => {
                         scaleRef.current = s;
                       }}
-                      onRenderTime={setPdfRenderMs}
                     />
                   ) : (
                     <div className="pdf-empty">
-                      <div className="paper-placeholder">
-                        <FileText size={24} />
-                        <span>PDF</span>
-                      </div>
-                      <strong>Your document will appear here</strong>
+                      <FileText size={22} className="pdf-empty-icon" />
+                      <strong>No PDF yet</strong>
                       <p>
                         {apiOnline === false ? (
                           <>
@@ -3834,7 +3834,7 @@ function App() {
                             The LaTeX compiler image isn’t built yet. Run <code>npm run compiler:build</code> once.
                           </>
                         ) : (
-                          'Recompile to render a preview of your PDF.'
+                          'Recompile to build the PDF.'
                         )}
                       </p>
                       <button className="btn btn-primary" onClick={() => void compile()}>
@@ -4616,7 +4616,10 @@ function App() {
                     <span>
                       {result.success ? 'Compiled successfully' : 'Compilation failed'} · {result.errors.length} error
                       {result.errors.length === 1 ? '' : 's'} · {result.warnings.length} warning
-                      {result.warnings.length === 1 ? '' : 's'} · {(result.durationMs / 1000).toFixed(1)}s
+                      {result.warnings.length === 1 ? '' : 's'} ·{' '}
+                      {result.success && compileTrace
+                        ? seconds(compileSegments(compileTrace.marks, compileTrace.server).total)
+                        : `${seconds(result.durationMs)} on the server`}
                     </span>
                   </div>
                   {!rawLogs &&
@@ -4670,12 +4673,7 @@ function App() {
                       <div className="log-heading">Warnings</div>
                       {result.warnings.length ? null : <p className="muted">No warnings.</p>}
                       <div className="log-heading">Typesetting info</div>
-                      <p className="muted">Compile time: {(result.durationMs / 1000).toFixed(1)}s</p>
-                      <p className="muted compile-timings">
-                        Queue {result.timings?.queue ?? '—'} ms · file sync {result.timings?.sync ?? '—'} ms · TeX +
-                        engine startup {result.timings?.tex ?? '—'} ms · PDF/log read {result.timings?.read ?? '—'} ms ·
-                        browser PDF page render {pdfRenderMs ?? '—'} ms
-                      </p>
+                      <CompileTimes trace={result.success ? compileTrace : null} serverMs={result.durationMs} />
                       <pre className="typeset-info">
                         {result.log
                           .split(/\r?\n/)
@@ -4835,7 +4833,6 @@ function Brand() {
         <span />
       </span>
       <span>paperdesk</span>
-      <small>STUDIO</small>
     </div>
   );
 }

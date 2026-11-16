@@ -122,6 +122,11 @@ const auth = createAuth({
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const bearerToken = (req: express.Request) => /^Bearer\s+(\S+)$/i.exec(req.header('Authorization') ?? '')?.[1];
 
+// When a project request reached the server, before its sign-in check and body are read (compile timings).
+app.use('/api/projects', (_req, res, next) => {
+  res.locals.arrived = Date.now();
+  next();
+});
 // A signed-in request (Supabase access token) uses the account's projects; otherwise the browser's anonymous key.
 app.use('/api/projects', async (req, res, next) => {
   const token = bearerToken(req);
@@ -1075,8 +1080,9 @@ async function chownForSandbox(root: string, names: string[]) {
  * The browser may send only changed files (with hashes for the rest); 409 lists files the server lacks.
  */
 app.post('/api/projects/:id/compile', async (req, res) => {
-  const started = Date.now();
-  const timings: Record<string, number> = {};
+  // Timings run from the moment the request arrived, so the sign-in check, upload and parsing are counted too.
+  const started = Number(res.locals.arrived) || Date.now();
+  const timings: Record<string, number> = { receive: Date.now() - started };
   const mark = (name: string, since: number) => {
     timings[name] = Date.now() - since;
   };
@@ -1117,11 +1123,14 @@ app.post('/api/projects/:id/compile', async (req, res) => {
       return void send(res, 400, `Main file “${mainFile}” not found in the project`);
 
     // A newer compile of the same project replaces a stale one that is still running or waiting.
+    let t = Date.now();
     const previous = RUNNING.get(key);
     if (previous) {
       previous.cancel();
       await previous.done.catch(() => undefined);
     }
+    // A preamble being cached in the background gives way: this compile matters more than the next one's speed.
+    preambleBuild?.cancel();
     if (closed.signal.aborted) return; // abandoned while the stale compile was stopping
     let cancelRun: () => void = () => undefined;
     const done = new Promise<void>((resolve) => {
@@ -1137,7 +1146,6 @@ app.post('/api/projects/:id/compile', async (req, res) => {
     };
     RUNNING.set(key, entry);
 
-    let t = Date.now();
     release = await compileSlot(closed.signal);
     if (closed.signal.aborted) return; // abandoned while queued
     mark('queue', t);
@@ -1240,7 +1248,7 @@ app.post('/api/projects/:id/compile', async (req, res) => {
     // A run stopped part-way (by a newer compile or the browser leaving) can leave half-written .aux/.toc files
     // that make the next compile fail; clear them and let the next run go through latexmk from clean state.
     if (closed.signal.aborted && exitError?.killed) killedWorkspace = ws;
-    mark('tex', t);
+    mark('compiler', t);
     timings.passes = passes === 'direct' ? 1 : passes.includes('latexmk') ? 2 : 0;
     timings.preamble = format ? 1 : 0;
     if (closed.signal.aborted) return; // superseded or the browser left; answered in finally
@@ -1473,11 +1481,21 @@ async function runTool(
  * passes skip loading the packages. Runs after the response, holding the compile slot; used only while the preamble
  * and its local files are unchanged.
  */
+let preambleBuild: { cancel: () => void } | null = null;
 async function buildPreambleFormat(ws: Workspace, mainFile: string, key: string) {
   const release = await compileSlot(new AbortController().signal).catch(() => null);
   if (!release) return;
+  let cancelled = false;
+  const build = {
+    cancel: () => {
+      cancelled = true;
+      kill();
+    },
+  };
+  let kill: () => void = () => undefined;
   try {
     if (workspaces.peek(ws.key) !== ws || ws.format?.key === key) return;
+    preambleBuild = build;
     const r = await runTool(
       ws.dir,
       [
@@ -1491,13 +1509,20 @@ async function buildPreambleFormat(ws: Workspace, mainFile: string, key: string)
         mainFile,
       ],
       60_000,
+      (stop) => {
+        kill = stop;
+        if (cancelled) stop();
+      },
     );
+    // Stopped for a compile: leave no record, so the build is tried again after the next successful compile.
+    if (cancelled) return void (await fs.rm(path.join(ws.dir, `${PREAMBLE_FORMAT}.fmt`), { force: true }));
     const built = await fs.access(path.join(ws.dir, `${PREAMBLE_FORMAT}.fmt`)).then(
       () => true,
       () => false,
     );
     ws.format = { key, ok: r.code === 0 && !r.killed && built };
   } finally {
+    if (preambleBuild === build) preambleBuild = null;
     release();
   }
 }

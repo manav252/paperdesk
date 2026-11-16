@@ -263,8 +263,8 @@ export function AssistantPanel({
           </div>
         ) : !messages.length ? (
           <div className="assistant-welcome">
-            <strong>Hi! I can help you with LaTeX.</strong>
-            <p>Ask how to do something, or pick a starting point. I’ll show examples you can insert at your cursor.</p>
+            <strong>Ask about your document</strong>
+            <p>Ask how to do something in LaTeX, or pick a starting point. Examples can be inserted at the cursor.</p>
           </div>
         ) : (
           messages.map((m) =>

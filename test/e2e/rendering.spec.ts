@@ -198,6 +198,9 @@ test('figures, tables and equations compile to a clean PDF', async ({ page }) =>
   await page.getByRole('button', { name: 'Logs' }).click();
   const log = page.getByRole('dialog', { name: 'Compile log' });
   await expect(log).toContainText('Compiled successfully · 0 errors');
-  await expect(log.locator('.compile-timings')).toContainText(/browser PDF page render \d+ ms/);
+  // The breakdown covers the whole wait, from the click to the first page on screen.
+  await expect(log.locator('.compile-timings')).toContainText('from Recompile to the PDF on screen');
+  await expect(log.locator('.timing-table')).toContainText(/Compiler time\s*[\d,]+ ms/);
+  await expect(log.locator('.timing-table')).toContainText(/Draw the first page\s*[\d,]+ ms/);
   await expect(log.locator('.log-entry.warning', { hasText: /undefined|not found|Unknown graphics/i })).toHaveCount(0);
 });

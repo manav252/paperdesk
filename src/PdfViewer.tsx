@@ -37,8 +37,8 @@ export function PdfViewer({
   onScale,
   onPageChange,
   onSourceJump,
-  onRenderTime,
   onDocument,
+  onPainted,
 }: {
   url: string;
   data?: Uint8Array | null;
@@ -49,16 +49,18 @@ export function PdfViewer({
   onScale: (pct: number) => void;
   onPageChange: (page: number) => void;
   onSourceJump: (page: number, x: number, y: number) => void;
-  onRenderTime?: (ms: number) => void;
   /** The loaded pdf.js document, for features that read its text (Typst source jumps). */
   onDocument?: (pdf: unknown) => void;
+  /** A page of the current document was drawn on screen. */
+  onPainted?: () => void;
   searchOpen?: boolean;
   onSearchClose?: () => void;
 }) {
   const boxRef = useRef<HTMLDivElement>(null);
   const pageRefs = useRef<(HTMLDivElement | null)[]>([]);
-  const cb = useRef({ onLoaded, onScale, onPageChange, onSourceJump, onRenderTime, onDocument });
-  cb.current = { onLoaded, onScale, onPageChange, onSourceJump, onRenderTime, onDocument };
+  const cb = useRef({ onLoaded, onScale, onPageChange, onSourceJump, onDocument, onPainted });
+  cb.current = { onLoaded, onScale, onPageChange, onSourceJump, onDocument, onPainted };
+  const painted = useRef(() => cb.current.onPainted?.()).current;
   const [doc, setDoc] = useState<Loaded | null>(null);
   const docRef = useRef<Loaded | null>(null);
   docRef.current = doc;
@@ -397,7 +399,7 @@ export function PdfViewer({
                 index={i}
                 scale={scale}
                 active={visible.has(i)}
-                onRenderTime={cb.current.onRenderTime}
+                onPainted={painted}
                 hits={hitsFor(i + 1)}
               />
               {syncPoint?.page === i + 1 &&
@@ -491,14 +493,14 @@ function PdfPage({
   index,
   scale,
   active,
-  onRenderTime,
+  onPainted,
   hits,
 }: {
   pdf: any;
   index: number;
   scale: number;
   active: boolean;
-  onRenderTime?: (ms: number) => void;
+  onPainted?: () => void;
   hits: (HitSegment & { current: boolean })[];
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -512,7 +514,6 @@ function PdfPage({
       try {
         const page = await pdf.getPage(index + 1);
         if (cancelled) return;
-        const renderStarted = performance.now();
         const dpr = window.devicePixelRatio || 1;
         const viewport = page.getViewport({ scale });
         const off = document.createElement('canvas');
@@ -524,7 +525,6 @@ function PdfPage({
           transform: dpr !== 1 ? [dpr, 0, 0, dpr, 0, 0] : undefined,
         });
         await task.promise;
-        onRenderTime?.(Math.round(performance.now() - renderStarted));
         const canvas = canvasRef.current;
         if (cancelled || !canvas) return;
         canvas.width = off.width;
@@ -532,6 +532,8 @@ function PdfPage({
         canvas.getContext('2d')!.drawImage(off, 0, 0);
         drawn.current = { pdf, scale };
         setReady(true);
+        // After the browser has put the canvas on screen.
+        requestAnimationFrame(() => onPainted?.());
       } catch (e: any) {
         if (e?.name !== 'RenderingCancelledException' && !cancelled) console.warn('PDF page render failed', e);
       }
@@ -540,7 +542,7 @@ function PdfPage({
       cancelled = true;
       task?.cancel?.();
     };
-  }, [pdf, scale, active, index, onRenderTime]);
+  }, [pdf, scale, active, index, onPainted]);
   return (
     <>
       <canvas ref={canvasRef} aria-label={`PDF page ${index + 1}`} className={ready ? '' : 'is-loading'} />

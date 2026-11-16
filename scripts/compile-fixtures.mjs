@@ -286,7 +286,7 @@ try {
       }
       const secs = ((Date.now() - t) / 1000).toFixed(1).padStart(5);
       const timing = body?.timings
-        ? `  [queue ${body.timings.queue}ms · sync ${body.timings.sync}ms · TeX+startup ${body.timings.tex}ms · read ${body.timings.read}ms · total ${body.timings.total}ms]`
+        ? `  [queue ${body.timings.queue}ms · sync ${body.timings.sync}ms · compiler ${body.timings.compiler}ms · read ${body.timings.read}ms · total ${body.timings.total}ms]`
         : '';
       const label = `${name.padEnd(20)} ${engine.padEnd(9)} ${secs}s${timing}${edit ? `  (${edit.label}: ${typst ? 'typst' : body?.timings?.passes === 1 ? 'single pass' : 'latexmk'})` : ''}`;
       if (edit?.expect) expect.contains = expect.contains.filter((c) => c !== edit.expect);

@@ -2,10 +2,11 @@
 // Spell checking off the main thread: loads the English dictionary once, then checks whole files and suggests fixes.
 import nspell from 'nspell';
 import { proseWords } from '../lib/spellText';
+import { maskTypst } from '../lib/typstSource';
 
 type Request =
   | { type: 'init'; aff: string; dic: string; personal: string[] }
-  | { type: 'check'; id: number; text: string }
+  | { type: 'check'; id: number; text: string; typst?: boolean }
   | { type: 'suggest'; id: number; word: string }
   | { type: 'add'; word: string };
 
@@ -38,7 +39,9 @@ ctx.onmessage = async (event: MessageEvent<Request>) => {
     return;
   }
   const cache = new Map<string, boolean>();
-  const wrong = proseWords(message.text).filter(({ word }) => {
+  // Typst: blank out code, math, labels and references first; what remains is prose, which reads like LaTeX text.
+  const text = message.typst ? maskTypst(message.text) : message.text;
+  const wrong = proseWords(text).filter(({ word }) => {
     let ok = cache.get(word);
     // Accept a capitalised form of a known word (sentence starts) and all-caps acronyms.
     if (ok === undefined) {

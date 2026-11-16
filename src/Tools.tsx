@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { Search, X } from 'lucide-react';
 import symbolGroups from './lib/symbols.json';
 import type { WordCount } from './lib/wordcount';
+import { typstWordCount } from './lib/typstSource';
 
 type Fetcher = (input: string, init?: RequestInit) => Promise<Response>;
 type TextFile = { name: string; content: string; encoding?: 'base64' };
@@ -29,7 +30,17 @@ export function WordCountView({
         .map((f) => ({ name: f.name, content: f.content })),
     }),
   );
+  const typst = /\.typ$/i.test(mainFile);
   useEffect(() => {
+    // Typst documents are counted here from their source (src/lib/typstSource.ts); LaTeX ones by texcount on the server.
+    if (typst) {
+      const count = typstWordCount(
+        files.filter((f) => f.encoding !== 'base64').map((f) => ({ name: f.name, content: f.content })),
+        mainFile,
+      );
+      setState(count ? { count } : { error: `Main file “${mainFile}” not found in the project.` });
+      return;
+    }
     let live = true;
     void (async () => {
       try {
@@ -91,7 +102,11 @@ export function WordCountView({
           ))}
         </tbody>
       </table>
-      <p className="muted">Counted with texcount. Commands, comments and math are not counted as words.</p>
+      <p className="muted">
+        {typst
+          ? 'Counted from the Typst source. Code, comments, labels and math are not counted as words.'
+          : 'Counted with texcount. Commands, comments and math are not counted as words.'}
+      </p>
     </div>
   );
 }
@@ -99,7 +114,14 @@ export function WordCountView({
 const GROUPS = symbolGroups as { name: string; symbols: SymbolEntry[] }[];
 
 /** Docked panel of math symbols; a click inserts the LaTeX command at the cursor. */
-export function SymbolPalette({ onInsert, onClose }: { onInsert: (command: string) => void; onClose: () => void }) {
+export function SymbolPalette({
+  onInsert,
+  onClose,
+}: {
+  /** Gets the LaTeX command and the character itself; Typst projects insert the character. */
+  onInsert: (command: string, char: string) => void;
+  onClose: () => void;
+}) {
   const [tab, setTab] = useState(GROUPS[0]!.name);
   const [query, setQuery] = useState('');
   const q = query.trim().toLowerCase();
@@ -148,7 +170,7 @@ export function SymbolPalette({ onInsert, onClose }: { onInsert: (command: strin
             className="symbol"
             title={s.command}
             aria-label={`Insert ${s.command}`}
-            onClick={() => onInsert(s.command)}
+            onClick={() => onInsert(s.command, s.char)}
           >
             {s.char}
           </button>

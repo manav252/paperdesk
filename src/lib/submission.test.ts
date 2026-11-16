@@ -342,3 +342,58 @@ describe('helpers', () => {
     ]);
   });
 });
+
+describe('Typst documents', () => {
+  const files = [
+    {
+      name: 'main.typ',
+      content: [
+        '= Intro <intro>',
+        'See @intro, @fig:plot and @knuth84, but not @nowhere.',
+        '#include "parts/more.typ"',
+        '#bibliography("refs.bib")',
+      ].join('\n'),
+    },
+    {
+      name: 'parts/more.typ',
+      content: '#figure(image("../figures/plot.png"), caption: [A plot.]) <fig:plot>\n#image("missing.png")',
+    },
+    { name: 'figures/plot.png', content: 'iVBORw0KGgo=', encoding: 'base64' },
+    {
+      name: 'refs.bib',
+      content: '@article{knuth84,\n  title = {Literate},\n}\n@article{unused1,\n  title = {Never},\n}\n',
+    },
+    { name: 'fonts/Inter.ttf', content: 'AAAA', encoding: 'base64' },
+    { name: 'old.typ', content: 'Not included.' },
+    { name: 'main.pdf', content: 'JVBERi0=', encoding: 'base64' },
+  ];
+  it('finds missing files, unknown references, unused files and build output', () => {
+    const issues = checkSubmission(files, 'main.typ', { success: true, errors: [], warnings: [] }, []);
+    const summary = issues.map((i) => `${i.kind} ${i.file ?? ''}:${i.line ?? ''}`).sort();
+    expect(summary).toEqual(
+      [
+        'build-file main.pdf:',
+        'missing-file parts/more.typ:2',
+        'undefined-citation main.typ:2',
+        'unused-bib-entry refs.bib:4',
+        'unused-file old.typ:',
+      ].sort(),
+    );
+    expect(issues.find((i) => i.kind === 'undefined-citation')!.message).toBe(
+      '“@nowhere” matches no label and no bibliography entry.',
+    );
+    expect(issues.find((i) => i.kind === 'missing-file')!.message).toContain('missing.png');
+  });
+  it('treats a leading slash as the project root, not an absolute path', () => {
+    const issues = checkSubmission(
+      [
+        { name: 'chapters/a.typ', content: '#image("/figures/x.png")' },
+        { name: 'figures/x.png', content: 'iVBORw0KGgo=', encoding: 'base64' },
+      ],
+      'chapters/a.typ',
+      { success: true, errors: [], warnings: [] },
+      [],
+    );
+    expect(issues.filter((i) => i.kind === 'missing-file' || i.kind === 'absolute-path')).toEqual([]);
+  });
+});

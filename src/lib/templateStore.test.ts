@@ -46,11 +46,7 @@ describe('template gallery data', () => {
     const files = filesOf(id);
     expect(files.some((f) => f.name === meta.mainFile)).toBe(true);
     // The same checks as "Check before submitting": missing files, undefined references and citations, unused files.
-    // They read LaTeX; Typst templates are checked by compiling them (npm run test:templates).
-    const found =
-      meta.language === 'typst'
-        ? []
-        : checkSubmission(files, meta.mainFile, { success: true, errors: [], warnings: [] }, []);
+    const found = checkSubmission(files, meta.mainFile, { success: true, errors: [], warnings: [] }, []);
     const problems = found.filter(
       (issue) => !(issue.kind === 'unused-file' && /^(SOURCE\.txt|.*\.(cls|bst))$/.test(issue.file ?? '')),
     );

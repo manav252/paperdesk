@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'vitest';
-import { collectCitations, collectLabels, completionContext, projectPaths } from './completion';
+import {
+  collectCitations,
+  collectLabels,
+  collectTypstReferences,
+  completionContext,
+  projectPaths,
+  relativePath,
+  typstCompletionContext,
+  typstPaths,
+} from './completion';
 
 const files = [
   {
@@ -54,5 +63,34 @@ describe('project names', () => {
     expect(projectPaths(files, 'graphics')).toEqual(['figures/plot.png']);
     expect(projectPaths(files, 'input')).toEqual(['main', 'chapters/two']);
     expect(projectPaths(files, 'bib')).toEqual(['refs']);
+  });
+});
+
+describe('Typst completion', () => {
+  it('knows what is being typed', () => {
+    expect(typstCompletionContext('Some text #fig')).toEqual({ kind: 'function', partial: 'fig' });
+    expect(typstCompletionContext('#')).toEqual({ kind: 'function', partial: '' });
+    expect(typstCompletionContext('see @sec:me')).toEqual({ kind: 'ref', partial: 'sec:me' });
+    expect(typstCompletionContext('mail me@example')).toBeNull();
+    expect(typstCompletionContext('#image("figures/')).toEqual({ kind: 'path', partial: 'figures/', files: 'image' });
+    expect(typstCompletionContext('#include "ch')).toEqual({ kind: 'path', partial: 'ch', files: 'typ' });
+    expect(typstCompletionContext('#bibliography("')).toEqual({ kind: 'path', partial: '', files: 'bib' });
+    expect(typstCompletionContext('plain text')).toBeNull();
+  });
+  it('offers labels and bibliography keys, and paths relative to the file being edited', () => {
+    const files = [
+      { name: 'main.typ', content: '= Intro <intro>\n// <commented>' },
+      { name: 'sections/a.typ', content: '#figure(image("../figures/p.png")) <fig:p>' },
+      { name: 'figures/p.png', content: '', encoding: 'base64' as const },
+      { name: 'refs.bib', content: '@article{knuth84,\n  title = {Literate},\n}' },
+      { name: 'refs.yml', content: 'turing50:\n  type: article\n' },
+    ];
+    expect(collectTypstReferences(files).map((r) => r.key)).toEqual(['intro', 'fig:p', 'knuth84', 'turing50']);
+    expect(relativePath('sections/a.typ', 'figures/p.png')).toBe('../figures/p.png');
+    expect(relativePath('main.typ', 'figures/p.png')).toBe('figures/p.png');
+    expect(relativePath('a/b/c.typ', 'a/d.typ')).toBe('../d.typ');
+    expect(typstPaths(files, 'image', 'sections/a.typ')).toEqual(['../figures/p.png']);
+    expect(typstPaths(files, 'typ', 'main.typ')).toEqual(['sections/a.typ']);
+    expect(typstPaths(files, 'bib', 'main.typ')).toEqual(['refs.bib', 'refs.yml']);
   });
 });

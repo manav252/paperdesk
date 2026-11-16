@@ -11,7 +11,7 @@ Planned work, roughly in order. Nothing here is promised; it records what has be
 
 ## Later
 
-- Typst: packages from a vendored offline set, an outline, completion, and PDF-to-source jumping.
+- Typst: packages from a vendored offline set, and exact source positions if the compiler ever writes them.
 - An experimental LaTeX-to-Typst conversion (it needs Pandoc, which is too large for the current API image).
 - Spell checking in languages other than US English, and a personal dictionary that follows the account.
 - `\includeonly`, `\import` and `\subimport` in the submission checks.
@@ -20,7 +20,8 @@ Planned work, roughly in order. Nothing here is promised; it records what has be
 
 ## Done recently
 
-- Typst as a second document language, with three templates.
+- Typst as a second document language, with three templates, source and PDF jumping, outline, completion, word
+  count, spell check and the submission check.
 - GitHub sync: connect an account, link a project to a new or existing repository, push with a diff preview and a
   commit message, pull with a conflict view.
 - Project chat with unread counts, links to files and lines, `@mentions` in chat and comments, and a notification

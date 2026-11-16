@@ -189,6 +189,83 @@ export function scanProject(files: SubmissionFile[], mainFile: string): Scan {
   return scan;
 }
 
+/**
+ * The same scan for a Typst document: follows `#include` from the main file and collects `<labels>`, `@keys`,
+ * and the files that `image`, `read`, `bibliography` and `#include` ask for. In Typst a path is relative to the
+ * file it is written in, and a leading `/` means the project root. An `@key` is a reference when a label of that
+ * name exists and a citation otherwise.
+ */
+export function scanTypst(files: SubmissionFile[], mainFile: string): Scan {
+  const byName = new Map(files.filter((f) => !isFolder(f.name)).map((f) => [f.name, f]));
+  const scan: Scan = {
+    reachable: [],
+    labels: [],
+    refs: [],
+    cites: [],
+    bibitems: [],
+    fileUses: [],
+    used: new Set([mainFile]),
+    bibFiles: [],
+    missing: [],
+    absolute: [],
+    citesEverything: false,
+  };
+  const keys: Use[] = [];
+  const visit = (name: string) => {
+    const file = byName.get(name);
+    if (!file || !isText(file) || scan.reachable.includes(name)) return;
+    scan.reachable.push(name);
+    scan.used.add(name);
+    const folder = dirOf(name);
+    const source = file.content.replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '));
+    source.split('\n').forEach((raw, i) => {
+      const line = raw.replace(/(^|[^:])\/\/.*$/, '$1');
+      const at = { file: name, line: i + 1 };
+      const use = (written: string, kind: FileUse['kind']) => {
+        const target = resolve(written.startsWith('/') ? '' : folder, written.replace(/^\//, ''));
+        const entry = { ...at, written, kind };
+        scan.fileUses.push(entry);
+        if (byName.has(target)) scan.used.add(target);
+        else scan.missing.push(entry);
+        return byName.has(target) ? target : null;
+      };
+      for (const m of line.matchAll(/#include\s+"([^"]+)"/g)) {
+        const found = use(m[1]!, 'input');
+        if (found) visit(found);
+      }
+      for (const m of line.matchAll(/\b(?:image|read|csv|json|yaml|toml)\(\s*"([^"]+)"/g)) use(m[1]!, 'graphic');
+      for (const m of line.matchAll(/\bbibliography\(\s*(?:\(([^)]*)\)|"([^"]+)")/g))
+        for (const written of m[1] ? [...m[1].matchAll(/"([^"]+)"/g)].map((x) => x[1]!) : [m[2]!]) {
+          const found = use(written, 'bib');
+          if (found) scan.bibFiles.push(found);
+        }
+      const text = line.replace(/"(?:\\.|[^"\\])*"/g, '""');
+      for (const m of text.matchAll(/<([A-Za-z_][\w:.-]*)>/g)) scan.labels.push({ ...at, key: m[1]! });
+      for (const m of text.matchAll(/(?:^|[^\w@\\])@([A-Za-z_][\w:.-]*?)(?=[.:]?(?:[^\w:.-]|$))/g))
+        keys.push({ ...at, key: m[1]! });
+      for (const m of text.matchAll(/#cite\(\s*<([^>]+)>/g)) keys.push({ ...at, key: m[1]! });
+      for (const m of text.matchAll(/#ref\(\s*<([^>]+)>/g)) keys.push({ ...at, key: m[1]! });
+    });
+  };
+  visit(mainFile);
+  // Fonts in the project are read from the project folder (`--font-path`), so they are in use.
+  for (const name of byName.keys()) if (/\.(ttf|otf|ttc)$/i.test(name)) scan.used.add(name);
+  const labels = new Set(scan.labels.map((l) => l.key));
+  for (const key of keys) (labels.has(key.key) ? scan.refs : scan.cites).push(key);
+  // Hayagriva .yml bibliographies: top-level keys are the entries.
+  for (const name of scan.bibFiles)
+    if (/\.ya?ml$/i.test(name))
+      byName
+        .get(name)!
+        .content.split('\n')
+        .forEach((line, i) => {
+          const m = /^([A-Za-z_][\w:.-]*):\s*$/.exec(line);
+          if (m) scan.bibitems.push({ file: name, line: i + 1, key: m[1]! });
+        });
+  scan.bibFiles = scan.bibFiles.filter((name) => /\.bib$/i.test(name));
+  return scan;
+}
+
 /** Entries of a .bib file with where each one starts. */
 export function bibEntries(bib: string) {
   const entries: { key: string; index: number; line: number }[] = [];
@@ -252,7 +329,8 @@ export function checkSubmission(
   fonts: FontInfo[] | null,
 ): Issue[] {
   const issues: Issue[] = [];
-  const scan = scanProject(files, mainFile);
+  const typst = /\.typ$/i.test(mainFile);
+  const scan = typst ? scanTypst(files, mainFile) : scanProject(files, mainFile);
   const real = files.filter((f) => !isFolder(f.name));
 
   // The compile log.
@@ -311,7 +389,9 @@ export function checkSubmission(
       issues.push({
         kind: 'undefined-citation',
         severity: 'error',
-        message: `Citation “${cite.key}” isn’t in the bibliography.`,
+        message: typst
+          ? `“@${cite.key}” matches no label and no bibliography entry.`
+          : `Citation “${cite.key}” isn’t in the bibliography.`,
         file: cite.file,
         line: cite.line,
       });
@@ -370,7 +450,7 @@ export function checkSubmission(
     });
 
   // Files in the project.
-  const builds = real.filter((f) => BUILD_FILE.test(f.name) || f.name === mainFile.replace(/\.tex$/i, '.pdf'));
+  const builds = real.filter((f) => BUILD_FILE.test(f.name) || f.name === mainFile.replace(/\.(tex|typ)$/i, '.pdf'));
   const deleteBuilds: Fix | undefined = builds.length
     ? {
         type: 'delete-files',

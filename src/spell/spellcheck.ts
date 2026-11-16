@@ -48,7 +48,8 @@ export function attachSpellcheck(
       worker.postMessage({ ...message, id });
     });
 
-  const checkable = (model: editor.ITextModel | null) => !!model && model.getLanguageId() === 'latex';
+  const checkable = (model: editor.ITextModel | null) =>
+    !!model && (model.getLanguageId() === 'latex' || model.getLanguageId() === 'typst');
   const check = async () => {
     const model = ed.getModel();
     if (!checkable(model)) return;
@@ -56,6 +57,7 @@ export function attachSpellcheck(
     const { words } = await ask<{ words: { word: string; offset: number }[] }>({
       type: 'check',
       text: model!.getValue(),
+      typst: model!.getLanguageId() === 'typst',
     });
     if (model!.isDisposed() || model!.getVersionId() !== version) return;
     monaco.editor.setModelMarkers(

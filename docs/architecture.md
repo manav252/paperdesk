@@ -46,6 +46,12 @@ uses. With `DATABASE_URL` and the `R2_*` variables set it uses Postgres and obje
   several megabytes of download for every visitor. A Typst compile goes through the same sandbox, timeout, memory
   limit and warm folder as LaTeX, with `--root` set to the project folder so nothing outside it can be read. Its
   diagnostics are parsed by `src/lib/typstLog.ts`.
+- Typst has no SyncTeX, so jumping between a Typst source and its PDF matches words (`src/lib/typstSync.ts`). The
+  source is read with its code, math, comments and labels blanked out (`src/lib/typstSource.ts`), and the PDF's
+  words and their boxes come from PDF.js. The clicked word, or the word at the cursor, is looked up on the other
+  side together with the eight words before and after it, and the occurrence whose neighbours agree best wins. On
+  the three templates, 99% of words go to the PDF and back to the same line. The same source reader gives the
+  Typst outline, word count, spell check and the submission check's scan.
 - SyncTeX maps between source lines and PDF positions (`src/lib/synctex.ts`). PDF.js reports positions from the
   bottom-left of the page and SyncTeX from the top-left, so coordinates are flipped with the page box.
 

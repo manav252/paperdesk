@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { expect, test, type Page } from '@playwright/test';
 import { isolateProjects } from './isolate-projects';
 
@@ -211,6 +212,35 @@ test('every Typst template compiles to a PDF, and a real error jumps to its line
     await expect(page.locator('.pdf-viewer canvas, .pdf-page canvas, canvas').first()).toBeVisible();
   }
 
+  // Clicking a word in the PDF opens its file at its line, and the sync button shows the cursor's word in the PDF.
+  const intro = readFileSync('templates/typst-report/chapters/introduction.typ', 'utf8').split('\n');
+  const lineOf = (text: string) => intro.findIndex((l) => l.includes(text)) + 1;
+  const word = page
+    .locator('[aria-label^="Selectable text on PDF page"] span')
+    .filter({ hasText: /approved/ })
+    .first();
+  await word.scrollIntoViewIfNeeded();
+  await word.click();
+  await expect(page.locator('.status-bar')).toContainText(`Ln ${lineOf('approved a one-year')},`);
+  await expect(page.locator('.view-line').filter({ hasText: 'approved a one-year' })).toBeVisible();
+  await expect(page.locator('.sync-source-highlight').first()).toBeVisible();
+  await page.locator('.monaco-editor .view-lines').first().click();
+  await page.keyboard.press('Control+G');
+  await page.keyboard.type(String(lineOf('Schemes of this kind')));
+  await page.keyboard.press('Enter');
+  await page.getByRole('button', { name: 'Sync source to PDF' }).click();
+  const highlight = page.getByTestId('sync-highlight');
+  await expect(highlight).toBeInViewport();
+  const printed = await page
+    .locator('[aria-label^="Selectable text on PDF page"] span')
+    .filter({ hasText: /Schemes of this kind/ })
+    .first()
+    .boundingBox();
+  const box = await highlight.boundingBox();
+  const middle = printed!.y + printed!.height / 2;
+  expect(middle).toBeGreaterThanOrEqual(box!.y - 2);
+  expect(middle).toBeLessThanOrEqual(box!.y + box!.height + 2);
+
   // Type a line with an error into the open document and recompile.
   await page.locator('.monaco-editor .view-lines').first().click();
   await page.keyboard.press('End');
@@ -224,7 +254,8 @@ test('every Typst template compiles to a PDF, and a real error jumps to its line
   const result = await (await failed).json();
   expect(result.success).toBe(false);
   // The compiler reports the line that was typed, and the error takes the cursor back to it.
-  expect(result.errors[0]).toMatchObject({ file: 'main.typ', line: typedOn });
+  // The jump above opened chapters/introduction.typ, so that is the file the error was typed into.
+  expect(result.errors[0]).toMatchObject({ file: 'chapters/introduction.typ', line: typedOn });
   expect(result.errors[0].message).toContain('unknown variable: nosuchthing');
   await page.getByRole('button', { name: 'Go to error' }).click();
   await expect(page.locator('.status-bar')).toContainText(`Ln ${typedOn}, Col 1`);

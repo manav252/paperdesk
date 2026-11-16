@@ -9,6 +9,8 @@ import {
   inDocumentBody,
   isFigureFile,
   needsPng,
+  typstFigureBlock,
+  typstFigureSnippet,
 } from './figure';
 
 describe('figures', () => {
@@ -67,5 +69,15 @@ describe('figures', () => {
     expect(appendToBody(source, 'BLOCK\n')).toBe(
       '\\documentclass{article}\n\\begin{document}\nText\n\nBLOCK\n\n\\end{document}\n',
     );
+  });
+});
+
+describe('Typst figures', () => {
+  it('writes a #figure with a path relative to the file it goes in', () => {
+    expect(typstFigureBlock('figures/plot.png', 'A plot', 'main.typ')).toBe(
+      '#figure(\n  image("figures/plot.png", width: 100%),\n  caption: [A plot],\n) <fig:plot>\n',
+    );
+    expect(typstFigureBlock('figures/plot.png', '', 'chapters/one.typ')).toContain('image("../figures/plot.png"');
+    expect(typstFigureSnippet(['figures/a.png', 'figures/b.png'], 'main.typ')).toContain('caption: [$0]');
   });
 });

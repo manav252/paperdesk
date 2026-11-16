@@ -6,6 +6,10 @@ import {
   completionContext,
   ENVIRONMENTS,
   projectPaths,
+  collectTypstReferences,
+  TYPST_FUNCTIONS,
+  typstCompletionContext,
+  typstPaths,
 } from './lib/completion';
 import type { ProjectFile } from './lib/project';
 
@@ -211,6 +215,57 @@ export function setupMonaco(monaco: Monaco) {
     indentationRules: {
       increaseIndentPattern: /^.*[{[(][^}\])]*$/,
       decreaseIndentPattern: /^\s*[}\])]/,
+    },
+  });
+
+  monaco.languages.registerCompletionItemProvider('typst', {
+    triggerCharacters: ['#', '@', '"', '/'],
+    provideCompletionItems(model, position) {
+      const before = model.getLineContent(position.lineNumber).slice(0, position.column - 1);
+      const ctx = typstCompletionContext(before);
+      if (!ctx) return { suggestions: [] };
+      const K = monaco.languages.CompletionItemKind,
+        snippet = monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet;
+      const range = new monaco.Range(
+        position.lineNumber,
+        position.column - ctx.partial.length,
+        position.lineNumber,
+        position.column,
+      );
+      const files = projectFiles();
+      // Editor models are named "<project id>/<file>"; paths are written relative to the file being edited.
+      const file = model.uri.path.replace(/^\/?[^/]+\//, '');
+      if (ctx.kind === 'function')
+        return {
+          suggestions: TYPST_FUNCTIONS.map(([name, body, detail]) => ({
+            label: `#${name}`,
+            filterText: name,
+            kind: /^(set|show|let|import|include)$/.test(name) ? K.Keyword : K.Function,
+            detail,
+            insertText: body,
+            insertTextRules: snippet,
+            range,
+          })),
+        };
+      if (ctx.kind === 'ref')
+        return {
+          suggestions: collectTypstReferences(files).map((r) => ({
+            label: `@${r.key}`,
+            filterText: r.key,
+            kind: K.Reference,
+            detail: r.detail,
+            insertText: r.key,
+            range,
+          })),
+        };
+      return {
+        suggestions: typstPaths(files, ctx.files, file).map((p) => ({
+          label: p,
+          kind: K.File,
+          insertText: p,
+          range,
+        })),
+      };
     },
   });
 

@@ -3,6 +3,7 @@ import { AlertCircle, ChevronDown, ChevronUp, Search, X } from 'lucide-react';
 import { toSyncTexPoint } from './lib/synctex';
 import { ownerHeaders } from './lib/api';
 import { findInPdf, type HitSegment, type PdfMatch, type PdfTextItem } from './lib/pdfSearch';
+import { wordsFromItems, type PdfWord } from './lib/typstSync';
 
 export type Zoom = number | 'fit' | 'page';
 type Size = { w: number; h: number };
@@ -37,6 +38,7 @@ export function PdfViewer({
   onPageChange,
   onSourceJump,
   onRenderTime,
+  onDocument,
 }: {
   url: string;
   data?: Uint8Array | null;
@@ -48,17 +50,22 @@ export function PdfViewer({
   onPageChange: (page: number) => void;
   onSourceJump: (page: number, x: number, y: number) => void;
   onRenderTime?: (ms: number) => void;
+  /** The loaded pdf.js document, for features that read its text (Typst source jumps). */
+  onDocument?: (pdf: unknown) => void;
   searchOpen?: boolean;
   onSearchClose?: () => void;
 }) {
   const boxRef = useRef<HTMLDivElement>(null);
   const pageRefs = useRef<(HTMLDivElement | null)[]>([]);
-  const cb = useRef({ onLoaded, onScale, onPageChange, onSourceJump, onRenderTime });
-  cb.current = { onLoaded, onScale, onPageChange, onSourceJump, onRenderTime };
+  const cb = useRef({ onLoaded, onScale, onPageChange, onSourceJump, onRenderTime, onDocument });
+  cb.current = { onLoaded, onScale, onPageChange, onSourceJump, onRenderTime, onDocument };
   const [doc, setDoc] = useState<Loaded | null>(null);
   const docRef = useRef<Loaded | null>(null);
   docRef.current = doc;
   const [err, setErr] = useState('');
+  useEffect(() => {
+    if (doc) cb.current.onDocument?.(doc.pdf);
+  }, [doc]);
   const [box, setBox] = useState({ w: 0, h: 0 });
   const [visible, setVisible] = useState<Set<number>>(new Set([0, 1]));
 
@@ -421,6 +428,39 @@ export function PdfViewer({
       </div>
     </div>
   );
+}
+
+/** Words of every page with their boxes, in points from each page's top-left corner. Read once per document. */
+const wordCache = new WeakMap<object, Promise<PdfWord[]>>();
+export function pdfWords(pdf: any): Promise<PdfWord[]> {
+  let words = wordCache.get(pdf);
+  if (!words) {
+    words = Promise.all(
+      Array.from({ length: pdf.numPages }, async (_, i) => {
+        const page = await pdf.getPage(i + 1);
+        const content = await page.getTextContent();
+        const view = page.view as number[];
+        return wordsFromItems(
+          i + 1,
+          content.items
+            .filter((item: any) => typeof item.str === 'string' && item.str)
+            .map((item: any) => {
+              const p = toSyncTexPoint(view, item.transform[4], item.transform[5]);
+              return {
+                text: item.str,
+                x: p.x,
+                y: p.y,
+                width: item.width,
+                height: item.height || Math.hypot(item.transform[2], item.transform[3]),
+                eol: !!item.hasEOL,
+              };
+            }),
+        );
+      }),
+    ).then((pages) => pages.flat());
+    wordCache.set(pdf, words);
+  }
+  return words;
 }
 
 /** Text items of every page, read once per document. */

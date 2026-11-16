@@ -42,6 +42,22 @@ export const figureLabel = (path: string) => `fig:${(path.split('/').pop() ?? 'f
 export const figureBlock = (path: string, caption = '') =>
   `\\begin{figure}[ht]\n  \\centering\n  \\includegraphics[width=\\linewidth]{${path}}\n  \\caption{${caption}}\n  \\label{${figureLabel(path)}}\n\\end{figure}\n`;
 
+/** The same figure in Typst. The path is relative to the file it is written in, as Typst reads it. */
+export const typstFigureBlock = (path: string, caption = '', fromFile = '') => {
+  const depth = fromFile.split('/').length - 1;
+  const relative = `${'../'.repeat(depth)}${path}`;
+  return `#figure(\n  image("${relative}", width: 100%),\n  caption: [${caption}],\n) <${figureLabel(path)}>\n`;
+};
+/** Typst figure blocks as an editor snippet: the cursor lands in the first caption. */
+export const typstFigureSnippet = (paths: string[], fromFile = '') =>
+  paths
+    .map((path, i) =>
+      typstFigureBlock(path, i === 0 ? '\u0000' : '', fromFile)
+        .replace(/[\\$}]/g, (c) => `\\${c}`)
+        .replace('\u0000', '$0'),
+    )
+    .join('\n');
+
 /** The blocks as an editor snippet: the cursor lands in the first caption. */
 export const figureSnippet = (paths: string[]) =>
   paths

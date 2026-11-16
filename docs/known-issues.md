@@ -32,9 +32,13 @@
   project or built into Typst works. The three Typst templates use no packages.
 - Only the fonts built into Typst (Libertinus Serif, New Computer Modern, DejaVu Sans Mono) and font files added to
   the project are used, so a document looks the same locally and in production.
-- Jumping between the PDF and the source, the outline, command completion, word count, "Check before submitting"
-  and the assistant's LaTeX fixes are LaTeX-only. Citations added by DOI go into the `.bib` file, but the `@key`
-  has to be typed by hand.
+- Jumping between the PDF and the source works by matching words, because Typst writes no SyncTeX data. It finds
+  the right line for nearly all running text, but text Typst generates (numbers, "Figure 3.1", the bibliography)
+  jumps to the nearest source text or not at all, and a short phrase repeated word for word can land on its twin.
+- The Typst word count is read from the source, not from the PDF, so text produced by code (loops, variables) is
+  not counted.
+- "Check before submitting" checks a Typst document's files, references and citations, but arXiv and journal ZIP
+  exports are LaTeX-only. The assistant's suggested fixes are written for LaTeX.
 - Typst stops at the first syntax error, so the log shows one error at a time for those.
 - Each compile starts the compiler afresh; Typst's own incremental mode needs a long-running process, which the
   sandbox does not keep. Compiles of the templates take well under a second, and only changed files are uploaded.

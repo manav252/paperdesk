@@ -208,3 +208,108 @@ export const ENVIRONMENTS: [string, string][] = [
   ['thebibliography', '\t\\bibitem{$1} $0'],
   ['frame', '\t\\frametitle{$1}\n\t$0'],
 ];
+
+// ── Typst ──
+
+export type TypstContext =
+  | { kind: 'function'; partial: string }
+  | { kind: 'ref'; partial: string }
+  | { kind: 'path'; partial: string; files: 'image' | 'typ' | 'bib' };
+
+/** What is being typed before the cursor in a .typ file: a `#function`, an `@reference`, or a file path. */
+export function typstCompletionContext(before: string): TypstContext | null {
+  let m = /(?:image|read|csv|json|yaml|toml)\(\s*"([^"]*)$/.exec(before);
+  if (m) return { kind: 'path', partial: m[1]!, files: 'image' };
+  m = /(?:#include\s+|import\s+)"([^"]*)$/.exec(before);
+  if (m) return { kind: 'path', partial: m[1]!, files: 'typ' };
+  m = /bibliography\(\s*"([^"]*)$/.exec(before);
+  if (m) return { kind: 'path', partial: m[1]!, files: 'bib' };
+  m = /(?:^|[^\w@])@([\w:.-]*)$/.exec(before);
+  if (m) return { kind: 'ref', partial: m[1]! };
+  m = /#([A-Za-z][\w.-]*)?$/.exec(before);
+  if (m) return { kind: 'function', partial: m[1] ?? '' };
+  return null;
+}
+
+/** Labels (`<name>`) in the project's Typst files and keys of its .bib files, for `@` references and citations. */
+export function collectTypstReferences(files: ProjectFile[]) {
+  const out: { key: string; detail: string }[] = [];
+  for (const f of text(files, /\.typ$/i))
+    f.content.split('\n').forEach((line, i) => {
+      for (const m of line.replace(/\/\/.*$/, '').matchAll(/<([A-Za-z_][\w:.-]*)>/g))
+        out.push({ key: m[1]!, detail: `${f.name}:${i + 1}` });
+    });
+  for (const c of collectCitations(files)) out.push(c);
+  for (const f of text(files, /\.ya?ml$/i))
+    for (const m of f.content.matchAll(/^([A-Za-z_][\w:.-]*):\s*$/gm)) out.push({ key: m[1]!, detail: f.name });
+  return out;
+}
+
+/** A project path written relative to the folder of the file that refers to it, as Typst resolves paths. */
+export function relativePath(fromFile: string, target: string) {
+  const from = fromFile.split('/').slice(0, -1),
+    to = target.split('/');
+  let shared = 0;
+  while (shared < from.length && shared < to.length - 1 && from[shared] === to[shared]) shared++;
+  return [...Array(from.length - shared).fill('..'), ...to.slice(shared)].join('/');
+}
+
+/** Paths a Typst function can take: images, other .typ files, or bibliography files. */
+export function typstPaths(files: ProjectFile[], kind: 'image' | 'typ' | 'bib', fromFile: string) {
+  const pattern = kind === 'image' ? /\.(png|jpe?g|gif|svg|webp)$/i : kind === 'typ' ? /\.typ$/i : /\.(bib|ya?ml)$/i;
+  return files
+    .filter((f) => !f.name.endsWith('/') && f.name !== fromFile && pattern.test(f.name))
+    .map((f) => relativePath(fromFile, f.name));
+}
+
+/** [name, snippet after `#`, description] for common Typst functions and keywords. */
+export const TYPST_FUNCTIONS: [string, string, string][] = [
+  ['set', 'set ${1:text}(${2})', 'Set rule: change defaults from here on'],
+  ['show', 'show ${1:heading}: ${2:it => it}', 'Show rule: restyle an element'],
+  ['let', 'let ${1:name} = ${2}', 'Define a variable or function'],
+  ['import', 'import "${1}": ${2}', 'Import from another file'],
+  ['include', 'include "${1}"', 'Include another .typ file here'],
+  ['heading', 'heading(level: ${1:1})[${2}]', 'Heading'],
+  [
+    'figure',
+    'figure(\n  image("${1}", width: ${2:80%}),\n  caption: [${3}],\n) <${4:fig:label}>',
+    'Figure with caption and label',
+  ],
+  ['image', 'image("${1}", width: ${2:100%})', 'Image from the project'],
+  ['table', 'table(\n  columns: ${1:2},\n  [${2:A}], [${3:B}],\n)', 'Table'],
+  ['bibliography', 'bibliography("${1:references.bib}")', 'Bibliography from a .bib or .yml file'],
+  ['cite', 'cite(<${1:key}>)', 'Citation'],
+  ['ref', 'ref(<${1:label}>)', 'Reference to a label'],
+  ['link', 'link("${1:https://}")[${2}]', 'Link'],
+  ['footnote', 'footnote[${1}]', 'Footnote'],
+  ['outline', 'outline()', 'Table of contents'],
+  ['pagebreak', 'pagebreak()', 'Page break'],
+  ['align', 'align(${1:center})[${2}]', 'Align content'],
+  ['text', 'text(${1:size: 12pt})[${2}]', 'Text with style'],
+  ['strong', 'strong[${1}]', 'Bold text'],
+  ['emph', 'emph[${1}]', 'Italic text'],
+  ['underline', 'underline[${1}]', 'Underlined text'],
+  ['smallcaps', 'smallcaps[${1}]', 'Small capitals'],
+  ['highlight', 'highlight[${1}]', 'Highlighted text'],
+  ['strike', 'strike[${1}]', 'Struck-through text'],
+  ['super', 'super[${1}]', 'Superscript'],
+  ['sub', 'sub[${1}]', 'Subscript'],
+  ['quote', 'quote(block: true)[${1}]', 'Quotation'],
+  ['list', 'list(\n  [${1}],\n)', 'Bulleted list'],
+  ['enum', 'enum(\n  [${1}],\n)', 'Numbered list'],
+  ['grid', 'grid(\n  columns: ${1:2},\n  gutter: ${2:1em},\n  [${3}], [${4}],\n)', 'Grid layout'],
+  ['columns', 'columns(${1:2})[${2}]', 'Multi-column content'],
+  ['box', 'box(${1})[${2}]', 'Inline box'],
+  ['block', 'block(${1})[${2}]', 'Block'],
+  ['rect', 'rect(${1})[${2}]', 'Rectangle'],
+  ['line', 'line(length: ${1:100%})', 'Horizontal line'],
+  ['v', 'v(${1:1em})', 'Vertical space'],
+  ['h', 'h(${1:1em})', 'Horizontal space'],
+  ['place', 'place(${1:top + center})[${2}]', 'Place content freely'],
+  ['page', 'page(${1})[${2}]', 'Page with its own settings'],
+  ['par', 'par(${1:justify: true})[${2}]', 'Paragraph settings'],
+  ['raw', 'raw("${1}", lang: "${2}")', 'Code'],
+  ['counter', 'counter(${1:page}).display()', 'Counter'],
+  ['datetime.today', 'datetime.today().display()', "Today's date"],
+  ['lorem', 'lorem(${1:30})', 'Placeholder text'],
+];

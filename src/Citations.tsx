@@ -10,12 +10,15 @@ const NEW_FILE = 'references.bib';
 export function CitationDialog({
   bibFiles,
   canCite,
+  typst = false,
   apiFetch,
   onAdd,
   close,
 }: {
   bibFiles: { name: string; content: string }[];
   canCite: boolean;
+  /** Typst cites with `@key` instead of `\cite{key}`. */
+  typst?: boolean;
   apiFetch: Fetcher;
   onAdd: (entries: string[], citeKeys: string[], target: string, cite: boolean) => void;
   close: () => void;
@@ -170,11 +173,17 @@ export function CitationDialog({
             />{' '}
             Insert{' '}
             <code>
-              \cite{'{'}
-              {usable.map((r) => r.key).join(',')}
-              {'}'}
+              {typst ? (
+                usable.map((r) => `@${r.key}`).join(' ')
+              ) : (
+                <>
+                  \cite{'{'}
+                  {usable.map((r) => r.key).join(',')}
+                  {'}'}
+                </>
+              )}
             </code>{' '}
-            at the cursor{!canCite && ' (open a .tex file to use this)'}
+            at the cursor{!canCite && ` (open a ${typst ? '.typ' : '.tex'} file to use this)`}
           </label>
         </>
       )}

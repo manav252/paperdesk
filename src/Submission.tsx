@@ -226,55 +226,71 @@ export function SubmissionCheck({
           </section>
         );
       })}
-      <section className="submission-export" aria-label="Export">
-        <h3>Export for submission</h3>
-        <p className="muted">
-          The ZIPs hold only the files {mainFile} needs, with the bibliography (.bbl) and no build files. Each one is
-          compiled on its own on the server first, so you only get a ZIP that builds.
-        </p>
-        <div className="submission-buttons">
-          <button type="button" className="btn btn-primary" disabled={busy} onClick={() => void exportZip('arxiv')}>
-            <FileArchive size={15} />
-            arXiv ZIP
-          </button>
-          <button type="button" className="btn btn-secondary" disabled={busy} onClick={() => void exportZip('journal')}>
-            <FileArchive size={15} />
-            Journal ZIP
-          </button>
-          <button type="button" className="btn btn-secondary" onClick={exportFlat}>
-            <FileText size={15} />
-            Single .tex file
-          </button>
-        </div>
-        {busy && (
-          <p className="muted submission-note" role="status">
-            Building the {exporting!.kind === 'arxiv' ? 'arXiv' : 'journal'} ZIP and test-compiling it. This can take a
-            minute…
+      {/\.typ$/i.test(mainFile) ? (
+        <section className="submission-export" aria-label="Export">
+          <h3>Submitting a Typst document</h3>
+          <p className="muted">
+            arXiv and most journals take LaTeX sources, not Typst, so there is no source ZIP for them here. Submit the
+            compiled PDF (Download PDF in the File menu), or check whether your venue accepts Typst. Download project
+            gives a ZIP of every file.
           </p>
-        )}
-        {exporting?.done && (
-          <p className="submission-note good" role="status">
-            <CheckCircle2 size={14} />
-            The {exporting.kind === 'arxiv' ? 'arXiv' : 'journal'} ZIP compiled on its own and was downloaded.
+        </section>
+      ) : (
+        <section className="submission-export" aria-label="Export">
+          <h3>Export for submission</h3>
+          <p className="muted">
+            The ZIPs hold only the files {mainFile} needs, with the bibliography (.bbl) and no build files. Each one is
+            compiled on its own on the server first, so you only get a ZIP that builds.
           </p>
-        )}
-        {exporting?.error && (
-          <div className="inline-alert error" role="alert">
-            <div>
-              <span>{exporting.error}</span>
-              {!!exporting.errors?.length && (
-                <ul className="submission-errors">
-                  {exporting.errors.map((entry, i) => (
-                    <li key={i}>
-                      {entry.message} {location(entry.file, entry.line)}
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
+          <div className="submission-buttons">
+            <button type="button" className="btn btn-primary" disabled={busy} onClick={() => void exportZip('arxiv')}>
+              <FileArchive size={15} />
+              arXiv ZIP
+            </button>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              disabled={busy}
+              onClick={() => void exportZip('journal')}
+            >
+              <FileArchive size={15} />
+              Journal ZIP
+            </button>
+            <button type="button" className="btn btn-secondary" onClick={exportFlat}>
+              <FileText size={15} />
+              Single .tex file
+            </button>
           </div>
-        )}
-      </section>
+          {busy && (
+            <p className="muted submission-note" role="status">
+              Building the {exporting!.kind === 'arxiv' ? 'arXiv' : 'journal'} ZIP and test-compiling it. This can take
+              a minute…
+            </p>
+          )}
+          {exporting?.done && (
+            <p className="submission-note good" role="status">
+              <CheckCircle2 size={14} />
+              The {exporting.kind === 'arxiv' ? 'arXiv' : 'journal'} ZIP compiled on its own and was downloaded.
+            </p>
+          )}
+          {exporting?.error && (
+            <div className="inline-alert error" role="alert">
+              <div>
+                <span>{exporting.error}</span>
+                {!!exporting.errors?.length && (
+                  <ul className="submission-errors">
+                    {exporting.errors.map((entry, i) => (
+                      <li key={i}>
+                        {entry.message} {location(entry.file, entry.line)}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            </div>
+          )}
+        </section>
+      )}
     </div>
   );
 }

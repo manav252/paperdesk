@@ -74,6 +74,8 @@ import {
 import { useTheme, type ThemePref } from './theme';
 import { setCompletionFiles, setupMonaco } from './monacoSetup';
 import { outlineOf } from './lib/outline';
+import { sourceWords, typstOutline } from './lib/typstSource';
+import { pdfToSource, sourceToPdf } from './lib/typstSync';
 import {
   arrayBufferToBase64,
   buildTree,
@@ -117,6 +119,8 @@ import {
   FIGURE_FOLDER,
   figureBlock,
   figureSnippet,
+  typstFigureBlock,
+  typstFigureSnippet,
   graphicxInsertion,
   hasGraphicx,
   inDocumentBody,
@@ -133,12 +137,53 @@ import {
   ShareAccess,
 } from './Sharing';
 import { base64ToBytes, compileFiles, contentHash, type SyncState } from './lib/compileSync';
-import { PdfViewer, type Zoom } from './PdfViewer';
+import { pdfWords, PdfViewer, type Zoom } from './PdfViewer';
 import { SpellSuggestions, SymbolPalette, WordCountView } from './Tools';
 import { attachKeymap, KEYMAPS, type Keymap } from './keymaps';
 import { attachSpellcheck, type SpellMenu, type Spellchecker } from './spell/spellcheck';
 import { filesFromDrop, isSvg, safeImageName, svgToPngBase64, type Incoming } from './lib/upload';
 import './style.css';
+
+/** What the toolbar, Insert menu and citation tools insert, in each document language. */
+const SNIPPETS = {
+  latex: {
+    bold: ['\\textbf{', '}'],
+    italic: ['\\textit{', '}'],
+    underline: ['\\underline{', '}'],
+    cite: ['\\cite{', '}'],
+    ref: ['\\ref{', '}'],
+    citeKeys: (keys: string[]) => `\\cite{${keys.join(',')}}`,
+    section: '\\section{}',
+    subsection: '\\subsection{}',
+    subsubsection: '\\subsubsection{}',
+    sectionBlock: '\n\\section{Section title}\n',
+    subsectionBlock: '\n\\subsection{Subsection title}\n',
+    itemize: '\\begin{itemize}\n  \\item Item\n\\end{itemize}',
+    enumerate: '\\begin{enumerate}\n  \\item Item\n\\end{enumerate}',
+    displayMath: '\\[\n  \n\\]',
+    equation: '\n\\begin{equation}\n  \n\\end{equation}\n',
+    table:
+      '\\begin{table}[ht]\n  \\centering\n  \\begin{tabular}{cc}\n    A & B \\\\\n    1 & 2 \\\\\n  \\end{tabular}\n  \\caption{Caption}\n\\end{table}',
+  },
+  typst: {
+    bold: ['*', '*'],
+    italic: ['_', '_'],
+    underline: ['#underline[', ']'],
+    cite: ['@', ''],
+    ref: ['@', ''],
+    citeKeys: (keys: string[]) => keys.map((key) => `@${key}`).join(' '),
+    section: '= ',
+    subsection: '== ',
+    subsubsection: '=== ',
+    sectionBlock: '\n= Section title\n',
+    subsectionBlock: '\n== Subsection title\n',
+    itemize: '- Item\n- Item',
+    enumerate: '+ Item\n+ Item',
+    displayMath: '$ $',
+    equation: '\n$ $\n',
+    table: '#figure(\n  table(\n    columns: 2,\n    [A], [B],\n    [1], [2],\n  ),\n  caption: [Caption],\n)',
+  },
+} as const;
 
 /** Which highlighting a file gets in the editor. */
 const editorLanguage = (name: string) =>
@@ -542,6 +587,8 @@ function App() {
     saveTimer = useRef<number>(),
     syncHighlightTimer = useRef<number>(),
     syncDecorations = useRef<any>(null),
+    /** The PDF on screen, for Typst source jumps (which read its words). */
+    pdfDocument = useRef<unknown>(null),
     workRef = useRef<HTMLDivElement>(null),
     searchRef = useRef<HTMLInputElement>(null),
     compileRef = useRef<(options?: { auto?: boolean }) => void>(() => {}),
@@ -779,6 +826,7 @@ function App() {
   const setSidebar = (v: boolean) => (narrow ? setDrawer(v) : setPref('sidebar', v));
   // Like the file tree, the assistant is a temporary overlay on narrow screens.
   const typstProject = !!project && languageOf(project) === 'typst';
+  const snip = SNIPPETS[typstProject ? 'typst' : 'latex'];
   const assistantOpen = narrow ? narrowAssistant : prefs.assistant;
   const setAssistantOpen = (v: boolean) => {
     if (narrow) {
@@ -1352,7 +1400,7 @@ function App() {
           ? p.files.map((f) => (f.name === target ? { ...f, content: appendEntries(f.content, entries) } : f))
           : [...p.files, { name: target, content: appendEntries('', entries) }],
       }));
-    if (cite && keys.length) insert(`\\cite{${keys.join(',')}}`);
+    if (cite && keys.length) insert(snip.citeKeys(keys));
     notify(
       entries.length
         ? `Added ${entries.length} ${entries.length === 1 ? 'citation' : 'citations'} to ${target}`
@@ -1895,17 +1943,25 @@ function App() {
     }
     if (!added.length) return;
     const names = new Set(added.map((f) => f.name));
+    // Typst projects get `#figure(image(...))` blocks; there is no package to load and no document body to find.
+    const typst = languageOf(project) === 'typst';
+    const ext = typst ? '.typ' : '.tex';
     const main =
-      project.files.find((f) => f.name === mainFileOf(project)) ?? project.files.find((f) => f.name.endsWith('.tex'));
+      project.files.find((f) => f.name === mainFileOf(project)) ?? project.files.find((f) => f.name.endsWith(ext));
+    const block = (path: string, file: string) => (typst ? typstFigureBlock(path, '', file) : figureBlock(path));
     const ed = editorRef.current,
       model = ed?.getModel(),
-      texOpen = !!ed && !!model && !!currentFile && /\.tex$/i.test(currentFile.name);
+      texOpen = !!ed && !!model && !!currentFile && currentFile.name.endsWith(ext);
     if (texOpen && at) {
       const target = ed.getTargetAtClientPoint(at.x, at.y);
       if (target?.position) ed.setPosition(target.position);
     }
     const position = ed?.getPosition(),
-      atCursor = insertBlock && texOpen && !!position && inDocumentBody(model.getValue(), model.getOffsetAt(position));
+      atCursor =
+        insertBlock &&
+        texOpen &&
+        !!position &&
+        (typst || inDocumentBody(model.getValue(), model.getOffsetAt(position)));
     const fallback = insertBlock && !atCursor && main ? main.name : '';
     update((p) => ({
       ...p,
@@ -1914,7 +1970,12 @@ function App() {
           .filter((f) => !names.has(f.name))
           .map((f) =>
             f.name === fallback
-              ? { ...f, content: appendToBody(f.content, paths.map((x) => figureBlock(x)).join('\n')) }
+              ? {
+                  ...f,
+                  content: typst
+                    ? `${f.content.trimEnd()}\n\n${paths.map((x) => block(x, f.name)).join('\n')}`
+                    : appendToBody(f.content, paths.map((x) => figureBlock(x)).join('\n')),
+                }
               : f,
           ),
         ...(p.files.some((f) => f.name === FIGURE_FOLDER) ? [] : [{ name: FIGURE_FOLDER, content: '' }]),
@@ -1930,12 +1991,13 @@ function App() {
       const lead = position.column > 1 && model.getLineContent(position.lineNumber).trim() ? '\n' : '';
       const snippets = ed.getContribution('snippetController2') as { insert?: (template: string) => void } | null;
       ed.focus();
-      if (snippets?.insert) snippets.insert(lead + figureSnippet(paths));
+      if (snippets?.insert)
+        snippets.insert(lead + (typst ? typstFigureSnippet(paths, currentFile!.name) : figureSnippet(paths)));
       else
         ed.executeEdits('figure', [
           {
             range: ed.getSelection()!,
-            text: lead + paths.map((x) => figureBlock(x)).join('\n'),
+            text: lead + paths.map((x) => block(x, currentFile!.name)).join('\n'),
             forceMoveMarkers: true,
           },
         ]);
@@ -1950,7 +2012,7 @@ function App() {
             : `Added ${paths.length} images to ${FIGURE_FOLDER}`,
         'success',
       );
-    if (insertBlock && main && !hasGraphicx(main.content))
+    if (insertBlock && main && !typst && !hasGraphicx(main.content))
       setDialog({
         title: 'Add the graphicx package?',
         message: (
@@ -2216,13 +2278,31 @@ function App() {
     syncHighlightTimer.current = window.setTimeout(() => syncDecorations.current?.clear(), 1800);
     ed.focus();
   };
+  /** Typst writes no SyncTeX data: the PDF's words are matched against the source's instead (src/lib/typstSync.ts). */
+  const typstSourceWords = () => sourceWords(project.files.filter((f) => isEditable(f) && /\.typ$/i.test(f.name)));
+  const typstPdfWords = async () => {
+    const pdf = pdfDocument.current;
+    return pdf ? pdfWords(pdf) : null;
+  };
   const syncSourceToPdf = async () => {
-    if (project && languageOf(project) === 'typst') {
-      notify('Jumping between the source and the PDF is not available for Typst projects yet.');
-      return;
-    }
     if (!currentFile || !isEditable(currentFile)) {
       notify('Open a text file before syncing to the PDF.');
+      return;
+    }
+    if (project && languageOf(project) === 'typst') {
+      const words = await typstPdfWords().catch(() => null);
+      if (!words) return notify('Compile the document first, then try again.');
+      const position = editorRef.current?.getPosition();
+      const found = sourceToPdf(
+        typstSourceWords(),
+        words,
+        currentFile.name,
+        position?.lineNumber ?? cursor.line,
+        position?.column ?? cursor.col,
+      );
+      if (!found) return notify('This part of the source is not printed in the PDF. Try a line with text.');
+      setSyncPoint({ ...found, n: Date.now() });
+      if (narrow) setPref('layout', 'pdf');
       return;
     }
     if (sourceSyncPending.current) return;
@@ -2259,7 +2339,13 @@ function App() {
     }
   };
   const syncPdfToSource = async (syncPage: number, x: number, y: number) => {
-    if (project && languageOf(project) === 'typst') return;
+    if (project && languageOf(project) === 'typst') {
+      const words = await typstPdfWords().catch(() => null);
+      const found = words && pdfToSource(words, typstSourceWords(), syncPage, x, y);
+      if (found) jumpTo(found.file, found.line);
+      else notify('This text is not in the source (it may be generated, like a page or figure number).');
+      return;
+    }
     // One lookup at a time; a newer request waits and runs next (older queued ones are replaced).
     if (pdfSyncPending.current) {
       pdfSyncNext.current = { page: syncPage, x, y };
@@ -2541,8 +2627,8 @@ function App() {
             { label: 'Upload files', icon: <Upload size={14} />, run: () => fileInput.current?.click() },
             'sep',
             { label: 'Project history', icon: <ScrollText size={14} />, run: () => setModal('history') },
-            { label: 'Word count', run: () => setModal('wordcount'), disabled: typstProject },
-            { label: 'Check before submitting', run: () => setModal('submission'), disabled: typstProject },
+            { label: 'Word count', run: () => setModal('wordcount') },
+            { label: 'Check before submitting', run: () => setModal('submission') },
             { label: 'GitHub sync', icon: <Github size={14} />, run: () => setModal('github') },
             { label: 'Download project', icon: <FileArchive size={14} />, run: downloadProject },
             { label: 'Download PDF', icon: <Download size={14} />, run: downloadPdf, disabled: !pdfUrl },
@@ -2581,19 +2667,16 @@ function App() {
         {
           label: 'Insert',
           items: [
-            { label: 'Section', run: () => insert('\n\\section{Section title}\n') },
-            { label: 'Subsection', run: () => insert('\n\\subsection{Subsection title}\n') },
-            { label: 'Equation', run: () => insert('\n\\begin{equation}\n  \n\\end{equation}\n') },
+            { label: 'Section', run: () => insert(snip.sectionBlock) },
+            { label: 'Subsection', run: () => insert(snip.subsectionBlock) },
+            { label: 'Equation', run: () => insert(snip.equation) },
             { label: 'Image', icon: <ImageIcon size={14} />, run: () => imageInput.current?.click() },
             {
               label: 'Table',
-              run: () =>
-                insert(
-                  '\n\\begin{table}[ht]\n  \\centering\n  \\begin{tabular}{cc}\n    A & B \\\\\n    1 & 2 \\\\\n  \\end{tabular}\n  \\caption{Caption}\n\\end{table}\n',
-                ),
+              run: () => insert(`\n${snip.table}\n`),
             },
-            { label: 'Bulleted list', run: () => insert('\\begin{itemize}\n  \\item Item\n\\end{itemize}') },
-            { label: 'Citation', run: () => wrap('\\cite{', '}') },
+            { label: 'Bulleted list', run: () => insert(snip.itemize) },
+            { label: 'Citation', run: () => wrap(snip.cite[0], snip.cite[1]) },
             { label: 'Citation from DOI or arXiv ID…', icon: <BookPlus size={14} />, run: () => setModal('cite') },
             'sep',
             {
@@ -3159,8 +3242,9 @@ function App() {
                 />
                 <p className="drop-hint">Drop files or folders here to upload</p>
               </div>
-              {prefs.outline && editableFile && /\.tex$/i.test(editableFile.name) && (
+              {prefs.outline && editableFile && /\.(tex|typ)$/i.test(editableFile.name) && (
                 <Outline
+                  typst={/\.typ$/i.test(editableFile.name)}
                   content={editableFile.content}
                   cursorLine={cursor.line}
                   onJump={(line) => jumpTo(editableFile.name, line)}
@@ -3279,9 +3363,9 @@ function App() {
                     value="Normal text"
                     onChange={(e) => {
                       const v = e.target.value;
-                      if (v === 'Section') insert('\\section{}');
-                      if (v === 'Subsection') insert('\\subsection{}');
-                      if (v === 'Subsubsection') insert('\\subsubsection{}');
+                      if (v === 'Section') insert(snip.section);
+                      if (v === 'Subsection') insert(snip.subsection);
+                      if (v === 'Subsubsection') insert(snip.subsubsection);
                     }}
                   >
                     <option>Normal text</option>
@@ -3290,17 +3374,27 @@ function App() {
                     <option>Subsubsection</option>
                   </select>
                   <span className="tool-divider" />
-                  <button className="tool" title="Bold" aria-label="Bold" onClick={() => wrap('\\textbf{', '}')}>
+                  <button
+                    className="tool"
+                    title="Bold"
+                    aria-label="Bold"
+                    onClick={() => wrap(snip.bold[0], snip.bold[1])}
+                  >
                     <Bold size={15} />
                   </button>
-                  <button className="tool" title="Italic" aria-label="Italic" onClick={() => wrap('\\textit{', '}')}>
+                  <button
+                    className="tool"
+                    title="Italic"
+                    aria-label="Italic"
+                    onClick={() => wrap(snip.italic[0], snip.italic[1])}
+                  >
                     <Italic size={15} />
                   </button>
                   <button
                     className="tool"
                     title="Underline"
                     aria-label="Underline"
-                    onClick={() => wrap('\\underline{', '}')}
+                    onClick={() => wrap(snip.underline[0], snip.underline[1])}
                   >
                     <Underline size={15} />
                   </button>
@@ -3309,7 +3403,7 @@ function App() {
                     className="tool"
                     title="Bulleted list"
                     aria-label="Bulleted list"
-                    onClick={() => insert('\\begin{itemize}\n  \\item Item\n\\end{itemize}')}
+                    onClick={() => insert(snip.itemize)}
                   >
                     <List size={15} />
                   </button>
@@ -3317,27 +3411,18 @@ function App() {
                     className="tool"
                     title="Numbered list"
                     aria-label="Numbered list"
-                    onClick={() => insert('\\begin{enumerate}\n  \\item Item\n\\end{enumerate}')}
+                    onClick={() => insert(snip.enumerate)}
                   >
                     <ListOrdered size={15} />
                   </button>
-                  <button
-                    className="tool"
-                    title="Table"
-                    aria-label="Table"
-                    onClick={() =>
-                      insert(
-                        '\\begin{table}[ht]\n  \\centering\n  \\begin{tabular}{cc}\n    A & B \\\\\n    1 & 2 \\\\\n  \\end{tabular}\n  \\caption{Caption}\n\\end{table}',
-                      )
-                    }
-                  >
+                  <button className="tool" title="Table" aria-label="Table" onClick={() => insert(snip.table)}>
                     <Table2 size={15} />
                   </button>
                   <button
                     className="tool"
                     title="Equation"
                     aria-label="Equation"
-                    onClick={() => insert('\\[\n  \n\\]')}
+                    onClick={() => insert(snip.displayMath)}
                   >
                     <Sigma size={15} />
                   </button>
@@ -3350,7 +3435,12 @@ function App() {
                   >
                     <Omega size={15} />
                   </button>
-                  <button className="tool" title="Citation" aria-label="Citation" onClick={() => wrap('\\cite{', '}')}>
+                  <button
+                    className="tool"
+                    title="Citation"
+                    aria-label="Citation"
+                    onClick={() => wrap(snip.cite[0], snip.cite[1])}
+                  >
                     <Quote size={15} />
                   </button>
                   <button
@@ -3361,7 +3451,12 @@ function App() {
                   >
                     <BookPlus size={15} />
                   </button>
-                  <button className="tool" title="Reference" aria-label="Reference" onClick={() => wrap('\\ref{', '}')}>
+                  <button
+                    className="tool"
+                    title="Reference"
+                    aria-label="Reference"
+                    onClick={() => wrap(snip.ref[0], snip.ref[1])}
+                  >
                     <Link2 size={14} />
                   </button>
                   <button
@@ -3487,7 +3582,12 @@ function App() {
                     }}
                   />
                 )}
-                {symbolsOpen && <SymbolPalette onInsert={insert} onClose={() => setSymbolsOpen(false)} />}
+                {symbolsOpen && (
+                  <SymbolPalette
+                    onInsert={(command, char) => insert(typstProject ? char : command)}
+                    onClose={() => setSymbolsOpen(false)}
+                  />
+                )}
                 <div className="status-bar">
                   {prefs.keymap !== 'default' && (
                     <span className="keymap-status" data-testid="keymap-status" ref={keymapStatus} aria-live="polite" />
@@ -3703,6 +3803,9 @@ function App() {
                       searchOpen={pdfSearch}
                       onSearchClose={() => setPdfSearch(false)}
                       onSourceJump={syncPdfToSource}
+                      onDocument={(pdf) => {
+                        pdfDocument.current = pdf;
+                      }}
                       onLoaded={setPageTotal}
                       onPageChange={setPage}
                       onScale={(s) => {
@@ -3995,7 +4098,8 @@ function App() {
           ) : modal === 'cite' ? (
             <CitationDialog
               bibFiles={project.files.filter((f) => f.name.endsWith('.bib') && f.encoding !== 'base64')}
-              canCite={!!currentFile && /\.(tex|sty|cls)$/i.test(currentFile.name) && project.role !== 'viewer'}
+              canCite={!!currentFile && /\.(tex|sty|cls|typ)$/i.test(currentFile.name) && project.role !== 'viewer'}
+              typst={typstProject}
               apiFetch={apiFetch}
               onAdd={addCitations}
               close={() => setModal('')}
@@ -5191,12 +5295,14 @@ function Outline({
   content,
   cursorLine,
   onJump,
+  typst = false,
 }: {
+  typst?: boolean;
   content: string;
   cursorLine: number;
   onJump: (line: number) => void;
 }) {
-  const items = useMemo(() => outlineOf(content), [content]);
+  const items = useMemo(() => (typst ? typstOutline(content) : outlineOf(content)), [content, typst]);
   const [open, setOpen] = useState(true);
   const current = [...items].reverse().find((i) => i.line <= cursorLine)?.line;
   return (
@@ -5222,7 +5328,9 @@ function Outline({
             ))}
           </ul>
         ) : (
-          <p className="outline-empty">Sections you add with {'\\section'} appear here.</p>
+          <p className="outline-empty">
+            {typst ? 'Headings you add with = appear here.' : <>Sections you add with {'\\section'} appear here.</>}
+          </p>
         ))}
     </div>
   );

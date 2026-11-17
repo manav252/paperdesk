@@ -209,7 +209,7 @@ export const ENVIRONMENTS: [string, string][] = [
   ['frame', '\t\\frametitle{$1}\n\t$0'],
 ];
 
-// ── Typst ──
+// Typst
 
 export type TypstContext =
   | { kind: 'function'; partial: string }

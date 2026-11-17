@@ -26,7 +26,7 @@
   )
 }
 
-// ── Header: replace with your name and contact details ──
+// Header: replace with your name and contact details
 #align(center)[
   #text(size: 24pt, weight: "bold")[Ananya Mehta] \
   #v(0.1em)

@@ -1,7 +1,7 @@
 // IEEE-style conference paper. The layout rules are in this file; the text of each section is in sections/.
 // Nothing here needs a package: it compiles with Typst alone.
 
-// ── Paper details: replace these ──
+// Paper details: replace these
 #let title = [Low-Power Occupancy Sensing for Smart Buildings Using Edge-Deployed Neural Networks]
 #let authors = (
   (
@@ -36,7 +36,7 @@
 ]
 #let keywords = ("occupancy sensing", "edge computing", "thermal imaging", "smart buildings", "TinyML")
 
-// ── Layout: US letter, two columns, 10 pt, as in IEEE conference proceedings ──
+// Layout: US letter, two columns, 10 pt, as in IEEE conference proceedings
 #set document(title: title, author: authors.map(a => a.name))
 #set page(paper: "us-letter", margin: (x: 0.62in, top: 0.75in, bottom: 1in), columns: 2)
 #set columns(gutter: 0.2in)
@@ -77,7 +77,7 @@
   v(0.6em, weak: true)
 }
 
-// ── Title and authors, across both columns ──
+// Title and authors, across both columns
 #place(top + center, scope: "parent", float: true, clearance: 1.6em)[
   #text(size: 22pt)[#title]
   #v(1.2em)
@@ -94,7 +94,7 @@
   )
 ]
 
-// ── Abstract and index terms ──
+// Abstract and index terms
 #[
   #set text(size: 9pt, weight: "bold")
   #set par(first-line-indent: 0pt)
@@ -103,7 +103,7 @@
   _Index Terms_---#keywords.join(", ")
 ]
 
-// ── Sections: one file each ──
+// Sections: one file each
 #include "sections/introduction.typ"
 #include "sections/related-work.typ"
 #include "sections/methodology.typ"

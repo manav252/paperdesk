@@ -1,14 +1,10 @@
 # PaperDesk
 
-PaperDesk is a LaTeX editor that runs in the browser. You get a project dashboard and a three-pane editor (file tree,
-source, PDF preview), and documents are compiled with a full TeX Live installation. Projects can be shared and edited
-together in real time.
+PaperDesk is a LaTeX and Typst editor that runs in the browser. You get a project dashboard and a three-pane editor
+(file tree, source, PDF preview). LaTeX documents are compiled with a full TeX Live installation and Typst documents
+with the Typst compiler. Projects can be shared and edited together in real time.
 
 Live site: https://paperdesk-b88a49.gitlab.io
-
-## Screenshots
-
-_Add screenshots of the dashboard, the editor and the template gallery to `docs/screenshots/` and link them here._
 
 ## Features
 
@@ -17,7 +13,7 @@ _Add screenshots of the dashboard, the editor and the template gallery to `docs/
 - Monaco editor with LaTeX completion, find and replace, an outline, a symbol palette, spell check, and optional Vim
   or Emacs key bindings.
 - pdfLaTeX, XeLaTeX and LuaLaTeX through `latexmk`, with BibTeX and Biber. Recompiles reuse the previous build.
-- Typst as a second document language: choose it when creating a project or pick a Typst template.
+- Typst as a second document language, with the same preview, outline, completion and source jumps.
 - Continuous PDF preview with zoom, search and download. Double-click the PDF to jump to the source, or sync the
   other way from the editor.
 - Errors and warnings listed with file and line, with plain-language hints for common mistakes.
@@ -48,7 +44,7 @@ _Add screenshots of the dashboard, the editor and the template gallery to `docs/
 | --------- | ---------------------------------------------------------------------- |
 | Web app   | React, TypeScript, Vite, Monaco Editor, PDF.js, Yjs                    |
 | API       | Node.js, Express, socket.io                                            |
-| Compiling | TeX Live with `latexmk`; a Docker container per compile locally        |
+| Compiling | TeX Live with `latexmk`, Typst; a Docker container per compile locally |
 | Storage   | Files on disk locally; Postgres (Neon) and Cloudflare R2 in production |
 | Sign-in   | Supabase Auth                                                          |
 | Tests     | Vitest, Playwright                                                     |

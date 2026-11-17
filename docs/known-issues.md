@@ -10,6 +10,11 @@
   and not jump to the source. Clicking again works.
 - Warning locations follow the parentheses TeX prints in the log, so a warning from a deeply nested package may be
   attributed to the file that included it.
+- The time shown after a compile runs from Recompile to the first PDF page on screen; the compile log lists each
+  step. When the PDF pane is hidden the time stops at the result, and auto compile's pause after typing (1.8 s) is
+  not part of it.
+- On the production server each compile starts its compiler as a new process on a small CPU share, so Typst takes
+  about 2 s there and well under a second locally.
 - A new project's first compile is slow on a small server (15 to 50 seconds for the larger templates); later
   compiles reuse the build folder and take a few seconds.
 

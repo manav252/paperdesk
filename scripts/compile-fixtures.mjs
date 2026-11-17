@@ -292,10 +292,12 @@ try {
       if (edit?.expect) expect.contains = expect.contains.filter((c) => c !== edit.expect);
       if (problems.length) {
         failures++;
-        console.log(`  ✗ ${label}  ${problems.join(' | ')}`);
+        console.log(`  FAIL ${label}  ${problems.join(' | ')}`);
         if (expect.bibtex || expect.bibliography) console.log(body.log.slice(-5000));
       } else
-        console.log(`  ✓ ${label}${expect.success ? '' : `  error → ${body.errors[0].file}:${body.errors[0].line}`}`);
+        console.log(
+          `  ok   ${label}${expect.success ? '' : `  error → ${body.errors[0].file}:${body.errors[0].line}`}`,
+        );
     }
   }
   // A newer compile replaces one still running: the first must get 410 (not hang) and the second must succeed
@@ -327,7 +329,7 @@ try {
       after.body?.success;
     if (!ok) failures++;
     console.log(
-      `  ${ok ? '✓' : '✗'} ${target.padEnd(20)} replaced compile: first ${a.status}, newer ${b.status} ${b.body?.success ? 'ok' : JSON.stringify(b.body?.errors?.slice(0, 1))}, next ${after.body?.success ? 'ok' : 'failed'}`,
+      `  ${ok ? 'ok  ' : 'FAIL'} ${target.padEnd(20)} replaced compile: first ${a.status}, newer ${b.status} ${b.body?.success ? 'ok' : JSON.stringify(b.body?.errors?.slice(0, 1))}, next ${after.body?.success ? 'ok' : 'failed'}`,
     );
     await fetch(`${API}/projects/${id}`, { method: 'DELETE', headers: ownerHeaders }).catch(() => undefined);
   }
@@ -372,7 +374,7 @@ try {
       ].filter(Boolean);
       if (problems.length) failures++;
       console.log(
-        `  ${problems.length ? '✗' : '✓'} ${name.padEnd(20)} ${kind} export: ${problems.length ? problems.join('; ') : `${out.names.length} files (${out.names.join(', ').slice(0, 90)})`}`,
+        `  ${problems.length ? 'FAIL' : 'ok  '} ${name.padEnd(20)} ${kind} export: ${problems.length ? problems.join('; ') : `${out.names.length} files (${out.names.join(', ').slice(0, 90)})`}`,
       );
     }
   }
@@ -385,11 +387,11 @@ try {
     );
     const ok = out.status === 422;
     if (!ok) failures++;
-    console.log(`  ${ok ? '✓' : '✗'} ${'broken'.padEnd(20)} export refused: ${out.status} ${out.error ?? ''}`);
+    console.log(`  ${ok ? 'ok  ' : 'FAIL'} ${'broken'.padEnd(20)} export refused: ${out.status} ${out.error ?? ''}`);
   }
 } catch (e) {
   failures++;
-  console.error(`\n✗ ${e.message}`);
+  console.error(`\n${e.message}`);
 } finally {
   if (process.env.FIXTURE_API_URL && process.env.FIXTURE_OWNER_ID) {
     const fixtures = [

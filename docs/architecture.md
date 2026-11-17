@@ -36,6 +36,11 @@ uses. With `DATABASE_URL` and the `R2_*` variables set it uses Postgres and obje
   process limits. Render's free web services cannot run Docker, so in production TeX runs on the host as an
   unprivileged user with resource limits (`COMPILE_MODE=native`).
 - One compile runs at a time. A newer compile of the same project replaces a running one, which answers HTTP 410.
+  The preamble cache is built in the background after a successful compile; a new compile stops that build rather
+  than waiting for it.
+- Compile timing is measured end to end (`src/lib/compileTrace.ts`): the browser stamps the click, the request,
+  the response and the first page drawn, and the server reports its receive, queue, file sync, compiler and read
+  times from the moment the request arrived.
 - The log is parsed into errors and warnings with file and line (`src/lib/latexLog.ts`), with plain-language hints for
   the mistakes newcomers make most.
 - **Typst** is the second document language. A project records its language (`language` on the project; projects

@@ -1,7 +1,7 @@
 // Project report: title page, abstract, contents, chapters and a bibliography.
 // The layout rules are in this file; each chapter is a file in chapters/. No packages are needed.
 
-// ── Report details: replace these ──
+// Report details: replace these
 #let title = [Campus Bike-Share Pilot]
 #let subtitle = [Evaluation of the First Year and Recommendations]
 #let authors = ("Rohan Kulkarni", "Sara Lindqvist", "Amara Nwosu")
@@ -42,7 +42,7 @@
   v(0.3em)
 }
 
-// ── Title page ──
+// Title page
 #page(numbering: none)[
   #set align(center)
   #v(4cm)
@@ -57,7 +57,7 @@
   #v(1cm)
 ]
 
-// ── Front matter: roman page numbers ──
+// Front matter: roman page numbers
 #set page(numbering: "i")
 #counter(page).update(1)
 
@@ -71,7 +71,7 @@ to the student village, and moving the two least-used stations.
 
 #outline(title: [Contents], depth: 2, indent: auto)
 
-// ── Chapters: arabic page numbers from 1 ──
+// Chapters: arabic page numbers from 1
 #set page(numbering: "1")
 #counter(page).update(1)
 

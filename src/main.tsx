@@ -501,7 +501,9 @@ function App() {
     [compilePrefs, setCompilePrefs] = useState<CompilePrefs>(() => {
       try {
         const saved = JSON.parse(localStorage.getItem('paperdesk-compile-prefs') ?? '{}');
-        /* Auto compile used to be on by default and was saved for everyone. Only a choice the person made themselves is kept. */ return {
+        // Auto compile used to be on by default and was saved for everyone. Only a choice the person made themselves
+        // is kept.
+        return {
           stopOnFirstError: true,
           draft: false,
           timeout: 120,
@@ -531,7 +533,10 @@ function App() {
   const [spellMenu, setSpellMenu] = useState<SpellMenu | null>(null),
     spellRef = useRef<Spellchecker | null>(null);
   const [pdfSearch, setPdfSearch] = useState(false);
-  const [noAccess, setNoAccess] = useState<'' | 'project' | 'link'>('');
+  // 'missing': the address is not one the app knows (Pages serves the app for every path).
+  const [noAccess, setNoAccess] = useState<'' | 'project' | 'link' | 'missing'>(() =>
+    /^\/($|(paper|project|s)\/)/.test(window.location.pathname) ? '' : 'missing',
+  );
   /** The project a signed-in visitor was refused, kept so they can switch to the account that was invited. */
   const refused = useRef('');
   const [joinPrompt, setJoinPrompt] = useState(''),
@@ -716,13 +721,13 @@ function App() {
         synced = syncedFiles.current.get(projectId) ?? new Map<string, ProjectFile>();
       update((p) => {
         const local = new Map(p.files.map((f) => [f.name, f]));
-        /* Keep files created here that aren't saved yet, and leave out ones deleted here that the server still has. */ const files =
-          [
-            ...remote.files
-              .filter((f) => local.has(f.name) || !synced.has(f.name))
-              .map((f) => (c?.has(f.name) && f.encoding !== 'base64' ? { ...f, content: c.text(f.name) } : f)),
-            ...p.files.filter((f) => !synced.has(f.name) && !remote.files.some((x) => x.name === f.name)),
-          ];
+        // Keep files created here that aren't saved yet, and leave out ones deleted here that the server still has.
+        const files = [
+          ...remote.files
+            .filter((f) => local.has(f.name) || !synced.has(f.name))
+            .map((f) => (c?.has(f.name) && f.encoding !== 'base64' ? { ...f, content: c.text(f.name) } : f)),
+          ...p.files.filter((f) => !synced.has(f.name) && !remote.files.some((x) => x.name === f.name)),
+        ];
         for (const f of files) echo(f.name, f.content);
         return { ...p, files };
       });
@@ -736,8 +741,8 @@ function App() {
     let stopped = false,
       live: Collab | null = null;
     const me = currentAccount();
-    /* What this browser loaded may be a few seconds behind the live document: never push it back. */ for (const f of project.files)
-      echo(f.name, f.content);
+    // What this browser loaded may be a few seconds behind the live document: never push it back.
+    for (const f of project.files) echo(f.name, f.content);
     startCollab(
       projectId,
       { name: me?.name ?? me?.email ?? 'Guest' },
@@ -865,6 +870,15 @@ function App() {
     if (project && activeTab !== 'dashboard' && (project.id === id || project.shareId === id)) openChat(true);
     else location.hash = `#/project/${id}/`;
   };
+  // The browser tab names the screen: the open project, or Projects / Templates on the dashboard.
+  useEffect(() => {
+    const onDashboard = activeTab !== 'editor' || !project;
+    document.title = noAccess
+      ? 'PaperDesk'
+      : onDashboard
+        ? `${activeTab === 'templates' ? 'Templates' : 'Projects'} · PaperDesk`
+        : `${project.name} · PaperDesk`;
+  }, [noAccess, activeTab, project?.name]);
   // Back from connecting GitHub: return to the sync dialog.
   useEffect(() => {
     if (!githubReturn.value || !project || !projectId) return;
@@ -1018,7 +1032,9 @@ function App() {
             } else if (j.status === 404) setNoAccess('link');
             else notify(body.error ?? 'This invitation could not be accepted.', 'error');
           } else {
-            /* Not signed in: say which project the link is for and ask them to sign in, instead of opening the sample project. */ firstVisit.current = false;
+            // Not signed in: say which project the link is for and ask them to sign in, instead of opening the sample
+            // project.
+            firstVisit.current = false;
             const about = await apiFetch(`/api/invites/${encodeURIComponent(join)}`)
               .then(async (r) =>
                 r.ok ? ((await r.json()) as { project: string; role: string }) : r.status === 404 ? null : undefined,
@@ -1044,10 +1060,8 @@ function App() {
           if (p.role) serverModified.current.set(p.id, p.modified);
           syncedFiles.current.set(p.id, new Map((p.files ?? []).map((f) => [f.name, f])));
         }
-        /* The server's copy of a shared project wins, and one you no longer have access to is dropped. */ const {
-          merged,
-          upload,
-        } = mergeProjects(
+        // The server's copy of a shared project wins, and one you no longer have access to is dropped.
+        const { merged, upload } = mergeProjects(
           projectsRef.current.filter(
             (p) => !p.id.startsWith('s-') && !(remote as Project[]).some((x) => x.id === p.id && x.role),
           ),
@@ -1056,9 +1070,8 @@ function App() {
         setProjects(merged);
         const asked = routeProjectId();
         if (asked) {
-          /* A project link names the project by its share id; the owner's own id differs. */ const found = merged.find(
-            (p) => p.id === asked || p.shareId === asked,
-          );
+          // A project link names the project by its share id; the owner's own id differs.
+          const found = merged.find((p) => p.id === asked || p.shareId === asked);
           if (found) {
             if (found.id !== asked)
               history.replaceState({ screen: 'project', id: found.id }, '', projectPath(found.id));
@@ -1072,7 +1085,8 @@ function App() {
               refused.current = asked;
               setNoAccess('project');
             } else if (authConfigured && !join) {
-              /* Signed out: remember the project, ask them to sign in, and open it when they come back. */ firstVisit.current = false;
+              // Signed out: remember the project, ask them to sign in, and open it when they come back.
+              firstVisit.current = false;
               keepPendingOpen(asked);
               setJoinPrompt('Sign in to open this project.');
             }
@@ -1103,7 +1117,8 @@ function App() {
           setActiveTab('dashboard');
         } else openSample();
       }
-    }; // A shared copy is added after the first sync, which would otherwise replace the project list without it.
+    };
+    // A shared copy is added after the first sync, which would otherwise replace the project list without it.
     void sync().then(openSharedCopy);
     fetch(apiUrl('/api/health'))
       .then((r) => (r.ok ? r.json() : null))
@@ -1112,100 +1127,100 @@ function App() {
   }, []);
   useEffect(() => {
     if (!projectId || !project || project.role === 'viewer' || conflict === projectId) return;
-    /* Saves run one after another: each is compared with what the previous one left on the server. */ const t =
-      window.setTimeout(() => {
-        saveChain.current = saveChain.current.then(async () => {
-          try {
-            /* Only files changed since the last save are sent, each with the version it was edited from, so people editing different files never overwrite each other. */ const sent =
-                project.files,
-              synced = syncedFiles.current.get(projectId);
-            let files: ProjectFile[] | undefined = sent,
-              patch: { files: (ProjectFile & { base: string | null })[]; deleted: string[] } | undefined;
-            if (synced) {
-              files = undefined;
-              patch = {
-                files: await Promise.all(
-                  sent
-                    .filter((f) => {
-                      const o = synced.get(f.name);
-                      return (
-                        (!o || o.content !== f.content || o.encoding !== f.encoding) &&
-                        !(collabNames?.has(f.name) && f.encoding !== 'base64')
-                      );
-                    })
-                    .map(async (f) => {
-                      const o = synced.get(f.name);
-                      return { ...f, base: o ? await contentHash(o.content, o.encoding) : null };
-                    }),
-                ),
-                deleted: [...synced.keys()].filter((n) => !sent.some((f) => f.name === n)),
-              };
-            }
-            /* Live projects: the server saves the text itself, so only file and settings changes are sent. */ if (
-              collabNames &&
-              patch
-            ) {
-              const meta = JSON.stringify([
-                project.name,
-                project.mainFile,
-                project.archived,
-                project.settings,
-                project.comments,
-                project.changes,
-              ]);
-              if (!patch.files.length && !patch.deleted.length && meta === lastMeta.current) return;
-              lastMeta.current = meta;
-            }
-            const save = (body: object) =>
-              apiFetch(`/api/projects/${projectId}`, {
-                method: 'PUT',
-                headers: json,
-                body: JSON.stringify({
-                  name: project.name,
-                  mainFile: project.mainFile,
-                  language: project.language,
-                  archived: project.archived,
-                  settings: project.settings,
-                  versions: collabNames ? undefined : project.versions,
-                  comments: project.comments,
-                  changes: project.changes,
-                  ...body,
-                }),
-              });
-            let r = await save({ files, patch });
-            /* The server no longer has this project (deleted elsewhere): send all of it. */ if (
-              r.ok &&
-              patch &&
-              (
-                await r
-                  .clone()
-                  .json()
-                  .catch(() => null)
-              )?.missing
-            ) {
-              syncedFiles.current.delete(projectId);
-              r = await save({ files: sent });
-            }
-            if (r.status === 409) {
-              const body = await r.json().catch(() => ({}));
-              setConflict(projectId);
-              notify(
-                `${body.error ?? 'Someone else changed this project. Reload to get their version.'} Your latest edits there aren’t saved.`,
-                'error',
-              );
-              return;
-            }
-            setApiOnline(r.ok);
-            if (r.ok) {
-              syncedFiles.current.set(projectId, new Map(sent.map((f) => [f.name, f])));
-              const saved = await r.json().catch(() => null);
-              if (saved && serverModified.current.has(projectId)) serverModified.current.set(projectId, saved.modified);
-            }
-          } catch {
-            setApiOnline(false);
+    // Saves run one after another: each is compared with what the previous one left on the server.
+    const t = window.setTimeout(() => {
+      saveChain.current = saveChain.current.then(async () => {
+        try {
+          // Only files changed since the last save are sent, each with the version it was edited from, so people
+          // editing different files never overwrite each other.
+          const sent = project.files,
+            synced = syncedFiles.current.get(projectId);
+          let files: ProjectFile[] | undefined = sent,
+            patch: { files: (ProjectFile & { base: string | null })[]; deleted: string[] } | undefined;
+          if (synced) {
+            files = undefined;
+            patch = {
+              files: await Promise.all(
+                sent
+                  .filter((f) => {
+                    const o = synced.get(f.name);
+                    return (
+                      (!o || o.content !== f.content || o.encoding !== f.encoding) &&
+                      !(collabNames?.has(f.name) && f.encoding !== 'base64')
+                    );
+                  })
+                  .map(async (f) => {
+                    const o = synced.get(f.name);
+                    return { ...f, base: o ? await contentHash(o.content, o.encoding) : null };
+                  }),
+              ),
+              deleted: [...synced.keys()].filter((n) => !sent.some((f) => f.name === n)),
+            };
           }
-        });
-      }, 700);
+          // Live projects: the server saves the text itself, so only file and settings changes are sent.
+          if (collabNames && patch) {
+            const meta = JSON.stringify([
+              project.name,
+              project.mainFile,
+              project.archived,
+              project.settings,
+              project.comments,
+              project.changes,
+            ]);
+            if (!patch.files.length && !patch.deleted.length && meta === lastMeta.current) return;
+            lastMeta.current = meta;
+          }
+          const save = (body: object) =>
+            apiFetch(`/api/projects/${projectId}`, {
+              method: 'PUT',
+              headers: json,
+              body: JSON.stringify({
+                name: project.name,
+                mainFile: project.mainFile,
+                language: project.language,
+                archived: project.archived,
+                settings: project.settings,
+                versions: collabNames ? undefined : project.versions,
+                comments: project.comments,
+                changes: project.changes,
+                ...body,
+              }),
+            });
+          let r = await save({ files, patch });
+          // The server no longer has this project (deleted elsewhere): send all of it.
+          if (
+            r.ok &&
+            patch &&
+            (
+              await r
+                .clone()
+                .json()
+                .catch(() => null)
+            )?.missing
+          ) {
+            syncedFiles.current.delete(projectId);
+            r = await save({ files: sent });
+          }
+          if (r.status === 409) {
+            const body = await r.json().catch(() => ({}));
+            setConflict(projectId);
+            notify(
+              `${body.error ?? 'Someone else changed this project. Reload to get their version.'} Your latest edits there aren’t saved.`,
+              'error',
+            );
+            return;
+          }
+          setApiOnline(r.ok);
+          if (r.ok) {
+            syncedFiles.current.set(projectId, new Map(sent.map((f) => [f.name, f])));
+            const saved = await r.json().catch(() => null);
+            if (saved && serverModified.current.has(projectId)) serverModified.current.set(projectId, saved.modified);
+          }
+        } catch {
+          setApiOnline(false);
+        }
+      });
+    }, 700);
     return () => window.clearTimeout(t);
   }, [
     projectId,
@@ -2033,11 +2048,8 @@ function App() {
         onConfirm: () => {
           const live = editorRef.current,
             open = live?.getModel();
-          /* In the open file, add it as an editor edit so the cursor stays in the caption. */ if (
-            live &&
-            open &&
-            currentFile?.name === main.name
-          ) {
+          // In the open file, add it as an editor edit so the cursor stays in the caption.
+          if (live && open && currentFile?.name === main.name) {
             if (!hasGraphicx(open.getValue())) {
               const spot = graphicxInsertion(open.getValue()),
                 at = open.getPositionAt(spot.offset);
@@ -2116,11 +2128,8 @@ function App() {
       e.stopPropagation();
       setDropTarget(null);
       const items = await filesFromDrop(e.dataTransfer);
-      /* Loose images dropped on the tree itself go to figures/. */ if (
-        !folder &&
-        items.length &&
-        items.every((x) => isFigureFile(x.file) && !x.path.includes('/'))
-      ) {
+      // Loose images dropped on the tree itself go to figures/.
+      if (!folder && items.length && items.every((x) => isFigureFile(x.file) && !x.path.includes('/'))) {
         await addFigures(
           items.map((x) => x.file),
           { insertBlock: false },
@@ -2749,7 +2758,12 @@ function App() {
     return (
       <div className="app-shell">
         <div className="empty-state no-access" role="alert">
-          {noAccess === 'link' ? (
+          {noAccess === 'missing' ? (
+            <>
+              <h3>Page not found</h3>
+              <p>There is no page at this address. Check the link, or open your projects.</p>
+            </>
+          ) : noAccess === 'link' ? (
             <>
               <h3>This link is invalid or sharing is turned off</h3>
               <p>The project owner may have turned the link off or replaced it. Ask them for a new link.</p>
@@ -2776,7 +2790,10 @@ function App() {
           )}
           <button
             className={noAccess === 'project' ? 'btn btn-secondary' : 'btn btn-primary'}
-            onClick={() => setNoAccess('')}
+            onClick={() => {
+              if (noAccess === 'missing') history.replaceState({ screen: 'dashboard' }, '', '/');
+              setNoAccess('');
+            }}
           >
             Go to your projects
           </button>

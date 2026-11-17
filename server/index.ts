@@ -1298,8 +1298,8 @@ app.post('/api/projects/:id/compile', async (req, res) => {
     }
     const log = [
       texLog || output.trim() || (typst && !exitError ? 'Typst compiled the document without errors or warnings.' : ''),
-      blg && `\n──── BibTeX (${base}.blg) ────\n${blg}`,
-      texLog && `\n──── latexmk ────\n${output}`,
+      blg && `\nBibTeX log (${base}.blg):\n${blg}`,
+      texLog && `\nlatexmk output:\n${output}`,
     ]
       .filter(Boolean)
       .join('\n');

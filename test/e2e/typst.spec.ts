@@ -87,6 +87,8 @@ test('a Typst project: language choice, highlighting, compile, and an error that
     JSON.parse(localStorage.getItem('paperdesk-projects')!).find((p: { name: string }) => p.name === 'Typst notes'),
   );
   expect(stored).toMatchObject({ language: 'typst', mainFile: 'main.typ' });
+  await expect(page.locator('.status-bar')).toContainText('Typst');
+  await expect(page.locator('.status-bar')).not.toContainText('LaTeX');
 
   // Compiling sends the project's language, and the PDF shows in the same preview.
   await page.getByRole('button', { name: /^Recompile/ }).click();

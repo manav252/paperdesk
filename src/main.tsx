@@ -193,6 +193,18 @@ function compiledMessage({ marks, server, warnings }: CompileTrace) {
   return `Compiled in ${seconds(total)}${warnings ? ` · ${warnings} warning${warnings > 1 ? 's' : ''}` : ''}`;
 }
 
+/** The file type shown in the status bar. */
+const fileTypeLabel = (name: string) =>
+  name.endsWith('.bib')
+    ? 'BibTeX'
+    : name.endsWith('.typ')
+      ? 'Typst'
+      : /\.(ya?ml)$/i.test(name)
+        ? 'YAML'
+        : /\.(tex|sty|cls)$/i.test(name)
+          ? 'LaTeX'
+          : 'Plain text';
+
 /** Which highlighting a file gets in the editor. */
 const editorLanguage = (name: string) =>
   name.endsWith('.bib')
@@ -3603,7 +3615,7 @@ function App() {
                       </span>
                       <span className="hide-sm">Spaces: 2</span>
                       <span className="hide-sm">UTF-8</span>
-                      <span>{currentFile.name.endsWith('.bib') ? 'BibTeX' : 'LaTeX'}</span>
+                      <span>{fileTypeLabel(currentFile.name)}</span>
                     </>
                   ) : (
                     <span>

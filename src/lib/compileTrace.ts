@@ -3,7 +3,7 @@
  * stamps its own steps; the server reports what happened between receiving the request and answering it.
  */
 export type CompileMarks = {
-  /** Recompile was clicked (or auto compile fired). */
+  /** Recompile was clicked. */
   click: number;
   /** Files hashed and the request built. */
   prepared?: number;

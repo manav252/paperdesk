@@ -362,8 +362,6 @@ type CompileResult = {
   timings?: CompileTimings;
 };
 type CompilePrefs = {
-  autoCompile: boolean;
-  autoCompileChosen?: boolean;
   stopOnFirstError: boolean;
   draft: boolean;
   timeout: number;
@@ -501,18 +499,15 @@ function App() {
     [compilePrefs, setCompilePrefs] = useState<CompilePrefs>(() => {
       try {
         const saved = JSON.parse(localStorage.getItem('paperdesk-compile-prefs') ?? '{}');
-        // Auto compile used to be on by default and was saved for everyone. Only a choice the person made themselves
-        // is kept.
         return {
           stopOnFirstError: true,
           draft: false,
           timeout: 120,
           trackChanges: false,
           ...saved,
-          autoCompile: saved.autoCompileChosen === true && saved.autoCompile === true,
         };
       } catch {
-        return { autoCompile: false, stopOnFirstError: true, draft: false, timeout: 120, trackChanges: false };
+        return { stopOnFirstError: true, draft: false, timeout: 120, trackChanges: false };
       }
     }),
     [rawLogs, setRawLogs] = useState(false),
@@ -566,14 +561,12 @@ function App() {
     });
   const [templateBusy, setTemplateBusy] = useState(''),
     compileOnOpen = useRef('');
-  const [autoCompileRevision, setAutoCompileRevision] = useState(0),
-    /** Timestamps of the latest compile, from the click to the first page on screen. */
-    compileMarks = useRef<CompileTrace | null>(null),
+  // Timestamps of the latest compile, from the click to the first page on screen.
+  const compileMarks = useRef<CompileTrace | null>(null),
     [compileTrace, setCompileTrace] = useState<CompileTrace | null>(null);
   const compileAbort = useRef<AbortController | null>(null),
     syncState = useRef<SyncState | null>(null),
     sourceRevision = useRef(0),
-    startedCompile = useRef(''),
     pdfSyncPending = useRef(false),
     pdfSyncNext = useRef<{ page: number; x: number; y: number } | null>(null),
     sourceSyncPending = useRef(false);
@@ -590,7 +583,7 @@ function App() {
     pdfDocument = useRef<unknown>(null),
     workRef = useRef<HTMLDivElement>(null),
     searchRef = useRef<HTMLInputElement>(null),
-    compileRef = useRef<(options?: { auto?: boolean }) => void>(() => {}),
+    compileRef = useRef<() => void>(() => {}),
     scaleRef = useRef(100),
     monacoRef = useRef<any>(null),
     pendingJump = useRef<{ file: string; line: number } | null>(null),
@@ -1281,11 +1274,6 @@ function App() {
     }, 300);
     return () => window.clearTimeout(t);
   }, [activeTab, project]);
-  useEffect(() => {
-    if (!compilePrefs.autoCompile || dashboard || !project || autoCompileRevision === 0) return;
-    const t = window.setTimeout(() => compileRef.current({ auto: true }), 1800);
-    return () => window.clearTimeout(t);
-  }, [compilePrefs.autoCompile, autoCompileRevision]);
 
   // Close menus on outside click; Escape closes the topmost layer.
   useEffect(() => {
@@ -1325,7 +1313,6 @@ function App() {
 
   const setContent = (value: string) => {
     sourceRevision.current++;
-    setAutoCompileRevision((v) => v + 1);
     setCompileState((s) =>
       pdfUrl
         ? {
@@ -1427,7 +1414,7 @@ function App() {
   };
 
   /** Compiles the open project. Starting a compile replaces one still running. */
-  const compile = async ({ auto = false }: { auto?: boolean } = {}) => {
+  const compile = async () => {
     if (!project) return;
     const target = project,
       mainFile = mainFileOf(target),
@@ -1439,11 +1426,6 @@ function App() {
       });
       return;
     }
-    // Auto compile fires a moment after typing stops; if Recompile already started (or finished) this exact source,
-    // restarting it would only throw that compile away.
-    const compileKey = `${target.id}|${revision}|${engine}|${mainFile}`;
-    if (auto && startedCompile.current === compileKey) return;
-    startedCompile.current = compileKey;
     compileAbort.current?.abort();
     const controller = new AbortController();
     compileAbort.current = controller;
@@ -1461,8 +1443,8 @@ function App() {
       },
       (compilePrefs.timeout + 15) * 1000,
     );
-    // A compile you asked for shows the PDF on a phone; an automatic one leaves you in the editor.
-    if (!auto && narrow && layout === 'editor') setPref('layout', 'pdf');
+    // On a phone, a compile switches to the PDF.
+    if (narrow && layout === 'editor') setPref('layout', 'pdf');
     setCompileState({ status: 'running', message: 'Compiling…' });
     const marks: CompileMarks = { click: performance.now() };
     compileMarks.current = null;
@@ -1507,10 +1489,8 @@ function App() {
       // With collaborators, a replaced compile means someone else is compiling: their PDF arrives through the live channel.
       if (controller.signal.aborted || r.status === 410) return;
       if (!data) throw new Error(NETWORK_HELP);
-      if (revision !== sourceRevision.current) {
-        setCompileState({ status: 'outdated', message: 'PDF is out of date', stale: !!pdfUrl });
-        return;
-      }
+      // Edits made while this compile ran still get its PDF, marked out of date, instead of the result being dropped.
+      const stale = revision !== sourceRevision.current;
       setApiOnline(true);
       if (!r.ok) {
         setCompileState({ status: 'error', message: String(data.error ?? 'Compilation failed'), stale: !!pdfUrl });
@@ -1537,7 +1517,11 @@ function App() {
         const trace = { marks, server: res.timings ?? {}, warnings: res.warnings.length };
         compileMarks.current = trace;
         setCompileTrace(trace);
-        setCompileState({ status: 'success', message: compiledMessage(trace) });
+        setCompileState(
+          stale
+            ? { status: 'outdated', message: 'PDF is out of date', stale: true }
+            : { status: 'success', message: compiledMessage(trace) },
+        );
       } else {
         const e = res.errors[0];
         setCompileState({
@@ -3688,16 +3672,6 @@ function App() {
                             ].map(([v, l]) => ({ label: l!, checked: engine === v, run: () => setEngine(v!) }))),
                         'sep',
                         {
-                          label: `Auto compile: ${compilePrefs.autoCompile ? 'On' : 'Off'}`,
-                          checked: compilePrefs.autoCompile,
-                          run: () =>
-                            setCompilePrefs({
-                              ...compilePrefs,
-                              autoCompile: !compilePrefs.autoCompile,
-                              autoCompileChosen: true,
-                            }),
-                        },
-                        {
                           label: 'Stop compilation',
                           icon: <Square size={13} />,
                           disabled: !compiling,
@@ -4497,28 +4471,22 @@ function App() {
                       ))}
                   </select>
                 </div>
-                <div className="field-row">
-                  <div>
-                    <strong>Auto compile</strong>
-                    <span>Compile after you pause editing.</span>
-                  </div>
-                  <input
-                    type="checkbox"
-                    checked={compilePrefs.autoCompile}
-                    onChange={(e) => setCompilePrefs({ ...compilePrefs, autoCompile: e.target.checked })}
-                  />
-                </div>
-                <div className="field-row">
-                  <div>
-                    <strong>Stop on first error</strong>
-                    <span>Stop at the first TeX error.</span>
-                  </div>
-                  <input
-                    type="checkbox"
-                    checked={compilePrefs.stopOnFirstError}
-                    onChange={(e) => setCompilePrefs({ ...compilePrefs, stopOnFirstError: e.target.checked })}
-                  />
-                </div>
+                {/* Typst always reports every error it finds and has no draft mode. */}
+                {!typstProject && (
+                  <>
+                    <div className="field-row">
+                      <div>
+                        <strong>Stop on first error</strong>
+                        <span>Stop at the first TeX error.</span>
+                      </div>
+                      <input
+                        type="checkbox"
+                        checked={compilePrefs.stopOnFirstError}
+                        onChange={(e) => setCompilePrefs({ ...compilePrefs, stopOnFirstError: e.target.checked })}
+                      />
+                    </div>
+                  </>
+                )}
                 <div className="field-row">
                   <div>
                     <strong>Track changes</strong>
@@ -4530,17 +4498,21 @@ function App() {
                     onChange={(e) => setCompilePrefs({ ...compilePrefs, trackChanges: e.target.checked })}
                   />
                 </div>
-                <div className="field-row">
-                  <div>
-                    <strong>Draft mode</strong>
-                    <span>Faster preview without final graphics.</span>
-                  </div>
-                  <input
-                    type="checkbox"
-                    checked={compilePrefs.draft}
-                    onChange={(e) => setCompilePrefs({ ...compilePrefs, draft: e.target.checked })}
-                  />
-                </div>
+                {!typstProject && (
+                  <>
+                    <div className="field-row">
+                      <div>
+                        <strong>Draft mode</strong>
+                        <span>Faster preview without final graphics.</span>
+                      </div>
+                      <input
+                        type="checkbox"
+                        checked={compilePrefs.draft}
+                        onChange={(e) => setCompilePrefs({ ...compilePrefs, draft: e.target.checked })}
+                      />
+                    </div>
+                  </>
+                )}
                 <div className="field-row">
                   <div>
                     <strong>Compile timeout</strong>

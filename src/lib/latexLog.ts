@@ -48,9 +48,11 @@ export function parseLatexLog(texLog: string, bibtexLog = '', mainFile = 'main.t
       const ln = ctx ? Number(/^l\.(\d+)/.exec(ctx)![1]) : null;
       const rawMessage = line.slice(2).trim();
       const missingFile = /^LaTeX Error: File [`'](.+?)[`'] not found\.?$/.exec(rawMessage);
-      const message = missingFile
-        ? `Image or file “${missingFile[1]}” was not found. Check the path on this line.`
-        : rawMessage;
+      const message = !missingFile
+        ? rawMessage
+        : /\.(sty|cls)$/i.test(missingFile[1]!)
+          ? `Package or class “${missingFile[1]}” is not installed. Check its name, or add the file to the project.`
+          : `Image or file “${missingFile[1]}” was not found. Check the path on this line.`;
       const isFollowOn = /^(Emergency stop|==> Fatal error occurred)/.test(message) && errors.length > 0;
       if (!isFollowOn) errors.push({ file: currentFile(), line: ln, message });
       continue;

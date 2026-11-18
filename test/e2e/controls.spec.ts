@@ -132,9 +132,8 @@ test('dashboard controls', async ({ page }) => {
   await page.getByRole('button', { name: 'Skip tour', exact: true }).click();
 });
 
-test('auto compile is off until someone turns it on', async ({ page }) => {
-  // Typing must not start a compile unless the person turned auto compile on themselves.
-  // Older versions saved "on" for everyone without being asked; that saved value must not turn it back on.
+test('typing never starts a compile; only Recompile does', async ({ page }) => {
+  // There is no auto compile: an old saved "on" preference has no effect.
   await page.addInitScript(() =>
     localStorage.setItem('paperdesk-compile-prefs', JSON.stringify({ autoCompile: true, stopOnFirstError: true })),
   );
@@ -142,25 +141,15 @@ test('auto compile is off until someone turns it on', async ({ page }) => {
   const before = compiles;
   await page.locator('.view-line').filter({ hasText: 'Hello world' }).click();
   await page.keyboard.type(' typed without compiling');
+  await page.keyboard.insertText('\n% pasted\nA whole paste.\n');
   await page.getByRole('button', { name: 'Compiler options' }).click();
-  await expect(page.getByRole('menuitemcheckbox', { name: 'Auto compile: Off' })).toBeVisible();
+  await expect(page.getByRole('menuitemcheckbox', { name: /Auto compile/ })).toHaveCount(0);
+  await page.keyboard.press('Escape');
   await page.waitForTimeout(3500);
   expect(compiles).toBe(before);
+  await page.getByRole('button', { name: /^Recompile/ }).click();
+  await expect.poll(() => compiles).toBe(before + 1);
 });
-
-test('auto compile waits until a paste has been idle', async ({ page }) => {
-  await openControls(page);
-  await page.getByRole('button', { name: 'Compiler options' }).click();
-  await page.getByRole('menuitemcheckbox', { name: 'Auto compile: Off' }).click();
-  const editor = page.getByRole('textbox', { name: 'Editor content' });
-  await editor.click({ force: true });
-  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+ArrowDown' : 'Control+End');
-  await page.keyboard.insertText('\n% pasted together\nA whole paste should become one idle compile.\n');
-  await page.waitForTimeout(1000);
-  expect(compiles).toBe(0);
-  await expect.poll(() => compiles, { timeout: 10_000 }).toBe(1);
-});
-
 test('a failed recompile keeps the previous PDF and marks it out of date', async ({ page }) => {
   await openControls(page);
   await page.getByRole('button', { name: /^Recompile/ }).click();

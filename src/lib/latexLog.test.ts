@@ -168,3 +168,13 @@ describe('missing file suggestions', () => {
     expect(withFileSuggestion(once, files)).toBe(once);
   });
 });
+
+describe('missing packages', () => {
+  it('names a missing package or class rather than calling it an image', () => {
+    const { errors } = parseLatexLog(
+      ['(./main.tex', "! LaTeX Error: File `fancystuff.sty' not found.", '', 'l.3 \\usepackage', ')'].join('\n'),
+    );
+    expect(errors[0]).toMatchObject({ file: 'main.tex', line: 3 });
+    expect(errors[0]!.message).toContain('Package or class “fancystuff.sty” is not installed');
+  });
+});

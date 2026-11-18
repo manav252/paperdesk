@@ -300,38 +300,58 @@ try {
         );
     }
   }
-  // A newer compile replaces one still running: the first must get 410 (not hang) and the second must succeed
-  // even though the first was killed part-way through writing its auxiliary files.
-  const target = fixtures.find((n) => n === 'tpl-ieee-conference') ?? cases.find((c) => c.expect.success)?.name;
-  if (target) {
-    const files = readTree(dirOf(target));
-    const id = `fixture-${target}-replaced`;
+  // The same scenarios for both compilers: a newer compile replaces one still running (the first gets 410, the
+  // second succeeds even though the first was killed part-way), and compiling unchanged sources again answers
+  // from the previous result without running the compiler.
+  const scenarioTargets = [
+    { name: fixtures.find((n) => n === 'tpl-ieee-conference') ?? 'article', main: 'main.tex', language: 'latex' },
+    { name: fixtures.find((n) => n === 'tpl-typst-report') ?? 'typst-basic', main: 'main.typ', language: 'typst' },
+  ].filter((t) => fixtures.includes(t.name));
+  for (const target of scenarioTargets) {
+    const files = readTree(dirOf(target.name));
+    const id = `fixture-${target.name}-scenarios`;
+    const comment = (mark) => (target.language === 'typst' ? `\n// ${mark}\n` : `\n% ${mark}\n`);
     const edited = (mark) =>
-      files.map((f) =>
-        f.name === 'main.tex'
-          ? { ...f, content: f.content.replace(/\\end\{document\}/, `% ${mark}\n\\end{document}`) }
-          : f,
-      );
+      files.map((f) => (f.name === target.main ? { ...f, content: f.content + comment(mark) } : f));
     const send = (mark) =>
       json(`${API}/projects/${id}/compile`, {
         method: 'POST',
-        body: JSON.stringify({ engine: 'pdflatex', mainFile: 'main.tex', name: id, files: edited(mark) }),
+        body: JSON.stringify({
+          engine: 'pdflatex',
+          language: target.language,
+          mainFile: target.main,
+          name: id,
+          files: edited(mark),
+        }),
       });
     await send('warm');
     const first = send('first');
-    await new Promise((r) => setTimeout(r, 300));
+    await new Promise((r) => setTimeout(r, target.language === 'typst' ? 30 : 300));
     const [a, b] = await Promise.all([first, send('second')]);
     const after = await send('third');
-    const ok =
+    const replaced =
       (a.status === 410 || (a.status === 200 && a.body?.success)) &&
       b.status === 200 &&
       b.body?.success &&
       after.body?.success;
-    if (!ok) failures++;
+    if (!replaced) failures++;
     console.log(
-      `  ${ok ? 'ok  ' : 'FAIL'} ${target.padEnd(20)} replaced compile: first ${a.status}, newer ${b.status} ${b.body?.success ? 'ok' : JSON.stringify(b.body?.errors?.slice(0, 1))}, next ${after.body?.success ? 'ok' : 'failed'}`,
+      `  ${replaced ? 'ok  ' : 'FAIL'} ${target.name.padEnd(20)} replaced compile: first ${a.status}, newer ${b.status} ${b.body?.success ? 'ok' : JSON.stringify(b.body?.errors?.slice(0, 1))}, next ${after.body?.success ? 'ok' : 'failed'}`,
     );
-    await fetch(`${API}/projects/${id}`, { method: 'DELETE', headers: ownerHeaders }).catch(() => undefined);
+    const again = await send('third');
+    const unchanged =
+      again.status === 200 &&
+      again.body?.success &&
+      again.body?.cached === true &&
+      again.body?.timings?.compiler === 0 &&
+      typeof again.body?.pdf === 'string' &&
+      again.body.pdf === after.body?.pdf;
+    const changed = await send('fourth');
+    const recompiled = changed.status === 200 && changed.body?.success && !changed.body?.cached;
+    if (!unchanged || !recompiled) failures++;
+    console.log(
+      `  ${unchanged && recompiled ? 'ok  ' : 'FAIL'} ${target.name.padEnd(20)} unchanged sources: ${again.body?.cached ? `answered from the last result in ${again.body.timings?.total}ms` : 'compiled again'}; after an edit: ${changed.body?.cached ? 'wrongly cached' : 'compiled'}`,
+    );
   }
 
   // Submission export: only needed files, the generated .bbl, no build files; the API compiles the ZIP on its own

@@ -35,6 +35,15 @@ uses. With `DATABASE_URL` and the `R2_*` variables set it uses Postgres and obje
 - Locally each compile runs in a throwaway Docker container with no network, a read-only root, and CPU, memory and
   process limits. Render's free web services cannot run Docker, so in production TeX runs on the host as an
   unprivileged user with resource limits (`COMPILE_MODE=native`).
+- Both languages go through one compile route and one interface (`server/compilers.ts`). The route owns
+  queueing, cancellation, the warm build folder, timeouts, caching and the response; each compiler only builds its
+  command lines and reads its output into the shared diagnostics (`{ file, line, message }`, as errors or
+  warnings).
+- A compile whose sources and options match the last finished compile in that folder is answered from that result
+  without running the compiler.
+- There is no auto compile: a compile starts only from Recompile (or Ctrl+S / Ctrl+Enter), the same for both
+  languages, plus once when a project is created from a template. A result that arrives after newer edits is still
+  shown, marked out of date.
 - One compile runs at a time. A newer compile of the same project replaces a running one, which answers HTTP 410.
   The preamble cache is built in the background after a successful compile; a new compile stops that build rather
   than waiting for it.

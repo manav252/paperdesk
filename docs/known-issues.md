@@ -11,8 +11,7 @@
 - Warning locations follow the parentheses TeX prints in the log, so a warning from a deeply nested package may be
   attributed to the file that included it.
 - The time shown after a compile runs from Recompile to the first PDF page on screen; the compile log lists each
-  step. When the PDF pane is hidden the time stops at the result, and auto compile's pause after typing (1.8 s) is
-  not part of it.
+  step. When the PDF pane is hidden the time stops at the result.
 - On the production server each compile starts its compiler as a new process on a small CPU share, so Typst takes
   about 2 s there and well under a second locally.
 - A new project's first compile is slow on a small server (15 to 50 seconds for the larger templates); later
@@ -33,6 +32,9 @@
 
 ## Typst
 
+- Differences from LaTeX that are by design: there is one Typst compiler, so the engine menu shows only Typst; Draft
+  mode and Stop on first error do not exist in Typst and are hidden; source and PDF jumps match words instead of
+  reading SyncTeX data; the word count is read from the source; arXiv and journal ZIP exports are LaTeX-only.
 - Typst packages (`#import "@preview/..."`) are not available: compiles have no network, so only what is in the
   project or built into Typst works. The three Typst templates use no packages.
 - Only the fonts built into Typst (Libertinus Serif, New Computer Modern, DejaVu Sans Mono) and font files added to

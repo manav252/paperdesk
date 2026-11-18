@@ -6,6 +6,8 @@ import { promises as fs } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+import type { LogEntry } from '../src/lib/latexLog';
+
 export type SourceFile = { name: string; content?: string; encoding?: 'base64'; hash?: string };
 export type Workspace = {
   key: string;
@@ -15,6 +17,8 @@ export type Workspace = {
   fresh: boolean;
   /** The last compile here; a direct single pass is only tried after one that succeeded. */
   last?: { ok: boolean; mainFile: string };
+  /** The inputs and result of the last finished compile here, to answer an identical compile at once. */
+  done?: { inputs: string; result: { success: boolean; log: string; errors: LogEntry[]; warnings: LogEntry[] } };
   /** The precompiled preamble, if one was built for this preamble key. */
   format?: { key: string; ok: boolean };
 };

@@ -12,7 +12,15 @@ import multer from 'multer';
 import unzipper from 'unzipper';
 import archiver from 'archiver';
 import { parseLatexLog, type LogEntry } from '../src/lib/latexLog';
-import { defaultMainFile, parseTypstLog, projectLanguage } from '../src/lib/typstLog';
+import { defaultMainFile, projectLanguage } from '../src/lib/typstLog';
+import {
+  compilers,
+  LATEX_ENGINES,
+  latexmkArgs,
+  sourcesKey,
+  type CompileContext,
+  type CompileOptions,
+} from './compilers';
 import { parseForwardSync, parseInverseSync } from '../src/lib/synctex';
 import { parseTexcount } from '../src/lib/wordcount';
 import { applyFilePatch, type FilePatch } from '../src/lib/filePatch';
@@ -65,7 +73,6 @@ const upload = multer({
   limits: { fileSize: Math.min(MAX_PROJECT_BYTES, 25 * 1024 * 1024) },
 });
 /** latexmk flag per engine. Bare `-pdflatex` is not a valid latexmk switch. */
-const ENGINES: Record<string, string> = { pdflatex: '-pdf', xelatex: '-xelatex', lualatex: '-lualatex' };
 /** Files returned to the client as base64; everything else is UTF-8 text. */
 const BINARY = /\.(png|jpe?g|gif|bmp|tiff?|pdf|eps|ps|zip|gz|ttf|otf|woff2?)$/i;
 
@@ -406,60 +413,6 @@ async function dockerStatus() {
 // Restricted shell escape (TeX Live's default) lets TeX run only a fixed list of helpers such as repstopdf and
 // kpsewhich. It converts EPS figures and avoids the "epstopdf: Shell escape feature is not enabled" warning that
 // every graphicx document otherwise logs. Arbitrary commands (\write18 with anything else) stay disabled.
-/**
- * One Typst compile. `--root .` confines every file the document reads to the project folder, fonts come from the
- * project and the system, and diagnostics are printed one per line for parseTypstLog.
- */
-function typstArgs(mainFile: string, pdf: string) {
-  return [
-    'typst',
-    'compile',
-    '--root',
-    '.',
-    '--ignore-system-fonts',
-    '--font-path',
-    '.',
-    '--diagnostic-format',
-    'short',
-    mainFile,
-    pdf,
-  ];
-}
-function latexmkArgs(engine: string, mainFile: string, stopOnFirstError: boolean, draft: boolean, format?: string) {
-  const fmt = format ? ` -fmt=${format}` : '';
-  const command =
-    engine === 'pdflatex'
-      ? `$pdflatex = "pdflatex -shell-restricted${fmt} %O %S";`
-      : engine === 'xelatex'
-        ? '$xelatex = "xelatex -shell-restricted %O %S";'
-        : '$lualatex = "lualatex -shell-restricted %O %S";';
-  return [
-    ENGINES[engine]!,
-    '-e',
-    command,
-    '-synctex=1',
-    '-interaction=nonstopmode',
-    '-file-line-error',
-    ...(stopOnFirstError ? ['-halt-on-error'] : []),
-    ...(draft ? ['-draftmode'] : []),
-    '-norc',
-    mainFile,
-  ];
-}
-
-/** One engine pass without latexmk, whose startup alone costs most of a second on a small instance. */
-function directArgs(engine: string, mainFile: string, stopOnFirstError: boolean, format?: string) {
-  return [
-    '-shell-restricted',
-    ...(format ? [`-fmt=${format}`] : []),
-    '-synctex=1',
-    '-interaction=nonstopmode',
-    '-file-line-error',
-    ...(stopOnFirstError ? ['-halt-on-error'] : []),
-    mainFile,
-  ];
-}
-
 /** Name of the cached preamble format (pdfLaTeX only; see buildPreambleFormat). */
 const PREAMBLE_FORMAT = 'pd-preamble';
 /** Identifies the preamble: its text plus local style files and files it \\inputs. A change means rebuilding the format. */
@@ -1105,20 +1058,25 @@ app.post('/api/projects/:id/compile', async (req, res) => {
     const stored = Array.isArray(req.body.files) && res.locals.role !== 'viewer' ? null : await readProject(id, owner);
     const files: SourceFile[] = stored ? stored.files : req.body.files;
     validateFiles(files.filter((f) => f.content !== undefined) as StoredFile[]);
-    // The project's language decides the compiler: LaTeX (latexmk and an engine) or Typst.
+    // The project's language picks the compiler; everything else in this route is the same for both.
     const language = projectLanguage(stored?.language ?? req.body.language, String(req.body.mainFile ?? ''));
-    const typst = language === 'typst';
-    const engine = String(req.body.engine ?? 'pdflatex');
-    if (!typst && !ENGINES[engine]) return void send(res, 400, 'Unsupported compiler');
+    const compiler = compilers[language];
     const mainFile = safeName(String(req.body.mainFile ?? defaultMainFile(language)));
     const timeoutMs = Math.max(
       5_000,
       Math.min(MAX_COMPILE_TIMEOUT_MS, Number(req.body.timeoutMs) || COMPILE_TIMEOUT_MS),
     );
-    const draft = Boolean(req.body.draft);
-    const stopOnFirstError = req.body.stopOnFirstError !== false;
-    if (!mainFile.endsWith(typst ? '.typ' : '.tex'))
-      return void send(res, 400, `Main file must be a ${typst ? '.typ' : '.tex'} file`);
+    const options: CompileOptions = {
+      mainFile,
+      engine: String(req.body.engine ?? 'pdflatex'),
+      draft: Boolean(req.body.draft),
+      stopOnFirstError: req.body.stopOnFirstError !== false,
+    };
+    const { draft } = options;
+    const invalid = compiler.invalid(options);
+    if (invalid) return void send(res, 400, invalid);
+    if (!mainFile.endsWith(compiler.sourceExtension))
+      return void send(res, 400, `Main file must be a ${compiler.sourceExtension} file`);
     if (!files.some((f) => f.name === mainFile))
       return void send(res, 400, `Main file “${mainFile}” not found in the project`);
 
@@ -1146,12 +1104,13 @@ app.post('/api/projects/:id/compile', async (req, res) => {
     };
     RUNNING.set(key, entry);
 
-    release = await compileSlot(closed.signal);
+    compilesWaiting++;
+    release = await compileSlot(closed.signal).finally(() => compilesWaiting--);
     if (closed.signal.aborted) return; // abandoned while queued
     mark('queue', t);
 
     t = Date.now();
-    const ws = await workspaces.acquire(`${key}:${typst ? 'typst' : engine}`);
+    const ws = await workspaces.acquire(`${key}:${compiler.workspaceKey(options)}`);
     const sync = await syncWorkspace(ws, files, safeName);
     if (sync.missing.length)
       return void res
@@ -1166,62 +1125,51 @@ app.post('/api/projects/:id/compile', async (req, res) => {
     mark('sync', t);
 
     const base = mainFile.replace(/\.(tex|typ)$/i, '');
-    const runTex = (argv: string[]) =>
-      runTool(ws.dir, argv, timeoutMs, (kill) => {
-        cancelRun = kill;
+    // Nothing changed since the last compile in this folder: answer with its result instead of compiling again.
+    const inputs = sourcesKey(language, options, ws.hashes);
+    const previousPdf = ARTIFACTS.get(key);
+    if (
+      ws.done?.inputs === inputs &&
+      (!ws.done.result.success || (previousPdf?.workspace === ws.key && previousPdf.pdf.length <= 8 * 1024 * 1024))
+    ) {
+      const result = { ...ws.done.result, durationMs: Date.now() - started };
+      RESULTS.set(key, result);
+      timings.compiler = 0;
+      timings.total = Date.now() - started;
+      return void res.json({
+        ...result,
+        cached: true,
+        session: BOOT_ID,
+        timings,
+        ...(result.success && previousPdf ? { pdf: previousPdf.pdf.toString('base64') } : {}),
       });
+    }
     const mainSource = await fs.readFile(path.join(ws.dir, mainFile), 'utf8').catch(() => '');
-    const fmtKey = !typst && engine === 'pdflatex' && !draft ? preambleKey(ws, mainSource) : '';
-    let format = fmtKey && ws.format?.key === fmtKey && ws.format.ok ? PREAMBLE_FORMAT : undefined;
-    // Fast path: in a warm folder whose last compile succeeded, one direct engine pass is usually enough. Fall back
-    // to latexmk when references, the table of contents or the bibliography may need more passes.
-    const bibChanged = [...sync.written, ...sync.removed].some((n) => /\.(bib|bst|bbx|cbx|bcf)$/i.test(n));
-    const fast = !ws.fresh && !draft && !bibChanged && ws.last?.ok === true && ws.last.mainFile === mainFile;
-    const auxState = async () =>
-      (
-        await Promise.all(
-          ['aux', 'toc', 'lof', 'lot', 'out', 'nav', 'snm'].map((ext) =>
-            fs.readFile(path.join(ws.dir, `${base}.${ext}`)).then(
-              (b) => crypto.createHash('sha1').update(b).digest('hex'),
-              () => '-',
-            ),
-          ),
-        )
-      ).join(',');
+    const fmtKey = compiler.cachesPreamble(options) ? preambleKey(ws, mainSource) : '';
+    const context: CompileContext = {
+      dir: ws.dir,
+      base,
+      options,
+      fresh: ws.fresh,
+      changed: [...sync.written, ...sync.removed],
+      lastSucceeded: ws.last?.ok === true && ws.last.mainFile === mainFile,
+      run: (argv) =>
+        runTool(ws.dir, argv, timeoutMs, (kill) => {
+          cancelRun = kill;
+        }),
+      aborted: () => closed.signal.aborted,
+      preamble:
+        fmtKey && ws.format?.key === fmtKey && ws.format.ok
+          ? { format: PREAMBLE_FORMAT, reject: () => (ws.format = { key: fmtKey, ok: false }) }
+          : undefined,
+    };
     let output = '';
     let exitError: any = null;
-    let passes = '';
+    let compiled: Awaited<ReturnType<typeof compiler.compile>> | null = null;
     t = Date.now();
     try {
-      let r: TexRun;
-      if (typst) {
-        r = await runTex(typstArgs(mainFile, `${base}.pdf`));
-        passes = 'typst';
-      } else if (fast) {
-        const before = await auxState();
-        r = await runTex([engine, ...directArgs(engine, mainFile, stopOnFirstError, format)]);
-        passes = 'direct';
-        const log = await fs.readFile(path.join(ws.dir, base + '.log'), 'utf8').catch(() => '');
-        const more =
-          r.code === 0 &&
-          !r.killed &&
-          (before !== (await auxState()) ||
-            /Rerun to get|Label\(s\) may have changed|Please \(re\)run|run BibTeX|run Biber|Rerun LaTeX/i.test(log));
-        if (more && !closed.signal.aborted) {
-          r = await runTex(['latexmk', ...latexmkArgs(engine, mainFile, stopOnFirstError, draft, format)]);
-          passes += '+latexmk';
-        }
-      } else {
-        r = await runTex(['latexmk', ...latexmkArgs(engine, mainFile, stopOnFirstError, draft, format)]);
-        passes = 'latexmk';
-      }
-      // A cached preamble that the document disagrees with must never cost a working compile: retry without it.
-      if (format && (r.code !== 0 || r.killed) && !r.killed && !closed.signal.aborted) {
-        ws.format = { key: fmtKey, ok: false };
-        format = undefined;
-        r = await runTex(['latexmk', ...latexmkArgs(engine, mainFile, stopOnFirstError, draft)]);
-        passes += '+retry';
-      }
+      compiled = await compiler.compile(context);
+      const r = compiled.run;
       output = r.stdout + '\n' + r.stderr;
       if (r.code !== 0 || r.killed)
         exitError = { code: r.code, killed: r.killed, reason: r.reason, stdout: r.stdout, stderr: r.stderr };
@@ -1229,28 +1177,29 @@ app.post('/api/projects/:id/compile', async (req, res) => {
       if (e?.code === 'ENOENT')
         return void send(
           res,
-          COMPILE_MODE === 'docker' ? 503 : 503,
+          503,
           COMPILE_MODE === 'docker'
             ? 'Docker isn’t running. Start Docker Desktop, then recompile.'
-            : 'The LaTeX tools are not installed in this service.',
+            : 'The compiler is not installed in this service.',
         );
       throw e;
     }
-    if (typst && exitError && /executable file not found|typst: No such file|failed to execute/i.test(exitError.stderr))
+    const missing = exitError ? compiler.unavailable(compiled.run) : null;
+    if (missing)
       return void send(
         res,
         503,
         COMPILE_MODE === 'docker'
-          ? 'The compiler image has no Typst yet. Run “npm run compiler:build” once, then recompile.'
-          : 'Typst is not installed in this service.',
+          ? 'The compiler image is out of date. Run “npm run compiler:build” once, then recompile.'
+          : missing,
       );
     ws.last = { ok: !exitError, mainFile };
     // A run stopped part-way (by a newer compile or the browser leaving) can leave half-written .aux/.toc files
     // that make the next compile fail; clear them and let the next run go through latexmk from clean state.
     if (closed.signal.aborted && exitError?.killed) killedWorkspace = ws;
     mark('compiler', t);
-    timings.passes = passes === 'direct' ? 1 : passes.includes('latexmk') ? 2 : 0;
-    timings.preamble = format ? 1 : 0;
+    timings.passes = compiled?.passes ?? 0;
+    timings.preamble = compiled?.preamble ? 1 : 0;
     if (closed.signal.aborted) return; // superseded or the browser left; answered in finally
 
     const stderr = String(exitError?.stderr ?? '');
@@ -1279,9 +1228,7 @@ app.post('/api/projects/:id/compile', async (req, res) => {
     }
 
     t = Date.now();
-    const texLog = typst ? '' : await fs.readFile(path.join(ws.dir, base + '.log'), 'utf8').catch(() => '');
-    const blg = typst ? '' : await fs.readFile(path.join(ws.dir, base + '.blg'), 'utf8').catch(() => '');
-    const parsed = typst ? parseTypstLog(output, mainFile) : parseLatexLog(texLog, blg, mainFile);
+    const parsed = await compiler.diagnostics(context, output, !!exitError);
     const pdf = exitError?.killed ? null : await fs.readFile(path.join(ws.dir, base + '.pdf')).catch(() => null);
     const success = !exitError && !!pdf;
     if (!success && !parsed.errors.length) {
@@ -1296,21 +1243,16 @@ app.post('/api/projects/:id/compile', async (req, res) => {
               : 'Compilation failed. See the full log for details.',
       });
     }
-    const log = [
-      texLog || output.trim() || (typst && !exitError ? 'Typst compiled the document without errors or warnings.' : ''),
-      blg && `\nBibTeX log (${base}.blg):\n${blg}`,
-      texLog && `\nlatexmk output:\n${output}`,
-    ]
-      .filter(Boolean)
-      .join('\n');
     const result: CompileResult = {
       success,
-      log,
+      log: parsed.log,
       errors: parsed.errors,
       warnings: parsed.warnings,
       durationMs: Date.now() - started,
     };
     RESULTS.set(key, result);
+    // A run that was stopped or timed out is not a result of these sources; anything else can be reused.
+    ws.done = exitError?.killed ? undefined : { inputs, result };
     const synctex =
       success && !draft ? await fs.readFile(path.join(ws.dir, base + '.synctex.gz')).catch(() => null) : null;
     if (pdf && success && !draft) rememberArtifacts(key, { pdf, synctex, workspace: ws.key });
@@ -1482,9 +1424,12 @@ async function runTool(
  * and its local files are unchanged.
  */
 let preambleBuild: { cancel: () => void } | null = null;
+/** Compiles waiting for the compile slot; a background preamble build that gets the slot first steps aside. */
+let compilesWaiting = 0;
 async function buildPreambleFormat(ws: Workspace, mainFile: string, key: string) {
   const release = await compileSlot(new AbortController().signal).catch(() => null);
   if (!release) return;
+  if (compilesWaiting > 0) return release();
   let cancelled = false;
   const build = {
     cancel: () => {
@@ -1829,15 +1774,15 @@ app.post('/api/projects/:id/export', async (req, res) => {
     );
     validateFiles(files);
     const engine = String(req.body.engine ?? 'pdflatex');
-    if (!ENGINES[engine]) return void send(res, 400, 'Unsupported compiler');
+    if (!LATEX_ENGINES[engine]) return void send(res, 400, 'Unsupported compiler');
     const mainFile = safeName(String(req.body.mainFile ?? stored?.mainFile ?? 'main.tex'));
     if (!mainFile.endsWith('.tex')) return void send(res, 400, 'Main file must be a .tex file');
     if (!files.some((f) => f.name === mainFile))
       return void send(res, 400, `Main file “${mainFile}” not found in the project`);
     const stem = mainFile.replace(/\.tex$/i, '');
     const args = (extra: string[]) => {
-      const base = latexmkArgs(engine, mainFile, false, false);
-      return ['latexmk', ...base.slice(0, -1), ...extra, mainFile];
+      const base = latexmkArgs({ engine, mainFile, stopOnFirstError: false, draft: false });
+      return [...base.slice(0, -1), ...extra, mainFile];
     };
     const logOf = async (dir: string) =>
       parseLatexLog(

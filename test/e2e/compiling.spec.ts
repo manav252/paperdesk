@@ -1,8 +1,9 @@
 import { expect, test, type Page } from '@playwright/test';
 import { isolateProjects } from './isolate-projects';
 
-// Compiling behaves the same for LaTeX and Typst: only Recompile starts a compile. The first test fakes the compile
-// service so it can hold a compile open and count requests; the last one compiles for real.
+// Compiling on the server, which LaTeX uses: only Recompile starts a compile. The first test fakes the compile
+// service so it can hold a compile open and count requests; the last one compiles both languages for real (Typst in
+// the browser; its live preview has its own tests in live-preview.spec.ts).
 const PDF = (label: string) =>
   Buffer.from(
     `%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n` +
@@ -73,7 +74,7 @@ const countOpenCompiles = (page: Page) =>
     };
   });
 
-for (const language of ['latex', 'typst'] as const) {
+for (const language of ['latex'] as const) {
   test(`${language}: typing never compiles, Recompile runs one compile at a time, errors keep the last good PDF`, async ({
     page,
     request,
@@ -177,19 +178,27 @@ test('both languages: Recompile refreshes the PDF with the real compilers, and L
     const status = page.getByRole('region', { name: 'PDF preview' }).getByRole('status');
     const compiled = () =>
       page.waitForResponse((r) => /\/compile$/.test(r.url()) && r.status() === 200, { timeout: 90_000 });
-    let done = compiled();
-    await type(page, ' first');
-    await page.getByRole('button', { name: /^Recompile/ }).click();
-    await done;
-    await expect(status).toContainText('Compiled in', { timeout: 60_000 });
     const canvas = page.locator('canvas[aria-label="PDF page 1"]');
     const picture = () => canvas.evaluate((c: HTMLCanvasElement) => c.toDataURL());
-    const first = await picture();
-    done = compiled();
-    await type(page, ' second');
-    await page.getByRole('button', { name: /^Recompile/ }).click();
-    await done;
-    await expect.poll(picture, { timeout: 30_000 }).not.toBe(first);
+    if (language === 'latex') {
+      let done = compiled();
+      await type(page, ' first');
+      await page.getByRole('button', { name: /^Recompile/ }).click();
+      await done;
+      await expect(status).toContainText('Compiled in', { timeout: 60_000 });
+      const first = await picture();
+      done = compiled();
+      await type(page, ' second');
+      await page.getByRole('button', { name: /^Recompile/ }).click();
+      await done;
+      await expect.poll(picture, { timeout: 30_000 }).not.toBe(first);
+    } else {
+      // Typst refreshes by itself.
+      await expect(status).toContainText('Compiled in', { timeout: 60_000 });
+      const first = await picture();
+      await type(page, ' second');
+      await expect.poll(picture, { timeout: 30_000 }).not.toBe(first);
+    }
 
     await page.getByRole('button', { name: 'Settings', exact: true }).click();
     const dialog = page.getByRole('dialog', { name: 'Settings' });

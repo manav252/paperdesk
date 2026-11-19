@@ -36,39 +36,17 @@ test('a Typst project: language choice, highlighting, compile, and an error that
     localStorage.setItem('paperdesk-tour-done', '1');
     localStorage.setItem('paperdesk-help-seen', '1');
     localStorage.setItem('paperdesk-compile-prefs', JSON.stringify({ autoCompile: false }));
-    // These tests cover compiling on the server; the live preview has its own tests (live-preview.spec.ts).
+    // These tests cover Recompile; the live preview has its own tests (live-preview.spec.ts).
     localStorage.setItem('paperdesk-auto-compile', 'off');
   });
   await page.route(/^https:\/\/fonts\.(googleapis|gstatic)\.com\//, (route) =>
     route.fulfill({ status: 200, contentType: 'text/css', body: '' }),
   );
-  const compiles: { language?: string; mainFile?: string; engine?: string }[] = [];
-  let fail = false;
-  await page.route('**/api/projects/*/compile', (route) => {
-    compiles.push(route.request().postDataJSON());
-    return route.fulfill({
-      json: fail
-        ? {
-            success: false,
-            log: 'main.typ:5:1: error: unknown variable: nope',
-            errors: [{ file: 'main.typ', line: 5, message: 'unknown variable: nope' }],
-            warnings: [{ file: 'main.typ', line: 2, message: 'unknown font family: nope font' }],
-            durationMs: 20,
-          }
-        : {
-            success: true,
-            log: '',
-            errors: [],
-            warnings: [],
-            durationMs: 20,
-            session: 's',
-            pdf: PDF.toString('base64'),
-          },
-    });
+  // Typst compiles in the browser: nothing may reach the compile server.
+  let serverCompiles = 0;
+  page.on('request', (r) => {
+    if (/\/compile$/.test(r.url())) serverCompiles++;
   });
-  await page.route('**/api/projects/*/pdf*', (route) =>
-    route.fulfill({ status: 200, contentType: 'application/pdf', body: PDF }),
-  );
 
   // New project: LaTeX is preselected, Typst creates main.typ.
   await dashboard(page);
@@ -92,11 +70,13 @@ test('a Typst project: language choice, highlighting, compile, and an error that
   await expect(page.locator('.status-bar')).toContainText('Typst');
   await expect(page.locator('.status-bar')).not.toContainText('LaTeX');
 
-  // Compiling sends the project's language, and the PDF shows in the same preview.
+  // Recompile compiles in the browser, and the PDF shows in the same preview.
   await page.getByRole('button', { name: /^Recompile/ }).click();
-  await expect.poll(() => compiles.length).toBe(1);
-  expect(compiles[0]).toMatchObject({ language: 'typst', mainFile: 'main.typ' });
-  await expect(page.locator('.pdf-page, .pdf-pages canvas, canvas').first()).toBeVisible();
+  await expect(page.getByRole('region', { name: 'PDF preview' }).getByRole('status')).toContainText('Compiled in', {
+    timeout: 60_000,
+  });
+  await expect(page.locator('canvas[aria-label="PDF page 1"]')).toBeVisible();
+  expect(serverCompiles).toBe(0);
 
   // The compiler menu offers Typst only; LaTeX-only tools are switched off.
   await page.getByRole('button', { name: 'Compiler options' }).click();
@@ -107,12 +87,16 @@ test('a Typst project: language choice, highlighting, compile, and an error that
   await page.keyboard.press('Escape');
 
   // A failed compile lists Typst's errors and warnings; clicking one goes to its line.
-  fail = true;
+  await page.locator('.monaco-editor .view-lines').first().click();
+  await page.keyboard.press('Control+G');
+  await page.keyboard.type('5');
+  await page.keyboard.press('Enter');
+  await page.keyboard.type('#nope');
+  await page.keyboard.press('ControlOrMeta+Home');
   await page.getByRole('button', { name: /^Recompile/ }).click();
   await page.getByRole('button', { name: 'View log' }).click();
   const log = page.getByRole('dialog', { name: 'Compile log' });
   await expect(log.getByRole('list', { name: 'errors' })).toContainText('unknown variable: nope');
-  await expect(log.getByRole('list', { name: 'warnings' })).toContainText('unknown font family');
   await log.getByRole('button', { name: /unknown variable: nope/ }).click();
   await expect(log).toBeHidden();
   await expect(page.locator('.status-bar')).toContainText('Ln 5, Col 1');
@@ -128,12 +112,15 @@ test('a Typst project: language choice, highlighting, compile, and an error that
   await expect(gallery.locator('[data-template^="typst-"]')).toHaveCount(0);
   await expect(gallery.locator('[data-template="article"] .template-lang')).toHaveText('LaTeX');
   await gallery.getByRole('radio', { name: 'Typst' }).click();
-  fail = false;
   await gallery.locator('[data-template="typst-report"]').click();
   await expect(page.getByTitle('Rename project')).toContainText('Project Report (Typst)');
   await expect(page.locator('.monaco-editor').first()).toContainText('Campus Bike-Share Pilot');
   await expect(page.getByRole('button', { name: 'Rename references.bib' })).toBeAttached();
-  await expect.poll(() => compiles.at(-1)).toMatchObject({ language: 'typst', mainFile: 'main.typ' });
+  // A new project from a template compiles once by itself, in the browser too.
+  await expect(page.getByRole('region', { name: 'PDF preview' }).getByRole('status')).toContainText('Compiled in', {
+    timeout: 60_000,
+  });
+  expect(serverCompiles).toBe(0);
   expect(errors).toEqual([]);
 });
 
@@ -145,7 +132,7 @@ test('a LaTeX project still compiles as LaTeX', async ({ page, request }, info) 
     sessionStorage.setItem('seeded', '1');
     localStorage.setItem('paperdesk-tour-done', '1');
     localStorage.setItem('paperdesk-compile-prefs', JSON.stringify({ autoCompile: false }));
-    // These tests cover compiling on the server; the live preview has its own tests (live-preview.spec.ts).
+    // These tests cover Recompile; the live preview has its own tests (live-preview.spec.ts).
     localStorage.setItem('paperdesk-auto-compile', 'off');
   });
   const compiles: { language?: string; mainFile?: string; engine?: string }[] = [];
@@ -189,16 +176,13 @@ test('every Typst template compiles to a PDF, and a real error jumps to its line
     localStorage.setItem('paperdesk-tour-done', '1');
     localStorage.setItem('paperdesk-help-seen', '1');
     localStorage.setItem('paperdesk-compile-prefs', JSON.stringify({ autoCompile: false }));
-    // These tests cover compiling on the server; the live preview has its own tests (live-preview.spec.ts).
+    // These tests cover Recompile; the live preview has its own tests (live-preview.spec.ts).
     localStorage.setItem('paperdesk-auto-compile', 'off');
   });
   await page.route(/^https:\/\/fonts\.(googleapis|gstatic)\.com\//, (route) =>
     route.fulfill({ status: 200, contentType: 'text/css', body: '' }),
   );
-  const compiled = () =>
-    page.waitForResponse((r) => /\/api\/projects\/[^/]+\/compile$/.test(r.url()) && r.status() === 200, {
-      timeout: 90_000,
-    });
+  const status = page.getByRole('region', { name: 'PDF preview' }).getByRole('status');
   for (const [id, text] of [
     ['typst-ieee', 'Low-Power Occupancy Sensing'],
     ['typst-cv', 'Ananya Mehta'],
@@ -208,14 +192,11 @@ test('every Typst template compiles to a PDF, and a real error jumps to its line
     await page.getByRole('button', { name: 'Templates' }).click();
     const gallery = page.getByRole('region', { name: 'Templates' });
     await gallery.getByRole('radio', { name: 'Typst' }).click();
-    // A template compiles as soon as it opens.
-    const response = compiled();
+    // A template compiles as soon as it opens, in the browser, with no errors or warnings.
     await gallery.locator(`[data-template="${id}"]`).click();
-    const result = await (await response).json();
-    expect(result.errors, id).toEqual([]);
-    expect(result.warnings, id).toEqual([]);
-    expect(result.success, id).toBe(true);
-    expect(Buffer.from(result.pdf, 'base64').subarray(0, 5).toString(), id).toBe('%PDF-');
+    await expect(status, id).toContainText('Compiled in', { timeout: 60_000 });
+    await expect(status, id).not.toContainText('warning');
+    await expect(page.getByRole('button', { name: 'Go to error' })).toHaveCount(0);
     await expect(page.locator('.monaco-editor').first()).toContainText(text!);
     await expect(page.locator('.pdf-viewer canvas, .pdf-page canvas, canvas').first()).toBeVisible();
   }
@@ -257,14 +238,13 @@ test('every Typst template compiles to a PDF, and a real error jumps to its line
   await page.keyboard.press('Enter');
   const typedOn = Number(/Ln (\d+)/.exec((await page.locator('.status-bar').textContent()) ?? '')?.[1]) - 1;
   expect(typedOn).toBeGreaterThan(0);
-  const failed = compiled();
   await page.getByRole('button', { name: /^Recompile/ }).click();
-  const result = await (await failed).json();
-  expect(result.success).toBe(false);
   // The compiler reports the line that was typed, and the error takes the cursor back to it.
   // The jump above opened chapters/introduction.typ, so that is the file the error was typed into.
-  expect(result.errors[0]).toMatchObject({ file: 'chapters/introduction.typ', line: typedOn });
-  expect(result.errors[0].message).toContain('unknown variable: nosuchthing');
+  await expect(page.getByRole('region', { name: 'PDF preview' })).toContainText(
+    `chapters/introduction.typ:${typedOn} — unknown variable: nosuchthing`,
+    { timeout: 30_000 },
+  );
   await page.getByRole('button', { name: 'Go to error' }).click();
   await expect(page.locator('.status-bar')).toContainText(`Ln ${typedOn}, Col 1`);
   await page.getByRole('button', { name: 'View log' }).click();

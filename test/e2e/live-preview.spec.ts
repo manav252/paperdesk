@@ -119,7 +119,7 @@ test('Typst updates the preview as you type, keeps the scroll position, and reco
   const timings = await page.locator('.timing-table').innerText();
   await page.keyboard.press('Escape');
 
-  // Turned off, typing no longer updates the preview; Recompile still compiles (on the server).
+  // Turned off, typing no longer updates the preview; Recompile still does, in the browser.
   await page.getByRole('checkbox', { name: 'Auto-compile' }).uncheck();
   const frozen = await picture(page, 2);
   await page.locator('.monaco-editor .view-lines').first().click();
@@ -127,9 +127,9 @@ test('Typst updates the preview as you type, keeps the scroll position, and reco
   await page.keyboard.type(' Not live.');
   await page.waitForTimeout(1500);
   expect(await picture(page, 2)).toBe(frozen);
-  expect(serverCompiles).toBe(0);
   await page.getByRole('button', { name: /^Recompile/ }).click();
-  await expect.poll(() => serverCompiles).toBe(1);
+  await expect.poll(() => picture(page, 2), { timeout: 10_000 }).not.toBe(frozen);
+  expect(serverCompiles).toBe(0);
   expect(await page.evaluate(() => localStorage.getItem('paperdesk-auto-compile'))).toBe('off');
 
   const sorted = [...edits].sort((a, b) => a - b);
@@ -168,4 +168,116 @@ test('LaTeX still compiles only when asked', async ({ page, request }, info) => 
   await page.keyboard.type('% typing');
   await page.waitForTimeout(1500);
   expect(serverCompiles).toBe(0);
+});
+
+test('the open file picks the mode: .typ compiles as you type, .tex never does, with nothing left over on switching', async ({
+  page,
+  request,
+}, info) => {
+  test.skip(info.project.name !== 'desktop-light' || !!process.env.E2E_BASE_URL, 'Runs once, in the local build.');
+  test.setTimeout(180_000);
+  await isolateProjects(page, request);
+  const errors: string[] = [];
+  page.on('pageerror', (e) => errors.push(e.message));
+  let serverCompiles = 0;
+  page.on('request', (r) => {
+    if (/\/compile$/.test(r.url())) serverCompiles++;
+  });
+  await page.addInitScript(() => {
+    localStorage.setItem('paperdesk-tour-done', '1');
+    localStorage.setItem('paperdesk-help-seen', '1');
+    if (sessionStorage.getItem('seeded')) return;
+    sessionStorage.setItem('seeded', '1');
+    localStorage.removeItem('paperdesk-auto-compile');
+    const now = Date.now();
+    localStorage.setItem(
+      'paperdesk-projects',
+      JSON.stringify([
+        {
+          id: 'mode-typst',
+          name: 'Mode Typst',
+          modified: now,
+          language: 'typst',
+          mainFile: 'main.typ',
+          files: [
+            { name: 'main.typ', content: '= Live\n\nFirst paragraph.\n' },
+            { name: 'notes.tex', content: '% Notes kept next to the Typst document.\n' },
+          ],
+        },
+        {
+          id: 'mode-latex',
+          name: 'Mode LaTeX',
+          modified: now - 1,
+          mainFile: 'main.tex',
+          files: [
+            { name: 'main.tex', content: '\\documentclass{article}\n\\begin{document}\nHello\n\\end{document}\n' },
+          ],
+        },
+      ]),
+    );
+  });
+  await page.route(/^https:\/\/fonts\.(googleapis|gstatic)\.com\//, (route) =>
+    route.fulfill({ status: 200, contentType: 'text/css', body: '' }),
+  );
+  const state = page.getByTestId('live-state');
+  const typeAtEnd = async (text: string) => {
+    await page.locator('.monaco-editor .view-lines').first().click();
+    await page.keyboard.press('Control+G');
+    await page.keyboard.type('1');
+    await page.keyboard.press('Enter');
+    await page.keyboard.press('End');
+    await page.keyboard.type(text);
+  };
+
+  // A Typst project renders by itself and says so.
+  await page.goto('/#/paper/mode-typst/');
+  await expect(state).toHaveText('Live', { timeout: 60_000 });
+  const first = await picture(page, 1);
+
+  // Its .tex file is manual: typing there neither compiles nor shows the live indicator.
+  await page.getByRole('treeitem', { name: /notes\.tex/ }).click();
+  await expect(page.locator('.view-line').filter({ hasText: 'Notes kept next' })).toBeVisible();
+  await expect(state).toHaveCount(0);
+  await typeAtEnd(' more notes');
+  await page.waitForTimeout(1200);
+  expect(await picture(page, 1)).toBe(first);
+
+  // Back on the .typ file, typing updates the preview: Compiling… then Live.
+  await page.getByRole('treeitem', { name: /main\.typ/ }).click();
+  await typeAtEnd(' typed');
+  await expect(state).toHaveText('Compiling…');
+  await expect(state).toHaveText('Live', { timeout: 10_000 });
+  await expect.poll(() => picture(page, 1), { timeout: 10_000 }).not.toBe(first);
+
+  // An error says Error and keeps the last good preview.
+  const good = await picture(page, 1);
+  await page.keyboard.type(' #nope');
+  await expect(state).toHaveText('Error', { timeout: 10_000 });
+  expect(await picture(page, 1)).toBe(good);
+  for (let i = 0; i < 6; i++) await page.keyboard.press('Backspace');
+  await expect(state).toHaveText('Live', { timeout: 10_000 });
+
+  // A LaTeX project in the same session: typing compiles nothing, and no live compile is left running.
+  await page.getByRole('button', { name: 'Back to projects' }).click();
+  await page
+    .getByRole('button', { name: /Mode LaTeX/ })
+    .first()
+    .click();
+  await expect(page.locator('.view-line').filter({ hasText: 'documentclass' })).toBeVisible();
+  await expect(state).toHaveCount(0);
+  await expect(page.getByRole('checkbox', { name: 'Auto-compile' })).toHaveCount(0);
+  await typeAtEnd(' % typed');
+  await page.waitForTimeout(1500);
+  expect(serverCompiles).toBe(0);
+  await expect(page.getByRole('region', { name: 'PDF preview' }).getByRole('status')).toHaveCount(0);
+
+  // And back: the Typst project is live again.
+  await page.getByRole('button', { name: 'Back to projects' }).click();
+  await page
+    .getByRole('button', { name: /Mode Typst/ })
+    .first()
+    .click();
+  await expect(state).toHaveText('Live', { timeout: 30_000 });
+  expect(serverCompiles).toBe(0);
+  expect(errors).toEqual([]);
 });

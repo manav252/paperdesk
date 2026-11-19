@@ -162,4 +162,13 @@ describe('defaultFile', () => {
     expect(defaultFile([f('a.bib'), f('paper.tex')])).toBe('paper.tex');
     expect(defaultFile([{ name: 'a.png', content: 'x', encoding: 'base64' }, f('notes.txt')])).toBe('notes.txt');
   });
+  it("opens the project's main file first, also when it is not LaTeX", () => {
+    const files = [
+      { name: 'notes.tex', content: '' },
+      { name: 'main.typ', content: '= Hi' },
+    ];
+    expect(defaultFile(files, 'main.typ')).toBe('main.typ');
+    expect(defaultFile(files)).toBe('notes.tex');
+    expect(defaultFile(files, 'missing.typ')).toBe('notes.tex');
+  });
 });

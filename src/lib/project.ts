@@ -162,9 +162,10 @@ export function decodeBase64Utf8Strict(value: string) {
   }
 }
 /** The file to open first: main.tex if present, else the first editable text file, else the first file. */
-export function defaultFile(files: ProjectFile[]) {
+export function defaultFile(files: ProjectFile[], mainFile?: string) {
   return (
     (
+      (mainFile ? files.find((f) => f.name === mainFile) : undefined) ??
       files.find((f) => f.name === 'main.tex') ??
       files.find((f) => f.name.endsWith('.tex')) ??
       files.find(isEditable) ??

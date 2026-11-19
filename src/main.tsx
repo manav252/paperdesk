@@ -990,7 +990,7 @@ function App() {
       history.pushState({ screen: 'project', id: copy.id }, '', projectPath(copy.id));
       setProjects((x) => [copy, ...x]);
       setProjectId(copy.id);
-      setFileName(defaultFile(copy.files));
+      setFileName(defaultFile(copy.files, copy.mainFile));
       setActiveTab('editor');
       notify(`Opened a copy of “${d.name}”. Changes stay in your copy.`, 'success');
     } catch (e) {
@@ -1004,7 +1004,7 @@ function App() {
       firstVisit.current = false;
       setProjects(seed);
       setProjectId(sample.id);
-      setFileName(defaultFile(sample.files));
+      setFileName(defaultFile(sample.files, sample.mainFile));
       setActiveTab('editor');
       history.pushState({ screen: 'project', id: sample.id }, '', projectPath(sample.id));
     };
@@ -1243,7 +1243,8 @@ function App() {
     project?.changes,
   ]);
   useEffect(() => {
-    if (project && !project.files.some((f) => f.name === fileName)) setFileName(defaultFile(project.files));
+    if (project && !project.files.some((f) => f.name === fileName))
+      setFileName(defaultFile(project.files, mainFileOf(project)));
   }, [projectId, project?.files.length]);
   // Only real edits count as changes; opening or switching files must not bump “Last modified”.
   useEffect(() => {
@@ -1795,7 +1796,7 @@ function App() {
       setCompileState({ status: 'idle', message: '' });
     }
     setProjectId(p.id);
-    setFileName(defaultFile(p.files));
+    setFileName(defaultFile(p.files, mainFileOf(p)));
     setActiveTab('editor');
   };
 

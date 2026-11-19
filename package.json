@@ -38,6 +38,7 @@
     "@anthropic-ai/sdk": "^1.4.0",
     "@aws-sdk/client-s3": "^3.1161.0",
     "@monaco-editor/react": "^4.7.0",
+    "@myriaddreamin/typst-ts-web-compiler": "0.7.0",
     "@supabase/supabase-js": "^2.119.0",
     "archiver": "^7.0.1",
     "dictionary-en": "^4.0.0",

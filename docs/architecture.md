@@ -41,9 +41,18 @@ uses. With `DATABASE_URL` and the `R2_*` variables set it uses Postgres and obje
   warnings).
 - A compile whose sources and options match the last finished compile in that folder is answered from that result
   without running the compiler.
-- There is no auto compile: a compile starts only from Recompile (or Ctrl+S / Ctrl+Enter), the same for both
-  languages, plus once when a project is created from a template. A result that arrives after newer edits is still
-  shown, marked out of date.
+- LaTeX compiles only from Recompile (or Ctrl+S / Ctrl+Enter), plus once when a project is created from a
+  template. A result that arrives after newer edits is still shown, marked out of date.
+- Typst also has a live preview (on unless turned off with the Auto-compile switch, saved per browser). The Typst
+  compiler runs in the browser in a Web Worker (`src/typst.worker.ts`, the WebAssembly build from
+  `@myriaddreamin/typst-ts-web-compiler`). One compiler instance lives as long as the editor, so each compile reuses
+  Typst's cached work; only files that changed are sent to it (`src/lib/typstLive.ts`). A compile starts 200 ms after
+  any change to the project, one runs at a time, a newer request replaces one still waiting, and a result older
+  than the newest edit is dropped. The PDF goes to the same viewer, which keeps the old pages up until the new ones
+  are drawn, so scroll and zoom stay put. Diagnostics go to the same log panel and editor squiggles. Fonts are the
+  ones built into Typst, served from `public/typst-fonts/` (`scripts/typst-fonts.mjs`) and downloaded only when a
+  document uses them. Recompile still compiles on the server, with the same Typst version, so both give the same
+  PDF. `LIVE_LANGUAGES` lists the languages that compile live; LaTeX would need a browser compiler to join it.
 - One compile runs at a time. A newer compile of the same project replaces a running one, which answers HTTP 410.
   The preamble cache is built in the background after a successful compile; a new compile stops that build rather
   than waiting for it.
@@ -55,9 +64,8 @@ uses. With `DATABASE_URL` and the `R2_*` variables set it uses Postgres and obje
 - **Typst** is the second document language. A project records its language (`language` on the project; projects
   from before Typst are LaTeX, set by a column default in Postgres) and the compile route picks the compiler from
   it. Typst runs as the official command-line compiler, one pinned version installed in both images from the
-  release archive and checked against its checksum. The binary was chosen over the in-browser WebAssembly build
-  because the compile service already exists and the binary is small and fast, while the WebAssembly build would add
-  several megabytes of download for every visitor. A Typst compile goes through the same sandbox, timeout, memory
+  release archive and checked against its checksum. The live preview adds the WebAssembly build in the browser (see
+  below); the server binary stays for Recompile, downloads and the stored PDF. A Typst compile goes through the same sandbox, timeout, memory
   limit and warm folder as LaTeX, with `--root` set to the project folder so nothing outside it can be read. Its
   diagnostics are parsed by `src/lib/typstLog.ts`.
 - Typst has no SyncTeX, so jumping between a Typst source and its PDF matches words (`src/lib/typstSync.ts`). The

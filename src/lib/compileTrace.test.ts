@@ -34,6 +34,23 @@ describe('compile timing', () => {
       'Download the result',
     ]);
   });
+  it('splits a live-preview compile in the browser into its own steps', () => {
+    const { segments, total } = compileSegments(
+      { click: 0, waited: 200, prepared: 205, answered: 240, received: 240, opened: 300, painted: 340 },
+      { compiler: 25 },
+      true,
+    );
+    expect(total).toBe(340);
+    expect(Object.fromEntries(segments.map((s) => [s.label, s.ms]))).toEqual({
+      'Pause after typing': 200,
+      'Prepare changed files': 5,
+      'Send to the compiler and back': 10,
+      'Compiler time': 25,
+      'Download the result': 0,
+      'Open the PDF': 60,
+      'Draw the first page': 40,
+    });
+  });
   it('formats seconds to one decimal', () => {
     expect(seconds(5480)).toBe('5.5s');
   });

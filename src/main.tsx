@@ -74,6 +74,7 @@ import {
 import { useTheme, type ThemePref } from './theme';
 import { setCompletionFiles, setupMonaco } from './monacoSetup';
 import { outlineOf } from './lib/outline';
+import { LIVE_DELAY_MS, LIVE_LANGUAGES, LiveCompiler, liveDiagnostics } from './lib/typstLive';
 import { CompileTimes } from './CompileTimes';
 import { compileSegments, seconds, type CompileMarks, type ServerTimings } from './lib/compileTrace';
 import { sourceWords, typstOutline } from './lib/typstSource';
@@ -188,8 +189,8 @@ const SNIPPETS = {
 } as const;
 
 /** "Compiled in 3.2s · 2 warnings": the time from the click to the PDF on screen (or to the result, while it loads). */
-function compiledMessage({ marks, server, warnings }: CompileTrace) {
-  const { total } = compileSegments(marks, server);
+function compiledMessage({ marks, server, warnings, browser }: CompileTrace) {
+  const { total } = compileSegments(marks, server, browser);
   return `Compiled in ${seconds(total)}${warnings ? ` · ${warnings} warning${warnings > 1 ? 's' : ''}` : ''}`;
 }
 
@@ -364,7 +365,7 @@ type CompileState = {
   stale?: boolean;
 };
 type CompileTimings = ServerTimings;
-type CompileTrace = { marks: CompileMarks; server: ServerTimings; warnings: number };
+type CompileTrace = { marks: CompileMarks; server: ServerTimings; warnings: number; browser?: boolean };
 type CompileResult = {
   success: boolean | null;
   log: string;
@@ -573,6 +574,9 @@ function App() {
     });
   const [templateBusy, setTemplateBusy] = useState(''),
     compileOnOpen = useRef('');
+  // Typst documents compile in the browser as you type, unless the person turned it off.
+  const [liveCompile, setLiveCompile] = useState(() => readFlag('paperdesk-auto-compile') !== 'off'),
+    liveCompiler = useRef<LiveCompiler | null>(null);
   // Timestamps of the latest compile, from the click to the first page on screen.
   const compileMarks = useRef<CompileTrace | null>(null),
     [compileTrace, setCompileTrace] = useState<CompileTrace | null>(null);
@@ -1278,6 +1282,11 @@ function App() {
   /* A project just created from a template compiles once by itself, so it opens with its PDF. */
   useEffect(() => {
     if (dashboard || !project || compileOnOpen.current !== project.id) return;
+    // A live project renders by itself.
+    if (liveCompile && LIVE_LANGUAGES.has(languageOf(project))) {
+      compileOnOpen.current = '';
+      return;
+    }
     const t = window.setTimeout(() => {
       if (compileOnOpen.current === project.id) {
         compileOnOpen.current = '';
@@ -1286,6 +1295,68 @@ function App() {
     }, 300);
     return () => window.clearTimeout(t);
   }, [activeTab, project]);
+
+  // Live preview: a pause after any change to the project (any file, not only the open one) compiles it in the
+  // browser. Only the newest compile's result is shown; an error keeps the last good PDF on screen.
+  const live = activeTab === 'editor' && !!project && liveCompile && LIVE_LANGUAGES.has(languageOf(project));
+  const liveEdited = useRef(0);
+  useEffect(() => {
+    if (!live) return;
+    liveEdited.current = performance.now();
+    const t = window.setTimeout(() => void compileLive(), LIVE_DELAY_MS);
+    return () => window.clearTimeout(t);
+  }, [live, project?.id, project?.files, project?.mainFile]);
+  useEffect(() => () => liveCompiler.current?.dispose(), []);
+  const compileLive = async () => {
+    if (!project) return;
+    const target = project,
+      mainFile = mainFileOf(target);
+    if (!target.files.some((f) => f.name === mainFile)) return;
+    liveCompiler.current ??= new LiveCompiler(
+      () => new Worker(new URL('./typst.worker.ts', import.meta.url), { type: 'module' }),
+      `${import.meta.env.BASE_URL}typst-fonts/`,
+    );
+    const marks: CompileMarks = { click: liveEdited.current, waited: performance.now() };
+    marks.prepared = performance.now();
+    const outcome = await liveCompiler.current.compile(target.files, mainFile, target.id);
+    if (!outcome || outcome.stale || target.id !== projectRef.current?.id) return;
+    marks.answered = marks.received = performance.now();
+    if (outcome.error) {
+      setCompileState({ status: 'error', message: `The live preview stopped: ${outcome.error}`, stale: !!pdfUrl });
+      return;
+    }
+    const { errors, warnings } = liveDiagnostics(outcome.diagnostics ?? [], mainFile);
+    const log = [...errors.map((e) => ({ e, kind: 'error' })), ...warnings.map((e) => ({ e, kind: 'warning' }))]
+      .map(({ e, kind }) => `${e.file}${e.line ? `:${e.line}` : ''}: ${kind}: ${e.message}`)
+      .join('\n');
+    const names = target.files.map((f) => f.name);
+    const res: CompileResult = {
+      success: !!outcome.pdf,
+      log: log || 'Compiled in the browser without errors or warnings.',
+      errors: errors.map((e) => withFileSuggestion(e, names)),
+      warnings,
+      durationMs: outcome.ms ?? 0,
+      timings: { compiler: outcome.ms },
+    };
+    setResult(res);
+    if (!outcome.pdf) {
+      const e = res.errors[0];
+      setCompileState({
+        status: 'error',
+        message: e ? `${e.file}${e.line ? `:${e.line}` : ''} — ${e.message}` : 'Compilation failed',
+        entry: e,
+        stale: !!pdfUrl,
+      });
+      return;
+    }
+    const trace = { marks, server: { compiler: outcome.ms }, warnings: warnings.length, browser: true };
+    compileMarks.current = trace;
+    setCompileTrace(trace);
+    setPdfData(outcome.pdf);
+    // The viewer reads the PDF from pdfData; the address only marks that a PDF exists.
+    setPdfUrl((url) => url || 'live:typst');
+    setCompileState({ status: 'success', message: compiledMessage(trace) });
+  };
 
   // Close menus on outside click; Escape closes the topmost layer.
   useEffect(() => {
@@ -3692,6 +3763,22 @@ function App() {
                       ]}
                       heading="Compiler"
                     />
+                    {LIVE_LANGUAGES.has(languageOf(project)) && (
+                      <label
+                        className="live-toggle"
+                        title="Update the preview as you type. Turn it off for very large documents."
+                      >
+                        <input
+                          type="checkbox"
+                          checked={liveCompile}
+                          onChange={(e) => {
+                            setLiveCompile(e.target.checked);
+                            writeFlag('paperdesk-auto-compile', e.target.checked ? 'on' : 'off');
+                          }}
+                        />
+                        <span>Auto-compile</span>
+                      </label>
+                    )}
                   </div>
                   <button
                     className={`btn btn-ghost btn-sm logs-btn ${compile_.status === 'error' ? 'has-error' : ''}`}
@@ -3806,6 +3893,7 @@ function App() {
                       searchOpen={pdfSearch}
                       onSearchClose={() => setPdfSearch(false)}
                       onSourceJump={syncPdfToSource}
+                      live={pdfUrl.startsWith('live:')}
                       onDocument={(pdf) => {
                         pdfDocument.current = pdf;
                       }}
@@ -4619,7 +4707,7 @@ function App() {
                       {result.errors.length === 1 ? '' : 's'} · {result.warnings.length} warning
                       {result.warnings.length === 1 ? '' : 's'} ·{' '}
                       {result.success && compileTrace
-                        ? seconds(compileSegments(compileTrace.marks, compileTrace.server).total)
+                        ? seconds(compileSegments(compileTrace.marks, compileTrace.server, compileTrace.browser).total)
                         : `${seconds(result.durationMs)} on the server`}
                     </span>
                   </div>

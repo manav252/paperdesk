@@ -19,6 +19,12 @@ export function loadPdfjs() {
   });
   return pdfjsLoad;
 }
+/**
+ * One PDF.js worker shared by the live preview's documents. Starting a worker per document cost about a third of a
+ * second per update there. Other PDFs keep a worker each, which also ends cleanly when the document is destroyed.
+ */
+let sharedWorker: unknown = null;
+const pdfWorker = (pdfjs: any) => (sharedWorker ??= new pdfjs.PDFWorker());
 
 /**
  * Continuous PDF preview: every page is laid out at its final size, pages near the viewport are rendered first,
@@ -39,6 +45,7 @@ export function PdfViewer({
   onSourceJump,
   onDocument,
   onPainted,
+  live = false,
 }: {
   url: string;
   data?: Uint8Array | null;
@@ -53,6 +60,8 @@ export function PdfViewer({
   onDocument?: (pdf: unknown) => void;
   /** A page of the current document was drawn on screen. */
   onPainted?: () => void;
+  /** The PDF comes from the live preview and is replaced every few hundred milliseconds. */
+  live?: boolean;
   searchOpen?: boolean;
   onSearchClose?: () => void;
 }) {
@@ -93,7 +102,11 @@ export function PdfViewer({
     (async () => {
       try {
         const pdfjs = await loadPdfjs();
-        task = pdfjs.getDocument(data ? { data: data.slice() } : { url, httpHeaders: ownerHeaders() }); // slice: pdf.js takes ownership of the buffer
+        // slice: pdf.js takes ownership of the buffer.
+        task = pdfjs.getDocument({
+          ...(data ? { data: data.slice() } : { url, httpHeaders: ownerHeaders() }),
+          ...(live ? { worker: pdfWorker(pdfjs) } : {}),
+        });
         const pdf = await task.promise;
         const sizes = await Promise.all(
           Array.from({ length: pdf.numPages }, (_, i) =>

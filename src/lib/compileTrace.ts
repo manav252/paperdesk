@@ -3,8 +3,10 @@
  * stamps its own steps; the server reports what happened between receiving the request and answering it.
  */
 export type CompileMarks = {
-  /** Recompile was clicked. */
+  /** Recompile was clicked, or (live preview) the last edit was made. */
   click: number;
+  /** Live preview: the pause after the last edit ended and the compile started. */
+  waited?: number;
   /** Files hashed and the request built. */
   prepared?: number;
   /** The response headers arrived. */
@@ -31,14 +33,26 @@ export type Segment = { label: string; ms: number; note?: string };
 const span = (from?: number, to?: number) =>
   from === undefined || to === undefined ? null : Math.max(0, Math.round(to - from));
 
-/** The compile split into consecutive segments that add up to `total`; steps that have not happened are left out. */
-export function compileSegments(marks: CompileMarks, server: ServerTimings = {}) {
+/**
+ * The compile split into consecutive segments that add up to `total`; steps that have not happened are left out.
+ * `browser` is a live-preview compile, which runs in a worker in this page instead of on the server.
+ */
+export function compileSegments(marks: CompileMarks, server: ServerTimings = {}, browser = false) {
   const segments: Segment[] = [];
   const add = (label: string, ms: number | null | undefined, note?: string) => {
     if (ms !== null && ms !== undefined) segments.push({ label, ms, ...(note ? { note } : {}) });
   };
-  add('Prepare files in the browser', span(marks.click, marks.prepared), 'hash the files, send only changed ones');
-  const request = span(marks.prepared, marks.answered);
+  if (browser) {
+    add('Pause after typing', span(marks.click, marks.waited));
+    add('Prepare changed files', span(marks.waited, marks.prepared));
+    const round = span(marks.prepared, marks.answered);
+    if (round !== null) {
+      add('Send to the compiler and back', Math.max(0, round - (server.compiler ?? 0)));
+      add('Compiler time', server.compiler);
+    }
+  } else
+    add('Prepare files in the browser', span(marks.click, marks.prepared), 'hash the files, send only changed ones');
+  const request = browser ? null : span(marks.prepared, marks.answered);
   if (request !== null) {
     const onServer = server.total ?? 0;
     // What the round trip took beyond the server's own time: upload, proxy and network latency.

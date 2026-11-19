@@ -36,6 +36,8 @@ test('a Typst project: language choice, highlighting, compile, and an error that
     localStorage.setItem('paperdesk-tour-done', '1');
     localStorage.setItem('paperdesk-help-seen', '1');
     localStorage.setItem('paperdesk-compile-prefs', JSON.stringify({ autoCompile: false }));
+    // These tests cover compiling on the server; the live preview has its own tests (live-preview.spec.ts).
+    localStorage.setItem('paperdesk-auto-compile', 'off');
   });
   await page.route(/^https:\/\/fonts\.(googleapis|gstatic)\.com\//, (route) =>
     route.fulfill({ status: 200, contentType: 'text/css', body: '' }),
@@ -143,6 +145,8 @@ test('a LaTeX project still compiles as LaTeX', async ({ page, request }, info) 
     sessionStorage.setItem('seeded', '1');
     localStorage.setItem('paperdesk-tour-done', '1');
     localStorage.setItem('paperdesk-compile-prefs', JSON.stringify({ autoCompile: false }));
+    // These tests cover compiling on the server; the live preview has its own tests (live-preview.spec.ts).
+    localStorage.setItem('paperdesk-auto-compile', 'off');
   });
   const compiles: { language?: string; mainFile?: string; engine?: string }[] = [];
   await page.route('**/api/projects/*/compile', (route) => {
@@ -185,6 +189,8 @@ test('every Typst template compiles to a PDF, and a real error jumps to its line
     localStorage.setItem('paperdesk-tour-done', '1');
     localStorage.setItem('paperdesk-help-seen', '1');
     localStorage.setItem('paperdesk-compile-prefs', JSON.stringify({ autoCompile: false }));
+    // These tests cover compiling on the server; the live preview has its own tests (live-preview.spec.ts).
+    localStorage.setItem('paperdesk-auto-compile', 'off');
   });
   await page.route(/^https:\/\/fonts\.(googleapis|gstatic)\.com\//, (route) =>
     route.fulfill({ status: 200, contentType: 'text/css', body: '' }),

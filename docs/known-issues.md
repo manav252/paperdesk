@@ -32,6 +32,13 @@
 
 ## Typst
 
+- The live preview downloads the Typst compiler once (about 11 MB compressed) and the fonts a document uses, so the
+  first preview in a browser takes a few seconds; later ones are cached by the browser.
+- The server's Typst version is pinned to the browser compiler's (0.14.2), the newest the WebAssembly build
+  supports, so the live preview and Recompile give the same PDF. Typst 0.15 features are not available until the
+  browser compiler moves to 0.15.
+- The live preview is per browser: collaborators see your edits in the editor but their own preview, and the PDF
+  stored for the project changes only with Recompile.
 - Differences from LaTeX that are by design: there is one Typst compiler, so the engine menu shows only Typst; Draft
   mode and Stop on first error do not exist in Typst and are hidden; source and PDF jumps match words instead of
   reading SyncTeX data; the word count is read from the source; arXiv and journal ZIP exports are LaTeX-only.

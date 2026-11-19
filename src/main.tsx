@@ -576,7 +576,8 @@ function App() {
     compileOnOpen = useRef('');
   // Typst documents compile in the browser as you type, unless the person turned it off.
   const [liveCompile, setLiveCompile] = useState(() => readFlag('paperdesk-auto-compile') !== 'off'),
-    liveCompiler = useRef<LiveCompiler | null>(null);
+    liveCompiler = useRef<LiveCompiler | null>(null),
+    [liveStatus, setLiveStatus] = useState<'compiling' | 'live' | 'error'>('compiling');
   // Timestamps of the latest compile, from the click to the first page on screen.
   const compileMarks = useRef<CompileTrace | null>(null),
     [compileTrace, setCompileTrace] = useState<CompileTrace | null>(null);
@@ -1309,6 +1310,7 @@ function App() {
   useEffect(() => {
     if (!live) return;
     liveEdited.current = performance.now();
+    setLiveStatus('compiling');
     const t = window.setTimeout(() => void compileLive(), LIVE_DELAY_MS);
     return () => window.clearTimeout(t);
   }, [live, project?.id, project?.files, project?.mainFile]);
@@ -1332,11 +1334,13 @@ function App() {
     );
     const now = performance.now();
     const marks: CompileMarks = { click: fresh ? now : liveEdited.current, waited: now };
+    setLiveStatus('compiling');
     marks.prepared = performance.now();
     const outcome = await liveCompiler.current.compile(target.files, mainFile, target.id, fresh);
     if (!outcome || outcome.stale || target.id !== projectRef.current?.id) return;
     marks.answered = marks.received = performance.now();
     if (outcome.error) {
+      setLiveStatus('error');
       setCompileState({ status: 'error', message: `The live preview stopped: ${outcome.error}`, stale: !!pdfUrl });
       return;
     }
@@ -1354,6 +1358,7 @@ function App() {
       timings: { compiler: outcome.ms },
     };
     setResult(res);
+    setLiveStatus(outcome.pdf ? 'live' : 'error');
     if (!outcome.pdf) {
       const e = res.errors[0];
       setCompileState({
@@ -3813,18 +3818,28 @@ function App() {
                       </span>
                     )}
                   </button>
-                  <span className={`pdf-state ${compile_.stale || compile_.status === 'outdated' ? 'stale' : ''}`}>
-                    <span
-                      className={`status-dot ${compile_.status === 'running' ? 'busy' : compile_.stale || compile_.status === 'outdated' ? 'warn' : pdfUrl ? 'ok' : 'idle'}`}
-                    />
-                    {compile_.status === 'running'
-                      ? 'Compiling…'
-                      : compile_.stale || compile_.status === 'outdated'
-                        ? 'PDF is out of date'
-                        : pdfUrl
-                          ? 'Up to date'
-                          : 'Not compiled'}
-                  </span>
+                  {live ? (
+                    // Typst's live preview: whether the PDF shows the latest text.
+                    <span className="pdf-state" data-testid="live-state">
+                      <span
+                        className={`status-dot ${liveStatus === 'compiling' ? 'busy' : liveStatus === 'error' ? 'error' : 'ok'}`}
+                      />
+                      {liveStatus === 'compiling' ? 'Compiling…' : liveStatus === 'error' ? 'Error' : 'Live'}
+                    </span>
+                  ) : (
+                    <span className={`pdf-state ${compile_.stale || compile_.status === 'outdated' ? 'stale' : ''}`}>
+                      <span
+                        className={`status-dot ${compile_.status === 'running' ? 'busy' : compile_.stale || compile_.status === 'outdated' ? 'warn' : pdfUrl ? 'ok' : 'idle'}`}
+                      />
+                      {compile_.status === 'running'
+                        ? 'Compiling…'
+                        : compile_.stale || compile_.status === 'outdated'
+                          ? 'PDF is out of date'
+                          : pdfUrl
+                            ? 'Up to date'
+                            : 'Not compiled'}
+                    </span>
+                  )}
                   <div className="toolbar-spacer" />
                   <button
                     className="icon-btn sm"

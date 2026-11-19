@@ -412,6 +412,9 @@ body.is-resizing .pdf-workspace {
 .pdf-state.stale {
   color: var(--warning-text, #a76616);
 }
+.status-dot.error {
+  background: var(--danger);
+}
 .status-dot.idle {
   background: var(--border-strong);
 }

@@ -74,7 +74,7 @@ import {
 import { useTheme, type ThemePref } from './theme';
 import { setCompletionFiles, setupMonaco } from './monacoSetup';
 import { outlineOf } from './lib/outline';
-import { LIVE_DELAY_MS, LIVE_LANGUAGES, LiveCompiler, liveDiagnostics } from './lib/typstLive';
+import { getCompileMode, LIVE_DELAY_MS, LiveCompiler, liveDiagnostics } from './lib/typstLive';
 import { CompileTimes } from './CompileTimes';
 import { compileSegments, seconds, type CompileMarks, type ServerTimings } from './lib/compileTrace';
 import { sourceWords, typstOutline } from './lib/typstSource';
@@ -1283,7 +1283,7 @@ function App() {
   useEffect(() => {
     if (dashboard || !project || compileOnOpen.current !== project.id) return;
     // A live project renders by itself.
-    if (liveCompile && LIVE_LANGUAGES.has(languageOf(project))) {
+    if (liveCompile && getCompileMode(undefined, mainFileOf(project)) === 'auto') {
       compileOnOpen.current = '';
       return;
     }
@@ -1298,7 +1298,12 @@ function App() {
 
   // Live preview: a pause after any change to the project (any file, not only the open one) compiles it in the
   // browser. Only the newest compile's result is shown; an error keeps the last good PDF on screen.
-  const live = activeTab === 'editor' && !!project && liveCompile && LIVE_LANGUAGES.has(languageOf(project));
+  // The open file decides: Typst files compile as you type, LaTeX files only when asked (getCompileMode).
+  const live =
+    activeTab === 'editor' &&
+    !!project &&
+    liveCompile &&
+    getCompileMode(currentFile?.name, mainFileOf(project)) === 'auto';
   const liveEdited = useRef(0);
   useEffect(() => {
     if (!live) return;
@@ -3763,7 +3768,7 @@ function App() {
                       ]}
                       heading="Compiler"
                     />
-                    {LIVE_LANGUAGES.has(languageOf(project)) && (
+                    {getCompileMode(undefined, mainFileOf(project)) === 'auto' && (
                       <label
                         className="live-toggle"
                         title="Update the preview as you type. Turn it off for very large documents."

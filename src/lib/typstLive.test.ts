@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { changedFiles, LiveCompiler, liveDiagnostics, type WorkerRequest, type WorkerResponse } from './typstLive';
+import {
+  changedFiles,
+  getCompileMode,
+  LiveCompiler,
+  liveDiagnostics,
+  type WorkerRequest,
+  type WorkerResponse,
+} from './typstLive';
 
 describe('files sent to the live compiler', () => {
   it('sends each file once, then only what changed, and drops removed files', () => {
@@ -98,5 +105,23 @@ describe('the live compiler queue', () => {
     fake.answer(2);
     expect(await b).toMatchObject({ stale: false });
     expect(fake.posted[0]).toEqual({ type: 'init', fontsUrl: '/fonts/' });
+  });
+});
+
+describe('compile mode', () => {
+  it('compiles Typst as you type and LaTeX only when asked', () => {
+    expect(getCompileMode('main.typ', 'main.typ')).toBe('auto');
+    expect(getCompileMode('chapters/intro.typ', 'main.typ')).toBe('auto');
+    expect(getCompileMode('main.tex', 'main.tex')).toBe('manual');
+    expect(getCompileMode('sections/a.tex', 'main.tex')).toBe('manual');
+  });
+  it('follows the project for files that are neither, and never auto-compiles a .tex file', () => {
+    expect(getCompileMode('refs.bib', 'main.typ')).toBe('auto');
+    expect(getCompileMode('figures/plot.png', 'main.typ')).toBe('auto');
+    expect(getCompileMode('refs.bib', 'main.tex')).toBe('manual');
+    expect(getCompileMode('notes.tex', 'main.typ')).toBe('manual');
+    expect(getCompileMode('stray.typ', 'main.tex')).toBe('manual');
+    expect(getCompileMode(undefined, 'main.typ')).toBe('auto');
+    expect(getCompileMode(undefined, 'main.tex')).toBe('manual');
   });
 });

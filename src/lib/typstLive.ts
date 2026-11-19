@@ -176,3 +176,17 @@ export type LiveOutcome = {
   ms?: number;
   error?: string;
 };
+
+export type CompileMode = 'auto' | 'manual';
+/**
+ * How a file compiles: `auto` (live preview as you type) or `manual` (only Recompile, Ctrl/Cmd+S or Ctrl/Cmd+Enter).
+ * The single place this is decided. `.tex` files are always manual. `.typ` files, and the other files of a Typst
+ * project (images, bibliographies, data), are auto, since editing them changes the Typst preview.
+ */
+export function getCompileMode(fileName: string | undefined, mainFile: string): CompileMode {
+  if (fileName && /\.(tex|sty|cls|ltx|bbl)$/i.test(fileName)) return 'manual';
+  const language = /\.typ$/i.test(mainFile) ? 'typst' : 'latex';
+  return LIVE_LANGUAGES.has(language) && (!fileName || !/\.typ$/i.test(fileName) || language === 'typst')
+    ? 'auto'
+    : 'manual';
+}

@@ -13,6 +13,8 @@ export type WorkerRequest =
       id: number;
       main: string;
       reset: boolean;
+      /** Recompile: drop everything the compiler cached, not only its files. */
+      fresh?: boolean;
       sources: { path: string; content: string }[];
       binaries: { path: string; bytes: Uint8Array }[];
       removed: string[];
@@ -101,6 +103,7 @@ export class LiveCompiler {
     files: ProjectFile[];
     main: string;
     scope: string;
+    fresh: boolean;
     resolve: (r: LiveOutcome | null) => void;
   } | null = null;
   latest = 0;
@@ -125,34 +128,43 @@ export class LiveCompiler {
    * Compiles these files of one project (`project` names it), or resolves to null if a newer request replaced this
    * one before it started.
    */
-  compile(files: ProjectFile[], main: string, project = ''): Promise<LiveOutcome | null> {
+  compile(files: ProjectFile[], main: string, project = '', fresh = false): Promise<LiveOutcome | null> {
     this.latest = this.nextId++;
     const requested = this.latest;
     const scope = `${project}|${main}`;
     if (this.running) {
+      // A waiting fresh compile stays fresh even if a normal one replaces it.
+      fresh ||= this.waiting?.fresh ?? false;
       this.waiting?.resolve(null);
-      return new Promise((resolve) => (this.waiting = { files, main, scope, resolve }));
+      return new Promise((resolve) => (this.waiting = { files, main, scope, fresh, resolve }));
     }
-    return this.run(files, main, scope, requested);
+    return this.run(files, main, scope, requested, fresh);
   }
 
-  private async run(files: ProjectFile[], main: string, scope: string, id: number): Promise<LiveOutcome> {
+  private async run(
+    files: ProjectFile[],
+    main: string,
+    scope: string,
+    id: number,
+    fresh = false,
+  ): Promise<LiveOutcome> {
     const worker = this.start();
-    const reset = this.scope !== '' && this.scope !== scope;
+    const reset = fresh || (this.scope !== '' && this.scope !== scope);
     if (reset) this.sent.clear();
     this.scope = scope;
     const changes = changedFiles(files, this.sent);
     const response = await new Promise<WorkerResponse>((done) => {
       this.running = { id, done };
       worker.postMessage(
-        { type: 'compile', id, main: `/${main}`, reset, ...changes } satisfies WorkerRequest,
+        { type: 'compile', id, main: `/${main}`, reset, fresh, ...changes } satisfies WorkerRequest,
         changes.binaries.map((b) => b.bytes.buffer),
       );
     });
     this.running = null;
     const waiting = this.waiting;
     this.waiting = null;
-    if (waiting) void this.run(waiting.files, waiting.main, waiting.scope, this.latest).then(waiting.resolve);
+    if (waiting)
+      void this.run(waiting.files, waiting.main, waiting.scope, this.latest, waiting.fresh).then(waiting.resolve);
     if (response.type === 'failed') {
       // A crashed compiler loses its files: send everything again next time.
       this.sent.clear();

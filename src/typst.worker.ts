@@ -48,6 +48,7 @@ ctx.onmessage = async ({ data: message }: MessageEvent<WorkerRequest>) => {
   try {
     if (!compiler) throw new Error('The Typst compiler was not started.');
     const typst = await compiler;
+    if (message.fresh) typst.reset();
     if (message.reset) typst.reset_shadow();
     for (const path of message.removed) typst.unmap_shadow(path);
     for (const file of message.sources) typst.add_source(file.path, file.content);

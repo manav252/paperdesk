@@ -1312,18 +1312,27 @@ function App() {
     return () => window.clearTimeout(t);
   }, [live, project?.id, project?.files, project?.mainFile]);
   useEffect(() => () => liveCompiler.current?.dispose(), []);
-  const compileLive = async () => {
+  /** A Typst compile in the browser: after an edit (live), or from Recompile with `fresh` (cache discarded). */
+  const compileLive = async ({ fresh = false } = {}) => {
     if (!project) return;
     const target = project,
       mainFile = mainFileOf(target);
-    if (!target.files.some((f) => f.name === mainFile)) return;
+    if (!target.files.some((f) => f.name === mainFile)) {
+      if (fresh)
+        setCompileState({
+          status: 'error',
+          message: `Main document ${mainFile} not found. Choose an existing .typ file in Project settings.`,
+        });
+      return;
+    }
     liveCompiler.current ??= new LiveCompiler(
       () => new Worker(new URL('./typst.worker.ts', import.meta.url), { type: 'module' }),
       `${import.meta.env.BASE_URL}typst-fonts/`,
     );
-    const marks: CompileMarks = { click: liveEdited.current, waited: performance.now() };
+    const now = performance.now();
+    const marks: CompileMarks = { click: fresh ? now : liveEdited.current, waited: now };
     marks.prepared = performance.now();
-    const outcome = await liveCompiler.current.compile(target.files, mainFile, target.id);
+    const outcome = await liveCompiler.current.compile(target.files, mainFile, target.id, fresh);
     if (!outcome || outcome.stale || target.id !== projectRef.current?.id) return;
     marks.answered = marks.received = performance.now();
     if (outcome.error) {
@@ -1504,6 +1513,11 @@ function App() {
   /** Compiles the open project. Starting a compile replaces one still running. */
   const compile = async () => {
     if (!project) return;
+    // Typst compiles in the browser; Recompile there is a fresh compile, with no server round trip.
+    if (languageOf(project) === 'typst') {
+      if (narrow && layout === 'editor') setPref('layout', 'pdf');
+      return void compileLive({ fresh: true });
+    }
     const target = project,
       mainFile = mainFileOf(target),
       revision = sourceRevision.current;

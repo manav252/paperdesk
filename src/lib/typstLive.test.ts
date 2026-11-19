@@ -108,6 +108,28 @@ describe('the live compiler queue', () => {
   });
 });
 
+describe('a fresh compile (Recompile)', () => {
+  it('sends every file again and tells the worker to drop its cache', async () => {
+    const fake = fakeWorker();
+    const live = new LiveCompiler(() => fake.worker as unknown as Worker, '/fonts/');
+    const files = [
+      { name: 'main.typ', content: '= A' },
+      { name: 'refs.bib', content: '@article{x,}' },
+    ];
+    const first = live.compile(files, 'main.typ', 'p1');
+    await tick();
+    fake.answer(1);
+    await first;
+    const again = live.compile(files, 'main.typ', 'p1', true);
+    await tick();
+    const last = fake.posted.at(-1)!;
+    expect(last).toMatchObject({ type: 'compile', fresh: true, reset: true });
+    expect(last.type === 'compile' && last.sources.map((f) => f.path)).toEqual(['/main.typ', '/refs.bib']);
+    fake.answer(2);
+    expect(await again).toMatchObject({ stale: false });
+  });
+});
+
 describe('compile mode', () => {
   it('compiles Typst as you type and LaTeX only when asked', () => {
     expect(getCompileMode('main.typ', 'main.typ')).toBe('auto');
